@@ -214,9 +214,13 @@ def _require_success(result):
     raise LinkError(detail or f"Operazione terminata con codice {result.returncode}.")
 
 
-def _powershell_command(command):
+def _powershell_arguments(command):
     encoded = base64.b64encode((POWERSHELL_SETUP + command).encode("utf-16-le")).decode("ascii")
-    return f"powershell.exe -NoLogo -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand {encoded}"
+    return ["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-EncodedCommand", encoded]
+
+
+def _powershell_command(command):
+    return " ".join(["powershell.exe", *_powershell_arguments(command)])
 
 
 def _powershell(command, *, timeout=35):
@@ -254,13 +258,26 @@ def _sftp(command, *, cwd=None, timeout=900):
     _require_success(result)
 
 
-def status():
-    result = _powershell(STATUS_COMMAND)
+def _read_status(result):
     _require_success(result)
     try:
         return json.loads(_text(result.stdout))
     except json.JSONDecodeError as error:
         raise LinkError("Windows ha restituito dati di stato in un formato inatteso.") from error
+
+
+def status(*, timeout=35):
+    return _read_status(_powershell(STATUS_COMMAND, timeout=timeout))
+
+
+def local_status(*, timeout=35):
+    """Use the same status probe on Windows without an SSH connection."""
+    system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    powershell = system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    return _read_status(subprocess.run(
+        [powershell, *_powershell_arguments(STATUS_COMMAND)], stdin=subprocess.DEVNULL,
+        capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=timeout,
+    ))
 
 
 def _local_file(value):
