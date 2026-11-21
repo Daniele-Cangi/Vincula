@@ -36,7 +36,7 @@ per un’operazione che accetta file CSV:
 Usa i percorsi locali del nodo. Puoi omettere `inbox` per una capacità
 senza input da trasferire e lasciare `max_files` a zero per una capacità
 che lavora senza file. `extensions` vuoto ammette qualunque estensione.
-Per ricevere file dal secondo nodo, configura l’inbox come [cartella con
+Per ricevere file da un altro nodo, configura l’inbox come [cartella con
 diritto di scrittura](file-mcp.md). I parametri ammettono stringhe, interi,
 numeri finiti e booleani. Ogni parte accetta al massimo quattro file
 e 512 byte di parametri in JSON.

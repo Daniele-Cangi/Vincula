@@ -1,18 +1,19 @@
 # SPDX-FileCopyrightText: 2026 Daniele Cangi
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Status and destination-authorized jobs for the two configured Vincula nodes."""
+"""Status and destination-authorized jobs for registered Vincula nodes."""
 
 import asyncio
 import base64
 from collections import defaultdict
 from contextlib import suppress
+from functools import cache
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
-from tempfile import NamedTemporaryFile, TemporaryFile
+from tempfile import TemporaryDirectory
 from typing import Annotated, Literal
 from uuid import UUID, uuid5
 
@@ -24,19 +25,73 @@ from pydantic import BaseModel, Field, JsonValue
 import batches
 import jobs
 import linux_status
+import node_registry
+import node_ssh
 import capability_workflow
 
 dock_dir = Path(__file__).resolve().parents[1] / "outputs" / "Windows Dock"
 sys.path.insert(0, str(dock_dir))
 import windows_ssh
 
-NodeId = Literal["ubuntu", "windows"]
+NodeId = Annotated[str, Field(pattern=node_registry.SELECTOR_PATTERN)]
 Availability = Literal["available", "unavailable", "not_configured"]
-NODE_IDS: tuple[NodeId, ...] = ("ubuntu", "windows")
-PROBE_TIMEOUT = 12
 
 mcp = MCPServer("vincula", instructions="Inspect Vincula nodes and manage their locally authorized programs.")
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+
+WINDOWS_RESOURCES = r"""
+$gpus = $null
+try {
+    $gpus = @(Get-CimInstance Win32_VideoController | Where-Object { $_.Name } | ForEach-Object {
+        @{ name = $_.Name; vram_total_bytes = $null; vram_available_bytes = $null }
+    })
+} catch {}
+$nvidia = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue
+if ($nvidia) {
+    try {
+        $info = New-Object Diagnostics.ProcessStartInfo
+        $info.FileName = $nvidia.Source
+        $info.Arguments = '--query-gpu=name,memory.total,memory.free --format=csv,noheader,nounits'
+        $info.UseShellExecute = $false
+        $info.CreateNoWindow = $true
+        $info.RedirectStandardOutput = $true
+        $info.RedirectStandardError = $true
+        $process = [Diagnostics.Process]::Start($info)
+        try {
+            if (!$process.WaitForExit(2000)) { $process.Kill() }
+            elseif ($process.ExitCode -eq 0) {
+                $gpuRows = @($process.StandardOutput.ReadToEnd() -split '\r?\n' |
+                    Where-Object { $_ } | ConvertFrom-Csv -Header name,total,free)
+                if ($gpuRows.Count) {
+                    $nvidiaGpus = @($gpuRows | ForEach-Object {
+                        @{ name = $_.name.Trim(); vram_total_bytes = [int64]$_.total * 1MB
+                           vram_available_bytes = [int64]$_.free * 1MB }
+                    })
+                    $gpus = @($gpus | Where-Object { $_.name -and $_.name -notmatch 'NVIDIA' }) + $nvidiaGpus
+                }
+            }
+        } finally { $process.Dispose() }
+    } catch {}
+}
+$status | Add-Member -NotePropertyMembers @{
+    cpu_logical = [Environment]::ProcessorCount; architecture = $env:PROCESSOR_ARCHITECTURE
+    gpus = $gpus
+}
+$status | ConvertTo-Json -Compress -Depth 5
+"""
+WINDOWS_STATUS = "$status = & {\n" + windows_ssh.STATUS_COMMAND + "\n} | ConvertFrom-Json\n" + WINDOWS_RESOURCES
+
+
+class GPU(BaseModel):
+    name: str
+    vram_total_bytes: int | None = Field(default=None, ge=0)
+    vram_available_bytes: int | None = Field(default=None, ge=0)
+
+
+class Volume(BaseModel):
+    path: str
+    total_bytes: int = Field(ge=0)
+    available_bytes: int = Field(ge=0)
 
 
 class Metrics(BaseModel):
@@ -46,10 +101,18 @@ class Metrics(BaseModel):
     cpu_percent: float | None = Field(ge=0, le=100)
     memory_total_bytes: int = Field(gt=0)
     memory_available_bytes: int = Field(ge=0)
+    cpu_logical: int | None = Field(default=None, ge=1)
+    architecture: str | None = None
+    gpus: list[GPU] | None = None
+    volumes: list[Volume] | None = None
 
 
 class Node(BaseModel):
     node_id: NodeId
+    label: str
+    os_family: Literal["windows", "linux"]
+    aliases: list[str]
+    network: str | None
     local: bool
     availability: Availability
 
@@ -62,108 +125,101 @@ class NodeStatus(Node):
     metrics: Metrics | None
 
 
-def local_node() -> NodeId:
+def legacy_registry():
+    if sys.platform not in {"win32", "linux"}:
+        raise RuntimeError("Vincula MCP runs on Windows or Linux.")
     if sys.platform == "win32":
-        return "windows"
-    if sys.platform == "linux":
-        return "ubuntu"
-    raise RuntimeError("Vincula MCP runs on Windows or Linux.")
-
-
-def linux_ssh_config() -> Path:
-    app_data = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-    return app_data / "Linux Dock" / "ssh_config"
-
-
-def peer_configured(node_id: NodeId) -> bool:
-    if node_id == "windows":
-        return windows_ssh.HOST_KEY.is_file() and windows_ssh.IDENTITY.is_file()
-    return linux_ssh_config().is_file()
-
-
-def windows_ssh_env() -> dict[str, str]:
-    env = os.environ.copy()
-    if env.get("PROGRAMDATA"):
-        return env
-    # Some MCP clients filter the environment. OpenSSH still needs ProgramData.
-    from ctypes import byref, c_ubyte, c_wchar_p, windll
-
-    program_data_id = UUID("62ab5d82-fdc1-4dc3-a9dd-070d1d495d97")
-    folder_id = (c_ubyte * 16).from_buffer_copy(program_data_id.bytes_le)
-    path = c_wchar_p()
-    try:
-        if windll.shell32.SHGetKnownFolderPath(byref(folder_id), 0, None, byref(path)) != 0:
-            raise OSError("Could not locate Windows ProgramData.")
-        env["PROGRAMDATA"] = path.value
-    finally:
-        windll.ole32.CoTaskMemFree(path)
-    return env
-
-
-def remote_linux_status() -> dict:
-    probe = base64.b64encode(Path(linux_status.__file__).read_bytes()).decode("ascii")
-    return linux_ssh_json(f"printf %s {probe} | base64 -d | python3 -IB -")
-
-
-def linux_ssh_json(command: str) -> dict:
-    system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
-    ssh = system_root / "System32" / "OpenSSH" / "ssh.exe"
-    # Windows OpenSSH can leave a captured pipe open after delivering its output.
-    with TemporaryFile() as output, TemporaryFile() as errors:
-        subprocess.run(
-            [ssh, "-F", linux_ssh_config(), "-nT", "-o", "BatchMode=yes",
-             "-o", "StrictHostKeyChecking=yes", "-o", "IdentitiesOnly=yes",
-             "-o", "ConnectTimeout=6", "-o", "ClearAllForwardings=yes",
-             "linux-dock", command],
-            stdin=subprocess.DEVNULL, stdout=output, stderr=errors,
-            creationflags=subprocess.CREATE_NO_WINDOW, env=windows_ssh_env(),
-            timeout=PROBE_TIMEOUT, check=True,
+        local = "windows"
+        app_data = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+        config = app_data / "Linux Dock" / "ssh_config"
+        linux_route = node_registry.Route("linux-dock", ("-F", str(config)), (config,), "Ethernet")
+        windows_route = None
+    else:
+        local = "ubuntu"
+        linux_route = None
+        windows_route = node_registry.Route(
+            windows_ssh.DESTINATION, tuple(windows_ssh._ssh_options()),
+            (windows_ssh.HOST_KEY, windows_ssh.IDENTITY), "Ethernet",
         )
-        output.seek(0)
-        return json.loads(output.read(128 * 1024))
+    return node_registry.Registry(local, (
+        node_registry.Node("ubuntu", "Ubuntu", "linux", route=linux_route),
+        node_registry.Node("windows", "Windows", "windows", route=windows_route),
+    ))
 
 
-def windows_metrics(is_local: bool) -> Metrics:
-    read = windows_ssh.local_status if is_local else windows_ssh.status
-    status = read(timeout=PROBE_TIMEOUT)
+@cache
+def registry():
+    path = os.environ.get("VINCULA_NODE_REGISTRY")
+    if not path:
+        if sys.platform == "win32":
+            app_data = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+            candidate = app_data / "Vincula" / "nodes.json"
+        else:
+            candidate = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "vincula" / "nodes.json"
+        path = candidate if candidate.is_file() else None
+    return node_registry.load(Path(path) if path else None, legacy_registry(), node_ssh.EMPTY_CONFIG)
+
+
+def local_node() -> NodeId:
+    return registry().local_id
+
+
+def registered_node(selector):
+    try:
+        return registry().get(selector)
+    except ValueError as error:
+        raise ToolError(str(error)) from None
+
+
+def windows_metrics(node, is_local):
+    if is_local:
+        status = windows_ssh.local_status(timeout=node_ssh.PROBE_TIMEOUT, command=WINDOWS_STATUS)
+    else:
+        status = node_ssh.json_command(node.route, windows_ssh._powershell_command(WINDOWS_STATUS))
     return Metrics(
         os=status["os"], os_version=status["build"], uptime_seconds=status["uptime"],
         cpu_percent=status["cpu"], memory_total_bytes=status["ram_total"],
         memory_available_bytes=status["ram_free"],
+        cpu_logical=status.get("cpu_logical"), architecture=status.get("architecture"), gpus=status.get("gpus"),
+        volumes=[Volume(path=disk["drive"], total_bytes=disk["total"], available_bytes=disk["free"])
+                 for disk in status.get("disks", []) if disk["total"] is not None and disk["free"] is not None],
     )
 
 
-def node_status(node_id: NodeId, origin: NodeId) -> NodeStatus:
-    is_local = node_id == origin
+def read_metrics(node, is_local):
+    if node.family == "windows":
+        return windows_metrics(node, is_local)
+    if is_local:
+        return Metrics.model_validate(linux_status.read_status())
+    probe = base64.b64encode(Path(linux_status.__file__).read_bytes()).decode("ascii")
+    return Metrics.model_validate(node_ssh.json_command(node.route, f"printf %s {probe} | base64 -d | python3 -IB -"))
+
+
+def node_status(node):
+    is_local = node.node_id == local_node()
+    metadata = {"node_id": node.node_id, "label": node.label, "os_family": node.family,
+                "aliases": list(node.aliases), "network": node.route.network if node.route else None, "local": is_local}
+    if not is_local and (node.route is None or not node.route.configured()):
+        return NodeStatus(**metadata, availability="not_configured", metrics=None)
     try:
-        if not is_local and not peer_configured(node_id):
-            return NodeStatus(node_id=node_id, local=False, availability="not_configured", metrics=None)
-        if node_id == "windows":
-            metrics = windows_metrics(is_local)
-        else:
-            read = linux_status.read_status if is_local else remote_linux_status
-            metrics = Metrics.model_validate(read())
+        metrics = read_metrics(node, is_local)
     except (windows_ssh.LinkError, OSError, subprocess.SubprocessError, KeyError, TypeError, ValueError):
         # Keep private paths, account names and SSH diagnostics off the MCP connection.
-        return NodeStatus(node_id=node_id, local=is_local, availability="unavailable", metrics=None)
-    return NodeStatus(node_id=node_id, local=is_local, availability="available", metrics=metrics)
+        return NodeStatus(**metadata, availability="unavailable", metrics=None)
+    return NodeStatus(**metadata, availability="available", metrics=metrics)
 
 
 @mcp.tool(annotations=READ_ONLY)
 async def list_nodes() -> Inventory:
-    """List the two known nodes, marking which one is local and whether each status probe succeeds."""
-    origin = local_node()
-    results = await asyncio.gather(*(asyncio.to_thread(node_status, node_id, origin) for node_id in NODE_IDS))
-    return Inventory(nodes=[
-        Node(node_id=result.node_id, local=result.local, availability=result.availability)
-        for result in results
-    ])
+    """List registered nodes, their canonical IDs, aliases and reachability from this origin."""
+    results = await asyncio.gather(*(asyncio.to_thread(node_status, node) for node in registry().nodes))
+    return Inventory(nodes=[Node.model_validate(result.model_dump(exclude={"metrics"})) for result in results])
 
 
 @mcp.tool(annotations=READ_ONLY)
 async def get_node_status(node_id: NodeId) -> NodeStatus:
-    """Read OS, uptime, CPU and physical memory on the requested node."""
-    return await asyncio.to_thread(node_status, node_id, local_node())
+    """Read OS, uptime and available resource metrics on a registered node."""
+    return await asyncio.to_thread(node_status, registered_node(node_id))
 
 
 class Job(BaseModel):
@@ -198,23 +254,25 @@ def destination_job(node_id, action, job_id=None, program=None):
 
 
 def destination_request(node_id, request):
-    if node_id == local_node():
+    node = registered_node(node_id)
+    if node.node_id == local_node():
         try:
             return jobs.dispatch(**request)
         except ValueError as error:
             raise ToolError(str(error)) from None
     payload = base64.b64encode(json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode()).decode("ascii")
     try:
-        if node_id == "ubuntu":
-            reply = linux_ssh_json(f'python3 -IB "$HOME/.local/share/vincula-jobs/jobs.py" rpc {payload}')
+        if node.family == "linux":
+            command = f'python3 -IB "$HOME/.local/share/vincula-jobs/jobs.py" rpc {payload}'
         else:
             script = (
                 "$helper = Join-Path $env:LOCALAPPDATA 'Vincula-Jobs/jobs.py'\n"
                 f"& py.exe -3 -IB $helper rpc '{payload}'\nexit $LASTEXITCODE"
             )
-            response = windows_ssh._powershell(script, timeout=PROBE_TIMEOUT)
-            windows_ssh._require_success(response)
-            reply = json.loads(response.stdout)
+            command = windows_ssh._powershell_command(script)
+        reply = node_ssh.json_command(node.route, command)
+        if not isinstance(reply, dict) or reply.keys() not in ({"result"}, {"error"}):
+            raise ValueError("Invalid remote job reply.")
     except (windows_ssh.LinkError, OSError, subprocess.SubprocessError, ValueError):
         raise ToolError("Job service unavailable. Check the connection and destination installation. "
                          "Retry a start with the same job ID.") from None
@@ -320,8 +378,10 @@ async def submit_batch(
         if plan is None:
             catalogs = {}
             if any(task.node_id is None for task in tasks):
-                catalogs = dict(await asyncio.gather(*(registered_programs(node) for node in NODE_IDS)))
-            plan = batches.make_plan(batch_id, local_node(), request, catalogs)
+                catalogs = dict(await asyncio.gather(*(registered_programs(node.node_id) for node in registry().nodes)))
+            assignments = [dict(task, node_id=registered_node(task["node_id"]).node_id)
+                           if task["node_id"] else task for task in request]
+            plan = batches.make_plan(batch_id, local_node(), assignments, catalogs)
             plan = await asyncio.to_thread(batches.save, batch_id, request, plan)
     except ValueError as error:
         raise ToolError(str(error)) from None
@@ -476,36 +536,29 @@ async def get_file_request(node_id: NodeId, request_id: UUID) -> FileRequest:
     return await asyncio.to_thread(file_request, node_id, "status", request_id)
 
 
-def sftp_copy(source, destination, source_node):
-    origin = local_node()
-    sending = origin == source_node
-    local = Path(source if sending else destination)
-    remote = destination if sending else source
-    if origin == "ubuntu":
+def sftp_copy(node, remote, local, sending):
+    if node.family == "windows":
         remote_name = windows_ssh._sftp_name(windows_ssh._file_path(remote))
-        command = f"put payload {remote_name}" if sending else f"get {remote_name} payload"
-        windows_ssh._sftp(command, cwd=local.parent, timeout=90)
-        return
+    else:
+        if not remote.startswith("/") or any(c in ('\\', '"') or ord(c) < 32 for c in remote):
+            raise ValueError("SSH staging path is not supported.")
+        remote_name = f'"{remote}"'
+    command = f"put payload {remote_name}" if sending else f"get {remote_name} payload"
+    node_ssh.copy(node.route, command, local.parent)
 
-    if not remote.startswith("/") or any(c in '\\\"' or ord(c) < 32 for c in remote):
-        raise ValueError("SSH staging path is not supported.")
-    command = f'put payload "{remote}"' if sending else f'get "{remote}" payload'
-    system = Path(os.environ.get("SystemRoot", r"C:\Windows"))
-    sftp = system / "System32/OpenSSH/sftp.exe"
-    with NamedTemporaryFile(delete=False) as batch:
-        script_file = Path(batch.name)
-        batch.write((command + "\n").encode())
-    try:
-        with TemporaryFile() as stdout, TemporaryFile() as stderr:
-            subprocess.run(
-                [sftp, "-F", linux_ssh_config(), "-q", "-b", script_file, "-o", "BatchMode=yes",
-                 "-o", "StrictHostKeyChecking=yes", "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=6",
-                 "-o", "ClearAllForwardings=yes", "linux-dock"], cwd=local.parent,
-                stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, creationflags=subprocess.CREATE_NO_WINDOW,
-                env=windows_ssh_env(), check=True, timeout=90,
-            )
-    finally:
-        script_file.unlink(missing_ok=True)
+
+def copy_staged(source, destination, outbound, inbound, expected):
+    if source.node_id == local_node():
+        sftp_copy(destination, inbound, Path(outbound), sending=True)
+    elif destination.node_id == local_node():
+        sftp_copy(source, outbound, Path(inbound), sending=False)
+    else:
+        with TemporaryDirectory(prefix="relay-", dir=jobs.ROOT) as directory:
+            payload = Path(directory) / "payload"
+            sftp_copy(source, outbound, payload, sending=False)
+            if jobs.files.copy_limited(payload, None) != expected:
+                raise ValueError("The relayed file does not match the approved export.")
+            sftp_copy(destination, inbound, payload, sending=True)
 
 
 def cleanup_transfer(source_node, source_id, dest_node, dest_id):
@@ -515,8 +568,10 @@ def cleanup_transfer(source_node, source_id, dest_node, dest_id):
 
 
 def execute_transfer(transfer_id, source, destination):
-    if source.node_id == destination.node_id:
-        raise ValueError("Choose one endpoint on each PC.")
+    source_node = registered_node(source.node_id)
+    destination_node = registered_node(destination.node_id)
+    if source_node.node_id == destination_node.node_id:
+        raise ValueError("Choose endpoints on different registered nodes.")
     with jobs.transaction() as db:
         jobs.files.save_plan(db, str(transfer_id), {
             "source": source.model_dump(), "destination": destination.model_dump(),
@@ -532,8 +587,8 @@ def execute_transfer(transfer_id, source, destination):
     if src["state"] == dest["state"] == "approved":
         outbound = file_request(source.node_id, "stage", source_id)
         inbound = file_request(destination.node_id, "stage", dest_id)
-        sftp_copy(outbound["path"], inbound["path"], source.node_id)
         expected = {"size": outbound["size"], "sha256": outbound["sha256"]}
+        copy_staged(source_node, destination_node, outbound["path"], inbound["path"], expected)
         file_request(destination.node_id, "commit", dest_id, expected=expected)
         dest = file_request(destination.node_id, "status", dest_id)
         cleanup_transfer(source.node_id, source_id, destination.node_id, dest_id)
@@ -626,21 +681,21 @@ def transfer_capability_input(transfer_id, source, destination):
 
 @mcp.tool()
 async def submit_capability(
-    run_id: UUID, capability_id: str, parts: Annotated[list[CapabilityPart], Field(min_length=1, max_length=2)],
+    run_id: UUID, capability_id: str, parts: Annotated[list[CapabilityPart], Field(min_length=1, max_length=jobs.capabilities.MAX_PARTS)],
 ) -> CapabilityReport:
-    """Run a discovered capability on one or both nodes. Repeat the same run after transfer approvals."""
+    """Run a discovered capability on the selected nodes. Repeat the same run after transfer approvals."""
     request = {"capability_id": capability_id, "parts": [part.model_dump(mode="json") for part in parts]}
     try:
         jobs.capabilities.valid_id(capability_id)
         plan = await asyncio.to_thread(capability_workflow.load, run_id, request)
         if plan is None:
-            nodes = list(dict.fromkeys(part.node_id for part in parts))
+            nodes = list(dict.fromkeys(registered_node(part.node_id).node_id for part in parts))
             providers = await asyncio.gather(*(
                 capability_workflow.node_call(destination_request, node, "describe", capability_id=capability_id)
                 for node in nodes
             ))
             plan = await asyncio.to_thread(capability_workflow.make_plan, run_id, request,
-                                           dict(zip(nodes, providers)), local_node())
+                                           dict(zip(nodes, providers)), local_node(), registry().get)
     except ValueError as error:
         raise ToolError(str(error)) from None
     return await capability_workflow.reconcile(run_id, plan, destination_request, transfer_capability_input)

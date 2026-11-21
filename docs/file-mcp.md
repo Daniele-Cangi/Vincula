@@ -36,7 +36,7 @@ In alternativa al pannello, usa `python agent/jobs.py files-pending`,
 | `list_file_roots(node_id)` | Mostra gli alias e l’eventuale diritto di scrittura, senza pubblicare il percorso assoluto. |
 | `request_file(node_id, request_id, operation, root, path, offset)` | Con `browse` elenca fino a 40 elementi a partire dall’offset. Con `read` legge fino a 8 KiB di testo UTF-8 a partire dall’offset in byte. |
 | `get_file_request(node_id, request_id)` | Consulta la richiesta e restituisce il risultato dopo l’autorizzazione. |
-| `transfer_file(transfer_id, source, destination)` | Copia un file binario o di testo fino a 64 MiB fra i due PC e restituisce dimensione e SHA-256 della copia. |
+| `transfer_file(transfer_id, source, destination)` | Copia un file binario o di testo fino a 64 MiB fra due nodi registrati e restituisce dimensione e SHA-256 della copia. |
 
 Il client genera gli UUID delle richieste prima di inviarle. Specifica
 percorsi relativi alla root con `/` come separatore. Per sfogliare la

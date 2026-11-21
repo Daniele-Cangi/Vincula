@@ -11,10 +11,10 @@ from tempfile import TemporaryDirectory
 
 from mcp import Client, MCPError, StdioServerParameters
 
-from server import Metrics, local_node
+from server import Metrics, legacy_registry, registry
 
 
-async def check(peer_configured: bool, env: dict[str, str]) -> None:
+async def check(topology, include_remotes: bool, env: dict[str, str]) -> None:
     params = StdioServerParameters(
         command=sys.executable, args=[str(Path(__file__).with_name("server.py").resolve())], env=env,
     )
@@ -33,14 +33,18 @@ async def check(peer_configured: bool, env: dict[str, str]) -> None:
             "discover_capabilities", "get_capability_run",
         }
 
-        origin = local_node()
+        origin = topology.local_id
         inventory = (await client.call_tool("list_nodes")).structured_content
-        assert [node["node_id"] for node in inventory["nodes"]] == ["ubuntu", "windows"]
-        for node in inventory["nodes"]:
+        assert [node["node_id"] for node in inventory["nodes"]] == [node.node_id for node in topology.nodes]
+        for definition, node in zip(topology.nodes, inventory["nodes"]):
             node_id = node["node_id"]
             is_local = node_id == origin
-            expected = "available" if is_local or peer_configured else "not_configured"
-            assert node == {"node_id": node_id, "local": is_local, "availability": expected}, node
+            configured = include_remotes and definition.route is not None and definition.route.configured()
+            expected = "available" if is_local or configured else "not_configured"
+            assert node["local"] == is_local and node["availability"] == expected, node
+            assert node["label"] == definition.label and node["os_family"] == definition.family, node
+            assert node["aliases"] == list(definition.aliases), node
+            assert node["network"] == (definition.route.network if definition.route else None), node
             reply = await client.call_tool("get_node_status", {"node_id": node_id})
             info = dict(reply.structured_content)
             metrics = info.pop("metrics")
@@ -64,12 +68,13 @@ async def check(peer_configured: bool, env: dict[str, str]) -> None:
 async def main() -> None:
     env = {
         name: value for name, value in os.environ.items()
-        if name.startswith("VINCULA_") or name == "SSH_AUTH_SOCK"
+        if name.startswith("VINCULA_") or name in {"SSH_AUTH_SOCK", "XDG_CONFIG_HOME", "LOCALAPPDATA"}
     }
-    await check(True, env)
+    await check(registry(), True, env)
     with TemporaryDirectory() as empty:
-        home_var = "LOCALAPPDATA" if local_node() == "windows" else "HOME"
-        await check(False, {**env, home_var: empty})
+        home_var = "LOCALAPPDATA" if sys.platform == "win32" else "HOME"
+        isolated = {name: value for name, value in env.items() if name != "VINCULA_NODE_REGISTRY"}
+        await check(legacy_registry(), False, {**isolated, home_var: empty, "XDG_CONFIG_HOME": empty})
 
 
 if __name__ == "__main__":

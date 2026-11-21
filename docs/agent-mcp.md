@@ -10,7 +10,8 @@ la avvia.
 
 Usa un checkout del repository sul PC da cui parte l’agente, con Python
 3.10 o successivo e la [configurazione SSH di Vincula](../README.md#configurazione)
-già funzionante.
+già funzionante. Per aggiungere altre macchine Linux o Windows, consulta
+la [configurazione del registro dei nodi](registro-nodi.md).
 
 - Su Ubuntu il server riusa l’identità e il file delle chiavi host
   verificato di Windows Dock. Se la chiave è protetta da passphrase,
@@ -52,21 +53,21 @@ Per rendere disponibili nuove operazioni ai client MCP, consulta la
 
 | Strumento | Risultato |
 | --- | --- |
-| `list_nodes` | I nodi `ubuntu` e `windows` in ordine stabile. Per ogni nodo indica se è quello locale e l’esito della lettura di stato. |
+| `list_nodes` | I nodi registrati con ID, alias, famiglia del sistema operativo e stato di raggiungibilità. |
 | `get_node_status` | Accetta `node_id` e restituisce lo stesso identificatore, il ruolo locale o remoto e le metriche del nodo scelto. |
 
 Entrambi riportano `available` quando la lettura riesce, `not_configured`
 quando mancano i file SSH richiesti per il peer e `unavailable` quando
 la lettura fallisce. Un errore sul peer lascia disponibile lo stato del
-nodo locale. Un nodo indisponibile ha `metrics: null`. Gli identificatori
-diversi da `ubuntu` e `windows` vengono rifiutati.
+nodo locale. Un nodo indisponibile ha `metrics: null`. Puoi indicare
+l’identificativo o un alias registrato.
 
 Le metriche comprendono il sistema operativo, la versione o il numero di
 build, il tempo di attività in secondi, l’uso della CPU in percentuale
 quando disponibile e la memoria fisica in byte. Il campo della memoria
 disponibile usa `MemAvailable` su Ubuntu e `FreePhysicalMemory` su Windows.
 
-`agent/check.py` apre una vera sessione MCP, scopre entrambi i nodi e
+`agent/check.py` apre una vera sessione MCP, scopre i nodi configurati e
 valida lo stato di ciascuno. Ripete la prova con un ambiente temporaneo
 privo dei file SSH del peer per controllare che il nodo locale rimanga
 consultabile.
