@@ -44,6 +44,7 @@ dell’ambiente virtuale e come unico argomento il percorso assoluto di
 Per avviare, ritrovare e fermare programmi consulta la [guida ai lavori autorizzati](lavori-mcp.md).
 Per scoprire i comandi presenti sul nodo e inviarli uno alla volta consulta la
 [guida alle sessioni interattive](sessioni-mcp.md).
+Per sfogliare, leggere e trasferire contenuti consulta la [guida ai file](file-mcp.md).
 
 ## Strumenti di stato
 
