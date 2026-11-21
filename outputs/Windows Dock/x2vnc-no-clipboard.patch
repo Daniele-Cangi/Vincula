@@ -1,0 +1,89 @@
+--- a/args.c
++++ b/args.c
+@@ -74,6 +74,7 @@
+ 
+ int debug=0;
+ Bool trimsel = False;
++Bool shareClipboard = True;
+ 
+ Bool noblank = False;
+ int no_wakeup_delay = 0x7fffffff;
+@@ -106,7 +107,7 @@
+ 	  "              [-reversewheel]\n"
+ 	  "              [-scrolllines lines]\n"
+ 	  "              [-mac]\n"
+-	  "              [-trimsel]\n"
++	  "              [-trimsel] [-noclipboard]\n"
+ 	  "              [-noblank]\n"
+ 	  "              [-lockdelay seconds]\n"
+ 	  "              [-debug]\n"
+@@ -226,6 +227,8 @@
+       passwdFile = argv[i];
+     } else if (strcmp(argv[i],"-debug") == 0) {
+       debug++;
++    } else if (strcmp(argv[i],"-noclipboard") == 0) {
++      shareClipboard = False;
+     } else if (strcmp(argv[i],"-trimsel") == 0) {
+       trimsel = True;
+     } else if (strcmp(argv[i],"-noblank") == 0) {
+--- a/x2vnc.h
++++ b/x2vnc.h
+@@ -109,6 +109,7 @@
+ 					 Bool incremental);
+ extern Bool SendPointerEvent(int x, int y, int buttonMask);
+ extern Bool SendKeyEvent(CARD32 key, Bool down);
++extern Bool shareClipboard;
+ extern Bool SendClientCutText(char *str, int len);
+ extern Bool HandleRFBServerMessage();
+ 
+--- a/x.c
++++ b/x.c
+@@ -759,7 +759,7 @@
+   selection_owner=XGetSelectionOwner(dpy, XA_PRIMARY);
+ /*   fprintf(stderr,"Selection owner: %lx\n",(long)selection_owner); */
+ 
+-  if(selection_owner != None && selection_owner != topLevel)
++  if(shareClipboard && selection_owner != None && selection_owner != topLevel)
+   {
+     XConvertSelection(dpy,
+ 		      XA_PRIMARY, XA_STRING, XA_CUT_BUFFER0,
+@@ -1432,7 +1432,7 @@
+       break;
+       
+     case PropertyNotify:
+-      if (ev->xproperty.atom == XA_CUT_BUFFER0)
++      if (shareClipboard && ev->xproperty.atom == XA_CUT_BUFFER0)
+       {
+ 	str = XFetchBytes(dpy, &len);
+ 	if (str) {
+--- a/rfbproto.c
++++ b/rfbproto.c
+@@ -447,6 +447,9 @@
+ {
+     rfbClientCutTextMsg cct;
+ 
++    if (!shareClipboard)
++        return True;
++
+     last_event_time=time(0);
+ 
+     if (trimsel && LooksLikeURL(str, len)) {
+@@ -762,6 +765,18 @@
+       
+       msg.sct.length = Swap32IfLE(msg.sct.length);
+ 
++      if (!shareClipboard) {
++        char discard[4096];
++        CARD32 remaining = msg.sct.length;
++        while (remaining != 0) {
++          int count = remaining > sizeof(discard) ? sizeof(discard) : remaining;
++          if (!ReadExact(rfbsock, discard, count))
++            return False;
++          remaining -= count;
++        }
++        break;
++      }
++
+       str = malloc(msg.sct.length + 1);
+       if (!ReadExact(rfbsock, str, msg.sct.length))
+ 	return False;

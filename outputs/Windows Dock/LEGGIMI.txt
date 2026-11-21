@@ -1,0 +1,72 @@
+Windows Dock
+
+Avvio
+Su Linux fai doppio clic su Windows Dock sulla Scrivania. Puoi aprirlo
+anche dal menu delle applicazioni, cercando Windows Dock.
+Da terminale, in questa cartella, esegui ./windows-dock.py.
+L'app usa Python 3, GTK 3 (python3-gi e gir1.2-gtk-3.0) e il client OpenSSH.
+Mantieni windows-dock.py, windows_ssh.py, remote_desktop.py, host.known_hosts
+e PowerShellRunner.cs nella stessa cartella.
+
+Uso
+- Stato mostra versione di Windows, tempo di attività, CPU, RAM e dischi.
+- Trasferimenti copia un file per volta. Indica un percorso Windows assoluto
+  con nome del file, ad esempio C:\Users\Admin\documento.txt. La cartella di
+  destinazione deve esistere. Se il file esiste già, scegli un altro nome.
+- PowerShell esegue il file .ps1 selezionato senza input interattivo.
+  Mostra l'output, gli errori e il codice di uscita. Lo script è copiato in
+  una cartella privata in Program Files su Windows ed eseguito da lì. Usa
+  percorsi completi per i file sul PC Windows. Per i caratteri accentati, usa
+  UTF-8 con BOM, compatibile con Windows PowerShell 5.1.
+  Il limite di 10 minuti include la sospensione di Windows. Al risveglio
+  Windows arresta i processi dello script se il limite è già trascorso.
+  L'app indica quando accorcia un output lungo o perde la conferma dell'esito.
+
+Account SSH senza elevazione
+Prima del primo avvio di uno script, un amministratore deve creare la
+cartella %ProgramFiles%\Windows Dock PowerShell per l'account SSH configurato.
+La cartella deve essere una directory reale con ACL protetta dall'ereditarietà.
+Imposta tre regole esplicite di controllo completo, per l'account SSH, SYSTEM
+e il gruppo locale Administrators (SID S-1-5-32-544). Ogni regola deve valere
+per questa cartella, le sottocartelle e i file. Il proprietario deve essere uno
+di questi tre. L'account SSH crea le cartelle di lavoro sotto questa radice.
+
+Desktop remoto
+Premi «Desktop remoto» per vedere la sessione già aperta su Windows
+e usare mouse e tastiera. Il PC da controllare deve avere la sessione Windows aperta.
+Chiudi il visualizzatore o premi «Chiudi desktop remoto» per chiudere il tunnel.
+Il traffico VNC passa nel tunnel SSH sulla rete Ethernet. La porta VNC 5909
+ascolta solo in loopback su entrambi i PC. Gli appunti restano locali.
+
+
+Condivisione di mouse e tastiera
+Apri la scheda «Mouse e tastiera» in Windows Dock su Linux. Seleziona il
+lato in cui si trova lo schermo Windows e premi «Attiva condivisione».
+Muovi il puntatore oltre quel bordo per usare il mouse e la tastiera Linux
+su Windows. Ctrl+F12 cambia schermo in qualsiasi momento. Il PC Windows
+mostra sempre la propria sessione grafica.
+
+Per fermare la modalità premi «Disattiva condivisione» in alto nella
+finestra, anche durante un trasferimento o uno script. Il desktop remoto
+e la condivisione usano lo stesso collegamento e si avviano uno alla volta.
+Ubuntu deve usare X11. La condivisione passa nel tunnel SSH esistente e
+blocca lo scambio di appunti. La patch locale di x2vnc è in questa cartella.
+Per usare Windows come postazione principale, apri la scheda omonima di
+Linux Dock su Windows. Da lì puoi anche abilitare gli appunti condivisi.
+
+Icone
+Generate con ImageGen. Il prompt comune descrive uno scudo compatto
+in grafite con bordo metallico e connettori Ethernet su sfondo trasparente.
+Windows Dock usa quattro riquadri ciano. Linux Dock usa un simbolo da
+terminale viola e verde acido.
+
+Connessione
+Nella configurazione di esempio l'app usa l'account admin sul PC Windows
+192.168.77.2 dalla scheda Ethernet Linux 192.168.77.1. Imposta le variabili
+VINCULA_WINDOWS_USER, VINCULA_WINDOWS_HOST e VINCULA_LINUX_ADDRESS per cambiarli
+all'avvio. Prepara host.known_hosts con la chiave host verificata sul PC
+Windows. Se il server viene reinstallato o la sua chiave cambia, confronta
+la nuova impronta con quella mostrata da Windows prima di aggiornare il file.
+
+Se la chiave Linux è bloccata, sbloccala nel terminale di Linux:
+    ssh-add ~/.ssh/id_ed25519_windows_dock

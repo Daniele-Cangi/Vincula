@@ -1,0 +1,59 @@
+Linux Dock per Windows
+
+Sul desktop Windows, apri Linux Dock. Il collegamento avvia
+l'app installata nel profilo Windows, sotto %LOCALAPPDATA%\Linux Dock.
+
+Stato mostra sistema, tempo di attività, CPU, RAM e dischi del PC Linux.
+Trasferimenti copia un file alla volta in entrambi i sensi. Usa un percorso
+Linux assoluto come /home/utente/documento.txt. La cartella di destinazione
+deve esistere. Per un file esistente, scegli un nome diverso. L'invio verso
+Linux richiede un filesystem che supporti la rinomina atomica senza sostituzione.
+Bash esegue un file .sh con l'account SSH Linux e mostra output, errori e codice di
+uscita. Lo script parte da una directory temporanea sul PC Linux e funziona
+senza input interattivo. Usa percorsi assoluti per i file di cui ha bisogno.
+Linux arresta lo script e i suoi processi dopo 10 minuti. L'app indica quando
+accorcia un output lungo o perde la conferma dell'esito.
+
+Desktop remoto
+Premi «Desktop remoto» per vedere la sessione già aperta su Ubuntu
+e usare mouse e tastiera. Il PC da controllare deve avere la sessione grafica X11 aperta.
+Chiudi il visualizzatore o premi «Chiudi desktop remoto» per chiudere il tunnel.
+Il traffico VNC passa nel tunnel SSH sulla rete Ethernet. La porta VNC 5909
+ascolta solo in loopback su entrambi i PC. Gli appunti restano locali.
+
+
+Condividere il mouse e la tastiera di Windows
+Apri «Mouse e tastiera», scegli dove si trova lo schermo Ubuntu e premi
+«Attiva condivisione». Porta il puntatore oltre quel bordo per continuare
+su Ubuntu. Ctrl+F12 cambia computer. Premi «Disattiva condivisione»
+in alto nella finestra per fermarla da qualsiasi scheda, anche durante
+un trasferimento o uno script. Il lavoro in corso prosegue. Ubuntu deve
+avere una sessione X11 aperta.
+Se l'arresto dei processi non è verificabile, l'app mostra «Arresto non confermato».
+Ogni PC mostra il suo desktop. Per copiare su Windows e incollare su Ubuntu,
+seleziona «Condividi gli appunti con Ubuntu in entrambe le direzioni» prima
+di premere «Attiva condivisione». Copia il testo, passa allo schermo Ubuntu
+e incollalo. L'opzione parte disattivata e si può cambiare tra una sessione
+e l'altra. Per copiare un file usa «Trasferimenti».
+Barrier 2.4 può svuotare gli appunti locali di Ubuntu all'avvio della
+sessione anche quando la casella è deselezionata.
+
+La modalità usa Deskflow su Windows e il client Barrier su Ubuntu.
+Input e appunti passano nel tunnel SSH e con TLS autenticato da entrambe
+le parti. Le porte interne ascoltano su loopback.
+
+Icone
+Generate con ImageGen. Il prompt comune descrive uno scudo compatto
+in grafite con bordo metallico e connettori Ethernet su sfondo trasparente.
+Windows Dock usa quattro riquadri ciano. Linux Dock usa un simbolo da
+terminale viola e verde acido.
+
+L'alias SSH linux-dock, configurato in %LOCALAPPDATA%\Linux Dock\ssh_config,
+seleziona indirizzo e account Linux. Nella configurazione di esempio Windows
+usa 192.168.77.2 e Linux risponde su 192.168.77.1:2222.
+Il servizio Linux può chiamarsi linux-dock-sshd.service e girare nella sessione
+dell'utente Linux. Puoi verificarlo con systemctl --user status linux-dock-sshd.
+Per la connessione automatica, abilita l'avvio automatico del profilo
+Ethernet dedicato alla porta configurata.
+
+LinuxDock.cs contiene il sorgente dell'app installata.
