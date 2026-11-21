@@ -6,16 +6,17 @@
 import argparse
 import asyncio
 from hashlib import sha256
-from pathlib import Path
 import sys
 import time
 from uuid import uuid4
 
 from check_jobs import call, session
+from jobs import ROOT as STATE_DIRECTORY
 
 FIXTURE = bytes(range(256)) * 2048
 TEXT = "Collaudo file Vincula · caffè\n"
 ROOT = "vincula-files-test"
+FIXTURE_DIRECTORY = STATE_DIRECTORY / "file-fixture"
 
 
 def endpoint(node, path):
@@ -68,16 +69,16 @@ async def check_approval(peer, transfer_id):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("fixture", "verify", "ubuntu", "windows"))
-    parser.add_argument("--folder", type=Path)
     parser.add_argument("--approval-transfer")
     args = parser.parse_args()
     if args.command == "fixture":
-        args.folder.mkdir()
-        (args.folder / "fixture.bin").write_bytes(FIXTURE)
-        (args.folder / "message.txt").write_bytes(TEXT.encode())
+        FIXTURE_DIRECTORY.mkdir()
+        (FIXTURE_DIRECTORY / "fixture.bin").write_bytes(FIXTURE)
+        (FIXTURE_DIRECTORY / "message.txt").write_bytes(TEXT.encode())
+        print(FIXTURE_DIRECTORY)
     elif args.command == "verify":
         patterns = ("*-upload.bin", "*-download.bin", "*-approved.bin")
-        outputs = [path for pattern in patterns for path in args.folder.glob(pattern)]
+        outputs = [path for pattern in patterns for path in FIXTURE_DIRECTORY.glob(pattern)]
         assert len(outputs) == 3 and all(path.read_bytes() == FIXTURE for path in outputs)
         print("Physical destination files verified", flush=True)
     elif args.approval_transfer:

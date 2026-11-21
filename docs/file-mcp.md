@@ -55,8 +55,9 @@ la copia esistente è protetta.
 
 ## Collaudo
 
-Per preparare dati di prova usa `python agent/check_files.py fixture --folder PERCORSO`
-su ciascun nodo e registra quella cartella con alias `vincula-files-test`
+Per preparare dati di prova usa `python agent/check_files.py fixture`
+su ciascun nodo. Il comando stampa il percorso della cartella di prova
+nella directory dati di Vincula. Registra quel percorso con alias `vincula-files-test`
 e diritto di scrittura. In modalità completa, esegui
 `python agent/check_files.py windows` da Ubuntu e
 `python agent/check_files.py ubuntu` da Windows.
@@ -64,4 +65,5 @@ e diritto di scrittura. In modalità completa, esegui
 Il test verifica elenco, testo UTF-8 e copia di un file binario da 512 KiB
 in entrambe le direzioni. In modalità approvazione aggiungi
 `--approval-transfer UUID` e approva sul nodo sorgente e su quello di
-destinazione. Usa cartelle e UUID distinti per ogni collaudo.
+destinazione. Per ripetere il collaudo rimuovi solo la cartella di prova
+creata dal comando `fixture` e usa nuovi UUID.
