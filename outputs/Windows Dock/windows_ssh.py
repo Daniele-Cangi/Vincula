@@ -74,7 +74,15 @@ New-DockDirectory (Join-Path $root $directoryName)
 
 STATUS_COMMAND = r"""
 $os = Get-CimInstance Win32_OperatingSystem
-$cpu = Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average
+$cpu = $null
+try {
+    $total = Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'"
+    if ($null -ne $total.PercentProcessorTime) {
+        $cpu = [Math]::Min(100, [double]$total.PercentProcessorTime)
+    }
+} catch {
+    # Keep the rest of the report available if performance counters are unavailable.
+}
 $disks = @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | ForEach-Object {
     [ordered]@{ drive = $_.DeviceID; total = $_.Size; free = $_.FreeSpace }
 })
@@ -85,7 +93,7 @@ $disks = @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | ForEach-Obj
     os = $os.Caption
     build = $os.BuildNumber
     uptime = [int64]((Get-Date) - $os.LastBootUpTime).TotalSeconds
-    cpu = $cpu.Average
+    cpu = $cpu
     ram_total = [int64]$os.TotalVisibleMemorySize * 1024
     ram_free = [int64]$os.FreePhysicalMemory * 1024
     disks = $disks

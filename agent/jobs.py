@@ -7,6 +7,7 @@ import argparse
 import base64
 from contextlib import ExitStack, closing, contextmanager, suppress
 import json
+from importlib.util import module_from_spec, spec_from_file_location
 import os
 from pathlib import Path
 import re
@@ -28,6 +29,11 @@ BATCH_LIMIT = 12
 PAGE_LIMIT = 50
 SUMMARY = "id, program, state, exit_code, created, finished"
 ACTIVE = ("pending", "queued", "running", "stopping")
+
+# The SSH entry point runs with Python -I and loads its companion by absolute path.
+files_spec = spec_from_file_location("vincula_files", Path(__file__).resolve().with_name("vincula_files.py"))
+files = module_from_spec(files_spec)
+files_spec.loader.exec_module(files)
 
 
 def initialize():
@@ -75,11 +81,15 @@ def initialize():
             );
             CREATE INDEX IF NOT EXISTS shell_history ON shell_entries(session_id,sequence);
         """)
-    installed = ROOT / "jobs.py"
-    if Path(__file__).resolve() != installed:
+        db.executescript(files.SCHEMA)
+    for name in ("vincula_files.py", "jobs.py"):
+        source = Path(__file__).resolve().with_name(name)
+        installed = ROOT / name
+        if source == installed:
+            continue
         stage = ROOT / (uuid4().hex + ".tmp")
         try:
-            shutil.copyfile(__file__, stage)
+            shutil.copyfile(source, stage)
             stage.replace(installed)
         finally:
             stage.unlink(missing_ok=True)
@@ -262,6 +272,12 @@ def shell_rpc(operation, session_id, job_id=None, program=None, after=0):
 
 
 def dispatch(action, **payload):
+    if action == "files":
+        try:
+            with transaction() as db:
+                return files.dispatch(db, ROOT, mode(db), **payload)
+        except OSError:
+            raise ValueError("The file or folder is unavailable, or its filesystem refused the operation.") from None
     if action == "discover":
         return discover_tools(**payload)
     if action == "shell":
@@ -287,6 +303,7 @@ def set_mode(db, new_mode):
     db.execute("UPDATE policy SET mode=?", (new_mode,))
     if new_mode == "ask":
         db.execute("UPDATE jobs SET state='pending' WHERE state='queued'")
+        db.execute("UPDATE file_requests SET state='pending' WHERE state='approved' AND auto=1")
 
 
 def decide(db, job_id, allowed):
@@ -316,10 +333,19 @@ def operator(args):
                 print(json.dumps(dict(row)))
         elif args.command in {"approve", "deny"}:
             decide(db, args.id, args.command == "approve")
+        elif args.command in {"files-grant", "files-revoke"}:
+            if not NAME.fullmatch(args.alias):
+                raise ValueError("Invalid folder alias.")
+            files.grant(db, args.alias, getattr(args, "directory", None), getattr(args, "write", False))
+        elif args.command == "files-pending":
+            for row in files.permission_items(db):
+                print(json.dumps(dict(row)))
+        elif args.command in {"files-approve", "files-deny"}:
+            files.decide(db, args.id, args.command == "files-approve")
 
 @contextmanager
-def exclusive_worker():
-    with (ROOT / "worker.lock").open("a+b") as lock:
+def process_lock(path):
+    with path.open("a+b") as lock:
         lock.seek(0)
         if WINDOWS:
             import msvcrt
@@ -328,6 +354,10 @@ def exclusive_worker():
             import fcntl
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         yield
+
+
+def exclusive_worker():
+    return process_lock(ROOT / "worker.lock")
 
 
 @contextmanager
@@ -452,6 +482,14 @@ def main():
     register.add_argument("argv", nargs=argparse.REMAINDER)
     commands.add_parser("remove").add_argument("name")
     for name in ("approve", "deny"):
+        commands.add_parser(name).add_argument("id")
+    grant = commands.add_parser("files-grant")
+    grant.add_argument("alias")
+    grant.add_argument("directory")
+    grant.add_argument("--write", action="store_true")
+    commands.add_parser("files-revoke").add_argument("alias")
+    commands.add_parser("files-pending")
+    for name in ("files-approve", "files-deny"):
         commands.add_parser(name).add_argument("id")
     commands.add_parser("rpc").add_argument("payload")
     args = parser.parse_args()

@@ -6,14 +6,15 @@
 import asyncio
 import base64
 from collections import defaultdict
+from contextlib import suppress
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
-from tempfile import TemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryFile
 from typing import Annotated, Literal
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -408,6 +409,154 @@ async def read_shell(
 async def close_shell(node_id: NodeId, session_id: UUID) -> ShellSession:
     """Close the session and stop its active command. The history stays available."""
     return await asyncio.to_thread(shell_request, node_id, "close", session_id)
+
+
+FolderAlias = Annotated[str, Field(pattern=f"^{jobs.NAME.pattern}$")]
+RelativeFile = Annotated[str, Field(max_length=240)]
+
+
+class FileRoot(BaseModel):
+    alias: str
+    writable: bool
+
+
+class FileRoots(BaseModel):
+    roots: list[FileRoot]
+
+
+class FileRequest(BaseModel):
+    id: UUID
+    state: Literal["pending", "approved", "denied", "completed"]
+    operation: Literal["browse", "read", "export", "import"]
+    root: str
+    path: str
+    result: dict | None
+
+
+class FileEndpoint(BaseModel):
+    node_id: NodeId
+    root: FolderAlias
+    path: RelativeFile
+
+
+class TransferReceipt(BaseModel):
+    transfer_id: UUID
+    source: FileRequest | None
+    destination: FileRequest
+
+
+def file_request(node_id, operation, request_id=None, **fields):
+    return destination_request(node_id, {
+        "action": "files", "operation": operation, "request_id": str(request_id) if request_id else None,
+        **fields,
+    })
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def list_file_roots(node_id: NodeId) -> FileRoots:
+    """List the folder aliases and write permissions configured on this node."""
+    return FileRoots(roots=await asyncio.to_thread(file_request, node_id, "roots"))
+
+
+@mcp.tool()
+async def request_file(
+    node_id: NodeId, request_id: UUID, operation: Literal["browse", "read"],
+    root: FolderAlias, path: RelativeFile = "",
+    offset: Annotated[int, Field(ge=0, le=2**63 - 1)] = 0,
+) -> FileRequest:
+    """Browse an authorized directory or read a UTF-8 file page under the local approval policy."""
+    return await asyncio.to_thread(file_request, node_id, "request", request_id, root=root,
+                                   relative=path, offset=offset, operation_kind=operation)
+
+
+@mcp.tool()
+async def get_file_request(node_id: NodeId, request_id: UUID) -> FileRequest:
+    """Retrieve a file request and materialize its authorized result."""
+    return await asyncio.to_thread(file_request, node_id, "status", request_id)
+
+
+def sftp_copy(source, destination, source_node):
+    origin = local_node()
+    sending = origin == source_node
+    local = Path(source if sending else destination)
+    remote = destination if sending else source
+    if origin == "ubuntu":
+        remote_name = windows_ssh._sftp_name(windows_ssh._file_path(remote))
+        command = f"put payload {remote_name}" if sending else f"get {remote_name} payload"
+        windows_ssh._sftp(command, cwd=local.parent, timeout=90)
+        return
+
+    if not remote.startswith("/") or any(c in '\\\"' or ord(c) < 32 for c in remote):
+        raise ValueError("SSH staging path is not supported.")
+    command = f'put payload "{remote}"' if sending else f'get "{remote}" payload'
+    system = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    sftp = system / "System32/OpenSSH/sftp.exe"
+    with NamedTemporaryFile(delete=False) as batch:
+        script_file = Path(batch.name)
+        batch.write((command + "\n").encode())
+    try:
+        with TemporaryFile() as stdout, TemporaryFile() as stderr:
+            subprocess.run(
+                [sftp, "-F", linux_ssh_config(), "-q", "-b", script_file, "-o", "BatchMode=yes",
+                 "-o", "StrictHostKeyChecking=yes", "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=6",
+                 "-o", "ClearAllForwardings=yes", "linux-dock"], cwd=local.parent,
+                stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, creationflags=subprocess.CREATE_NO_WINDOW,
+                env=windows_ssh_env(), check=True, timeout=90,
+            )
+    finally:
+        script_file.unlink(missing_ok=True)
+
+
+def cleanup_transfer(source_node, source_id, dest_node, dest_id):
+    for node, request_id in ((source_node, source_id), (dest_node, dest_id)):
+        with suppress(ToolError):
+            file_request(node, "cleanup", request_id)
+
+
+def execute_transfer(transfer_id, source, destination):
+    if source.node_id == destination.node_id:
+        raise ValueError("Choose one endpoint on each PC.")
+    with jobs.transaction() as db:
+        jobs.files.save_plan(db, str(transfer_id), {
+            "source": source.model_dump(), "destination": destination.model_dump(),
+        })
+    source_id, dest_id = uuid5(transfer_id, "export"), uuid5(transfer_id, "import")
+    dest = file_request(destination.node_id, "request", dest_id, root=destination.root,
+                        relative=destination.path, operation_kind="import")
+    if dest["state"] == "completed":
+        cleanup_transfer(source.node_id, source_id, destination.node_id, dest_id)
+        return TransferReceipt(transfer_id=transfer_id, source=None, destination=dest)
+    src = file_request(source.node_id, "request", source_id, root=source.root,
+                       relative=source.path, operation_kind="export")
+    if src["state"] == dest["state"] == "approved":
+        outbound = file_request(source.node_id, "stage", source_id)
+        inbound = file_request(destination.node_id, "stage", dest_id)
+        sftp_copy(outbound["path"], inbound["path"], source.node_id)
+        expected = {"size": outbound["size"], "sha256": outbound["sha256"]}
+        file_request(destination.node_id, "commit", dest_id, expected=expected)
+        dest = file_request(destination.node_id, "status", dest_id)
+        cleanup_transfer(source.node_id, source_id, destination.node_id, dest_id)
+    return TransferReceipt(transfer_id=transfer_id, source=src, destination=dest)
+
+
+def transfer_with_lock(transfer_id, source, destination):
+    try:
+        if not jobs.DATABASE.is_file():
+            raise ValueError("Initialize the job runner on the origin first.")
+        locks = jobs.ROOT / "file-transfer-locks"
+        locks.mkdir(mode=0o700, exist_ok=True)
+        with jobs.process_lock(locks / f"{transfer_id}.lock"):
+            return execute_transfer(transfer_id, source, destination)
+    except ValueError as error:
+        raise ToolError(str(error)) from None
+    except (OSError, subprocess.SubprocessError, windows_ssh.LinkError):
+        raise ToolError("Could not transfer the file. Retry with the same transfer ID.") from None
+
+
+@mcp.tool()
+async def transfer_file(transfer_id: UUID, source: FileEndpoint, destination: FileEndpoint) -> TransferReceipt:
+    """Transfer a file after both nodes grant access. Reuse the UUID while waiting or retrying."""
+    return await asyncio.to_thread(transfer_with_lock, transfer_id, source, destination)
 
 
 if __name__ == "__main__":

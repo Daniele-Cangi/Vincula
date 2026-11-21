@@ -31,6 +31,9 @@ Un agente può cercare i comandi installati sul `PATH` dell’altro PC e
 aprire una sessione interattiva per le voci del catalogo, con cronologia
 e approvazioni sul nodo di destinazione. [Scoperta e sessioni MCP](docs/sessioni-mcp.md)
 
+Via MCP l’agente può anche sfogliare, leggere e trasferire file tra i due PC
+nelle cartelle abilitate dall’operatore. [Accesso ai file](docs/file-mcp.md)
+
 ## Appunti condivisi
 
 Apri **Linux Dock su Windows** per avviare la condivisione. Una volta
