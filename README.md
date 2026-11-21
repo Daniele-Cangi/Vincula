@@ -12,11 +12,17 @@ script ed espongono il desktop remoto e la condivisione di mouse e tastiera.
 
 ## Appunti condivisi
 
-In **Linux Dock su Windows**, apri **Mouse e tastiera**, seleziona **Condividi
-gli appunti con Ubuntu in entrambe le direzioni** e premi **Attiva condivisione**.
-Copia il testo su Windows, passa allo schermo Ubuntu e incolla. La casella
-parte deselezionata e si può modificare tra le sessioni. Per i singoli file
-usa la scheda **Trasferimenti**.
+Apri **Linux Dock su Windows** per avviare la condivisione. Una volta
+connesso, copia il testo, sposta il puntatore sull'altro schermo e incolla
+con `Ctrl+V` o con il comando Incolla dell'app di destinazione.
+Gli appunti si sincronizzano in entrambe le direzioni.
+
+Nella scheda **Mouse e tastiera** puoi cambiare il lato dello schermo
+Ubuntu, gli appunti condivisi e l'avvio automatico. Linux Dock ricorda le
+preferenze. **Disattiva condivisione**, in alto accanto a **Desktop remoto**,
+ferma la sessione e sospende i tentativi automatici fino alla prossima
+apertura o alla riattivazione manuale. Per i singoli file usa
+**Trasferimenti**.
 
 Barrier 2.4 può svuotare gli appunti locali di Ubuntu all'avvio della sessione,
 anche quando la casella è deselezionata.

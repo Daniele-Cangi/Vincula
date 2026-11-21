@@ -23,18 +23,20 @@ ascolta solo in loopback su entrambi i PC. Gli appunti restano locali.
 
 
 Condividere il mouse e la tastiera di Windows
-Apri «Mouse e tastiera», scegli dove si trova lo schermo Ubuntu e premi
-«Attiva condivisione». Porta il puntatore oltre quel bordo per continuare
-su Ubuntu. Ctrl+F12 cambia computer. Premi «Disattiva condivisione»
-in alto nella finestra per fermarla da qualsiasi scheda, anche durante
-un trasferimento o uno script. Il lavoro in corso prosegue. Ubuntu deve
-avere una sessione X11 aperta.
+Linux Dock avvia la condivisione all'apertura e ritenta se il collegamento
+cade. Ubuntu deve avere una sessione X11 aperta. Il lato iniziale è
+«A sinistra di Windows». Nella scheda «Mouse e tastiera» puoi cambiarlo
+e modificare le opzioni per la prossima sessione. L'app ricorda le preferenze.
+Porta il puntatore oltre il bordo scelto per continuare sull'altro PC.
+Ctrl+F12 cambia computer. «Disattiva condivisione», accanto a «Desktop remoto»,
+ferma la sessione da qualsiasi scheda, anche durante un trasferimento o uno
+script. I tentativi automatici riprendono alla prossima apertura o dopo
+«Attiva condivisione».
 Se l'arresto dei processi non è verificabile, l'app mostra «Arresto non confermato».
-Ogni PC mostra il suo desktop. Per copiare su Windows e incollare su Ubuntu,
-seleziona «Condividi gli appunti con Ubuntu in entrambe le direzioni» prima
-di premere «Attiva condivisione». Copia il testo, passa allo schermo Ubuntu
-e incollalo. L'opzione parte disattivata e si può cambiare tra una sessione
-e l'altra. Per copiare un file usa «Trasferimenti».
+Gli appunti sono condivisi in entrambe le direzioni per impostazione
+predefinita. Copia il testo, passa all'altro schermo e incolla normalmente.
+Per disattivare gli appunti, ferma la sessione e deseleziona la relativa
+casella prima di riconnetterti. Per copiare un file usa «Trasferimenti».
 Barrier 2.4 può svuotare gli appunti locali di Ubuntu all'avvio della
 sessione anche quando la casella è deselezionata.
 

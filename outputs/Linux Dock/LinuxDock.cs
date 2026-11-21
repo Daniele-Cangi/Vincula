@@ -5,11 +5,13 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 public sealed class DockResult
 {
@@ -425,6 +427,11 @@ df -h -x tmpfs -x devtmpfs -x squashfs --output=target,used,avail,pcent"));
         ShareInput(direction, false, stop, connected);
     }
 
+    internal static void CheckInputConnection()
+    {
+        Success(Bash("true", 8));
+    }
+
     internal static void ShareInput(string direction, bool shareClipboard, CancellationToken stop, Action connected)
     {
         string[] sides = { "left", "right", "up", "down" };
@@ -620,6 +627,7 @@ df -h -x tmpfs -x devtmpfs -x squashfs --output=target,used,avail,pcent"));
 
 internal sealed class DockWindow : Form
 {
+    private const string InputSettings = @"HKEY_CURRENT_USER\Software\Vincula\Linux Dock";
     private static readonly Color Navy = Color.FromArgb(18, 36, 59);
     private static readonly Color Blue = Color.FromArgb(33, 95, 159);
     private static readonly Color Ink = Color.FromArgb(24, 40, 61);
@@ -630,20 +638,29 @@ internal sealed class DockWindow : Form
     private readonly TextBox output = ConsoleBox();
     private bool busy;
     private readonly Button desktopButton;
+    private readonly Button inputHeaderButton;
     private readonly ComboBox inputSide = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly CheckBox shareClipboard = new CheckBox {
         Text = "Condividi gli appunti con Ubuntu in entrambe le direzioni",
-        AutoSize = true, Anchor = AnchorStyles.Left
+        AutoSize = true, Anchor = AnchorStyles.Left, Checked = true
     };
+    private readonly CheckBox autoConnectInput = new CheckBox {
+        Text = "Avvia all'apertura e riconnetti se il collegamento cade",
+        AutoSize = true, Anchor = AnchorStyles.Left, Checked = true
+    };
+    private readonly System.Windows.Forms.Timer inputRetry = new System.Windows.Forms.Timer { Interval = 5000 };
     private readonly Label inputStatus = new Label();
     private readonly TabPage inputPage;
     private Button inputButton;
     private CancellationTokenSource inputSession;
     private CancellationTokenSource desktopSession;
     private bool closePending;
+    private bool automaticInputWanted;
     private string linuxHome = "";
 
-    public DockWindow()
+    public DockWindow() : this(false) { }
+
+    private DockWindow(bool useSavedInputSettings)
     {
         Text = "Linux Dock";
         string icon = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "linux-dock.ico");
@@ -661,6 +678,8 @@ internal sealed class DockWindow : Form
         Font = new Font("Segoe UI", 10);
         ForeColor = Ink;
         FormClosing += delegate(object sender, FormClosingEventArgs args) {
+            automaticInputWanted = false;
+            inputRetry.Stop();
             if (inputSession != null)
                 StopInput();
             if (desktopSession != null)
@@ -690,23 +709,23 @@ internal sealed class DockWindow : Form
         connection.Text = "SSH da verificare";
         connection.Top = 22;
         hero.Controls.Add(connection);
-        desktopButton = ActionButton("Desktop remoto", () =>
-        {
-            if (inputSession != null)
-                StopInput();
-            else
-                ToggleDesktop();
-        });
-        desktopButton.Anchor = AnchorStyles.Top | AnchorStyles.Left;
-        desktopButton.Top = 50;
-        hero.Controls.Add(desktopButton);
+        desktopButton = ActionButton("Desktop remoto", ToggleDesktop);
+        inputHeaderButton = ActionButton("Attiva condivisione", ToggleInput);
+        var actions = new FlowLayoutPanel {
+            Top = 47, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = false
+        };
+        actions.Controls.Add(inputHeaderButton);
+        actions.Controls.Add(desktopButton);
+        hero.Controls.Add(actions);
         EventHandler positionConnection = delegate {
             connection.Left = hero.ClientSize.Width - connection.PreferredWidth - 24;
-            desktopButton.Left = hero.ClientSize.Width - desktopButton.PreferredSize.Width - 24;
+            actions.Left = hero.ClientSize.Width - actions.Width - 21;
         };
         hero.Resize += positionConnection;
         connection.TextChanged += positionConnection;
-        desktopButton.TextChanged += positionConnection;
+        actions.SizeChanged += positionConnection;
+        positionConnection(this, EventArgs.Empty);
         layout.Controls.Add(hero, 0, 0);
 
         tabs.Dock = DockStyle.Fill;
@@ -724,7 +743,62 @@ internal sealed class DockWindow : Form
         footer.AutoEllipsis = true;
         footer.Text = "Pronto";
         layout.Controls.Add(footer, 0, 2);
-        Shown += delegate { RefreshStatus(); };
+        if (useSavedInputSettings)
+            InitializeInputSettings();
+        Shown += delegate {
+            if (useSavedInputSettings)
+                SetAutomaticInput(autoConnectInput.Checked);
+            RefreshStatus();
+        };
+        FormClosed += delegate { inputRetry.Dispose(); };
+    }
+
+    private void InitializeInputSettings()
+    {
+        int side = ReadInputSetting("ScreenSide", 0);
+        inputSide.SelectedIndex = side >= 0 && side < inputSide.Items.Count ? side : 0;
+        shareClipboard.Checked = ReadInputSetting("ShareClipboard", 1) != 0;
+        autoConnectInput.Checked = ReadInputSetting("AutoConnectInput", 1) != 0;
+        inputSide.SelectedIndexChanged += delegate { SaveInputSetting("ScreenSide", inputSide.SelectedIndex); };
+        shareClipboard.CheckedChanged += delegate { SaveInputSetting("ShareClipboard", shareClipboard.Checked ? 1 : 0); };
+        autoConnectInput.CheckedChanged += delegate {
+            SaveInputSetting("AutoConnectInput", autoConnectInput.Checked ? 1 : 0);
+            SetAutomaticInput(autoConnectInput.Checked);
+        };
+        inputRetry.Tick += delegate { TryAutomaticInput(); };
+    }
+
+    private static int ReadInputSetting(string name, int fallback)
+    {
+        try { return Registry.GetValue(InputSettings, name, fallback) as int? ?? fallback; }
+        catch (System.Security.SecurityException) { return fallback; }
+        catch (UnauthorizedAccessException) { return fallback; }
+        catch (IOException) { return fallback; }
+    }
+
+    private void SaveInputSetting(string name, int value)
+    {
+        try { Registry.SetValue(InputSettings, name, value, RegistryValueKind.DWord); }
+        catch (Exception error)
+        {
+            if (!(error is System.Security.SecurityException || error is UnauthorizedAccessException || error is IOException))
+                throw;
+            footer.Text = "Le preferenze valgono per questa apertura di Linux Dock.";
+        }
+    }
+
+    private void SetAutomaticInput(bool wanted)
+    {
+        automaticInputWanted = wanted;
+        inputRetry.Enabled = wanted;
+        if (wanted)
+            TryAutomaticInput();
+    }
+
+    private void TryAutomaticInput()
+    {
+        if (automaticInputWanted && !closePending && !busy && inputSession == null && desktopSession == null)
+            StartInput(true);
     }
 
     private TabPage BuildStatus()
@@ -808,9 +882,10 @@ internal sealed class DockWindow : Form
     private TabPage BuildInput()
     {
         var page = Page("Mouse e tastiera");
-        var content = PageLayout(page, 6);
+        var content = PageLayout(page, 7);
         for (int i = 0; i < 3; i++)
             content.RowStyles.Add(new RowStyle(SizeType.Absolute, i == 2 ? 55 : 42));
+        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
@@ -827,16 +902,17 @@ internal sealed class DockWindow : Form
             + "Premi Ctrl+F12 per cambiare PC.",
             Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 2);
         content.Controls.Add(shareClipboard, 0, 3);
+        content.Controls.Add(autoConnectInput, 0, 4);
         inputStatus.Text = "Disattivata";
         inputStatus.Dock = DockStyle.Fill;
         inputStatus.TextAlign = ContentAlignment.MiddleLeft;
-        content.Controls.Add(inputStatus, 0, 4);
+        content.Controls.Add(inputStatus, 0, 5);
         inputButton = ActionButton("Attiva condivisione", ToggleInput);
-        content.Controls.Add(inputButton, 0, 5);
+        content.Controls.Add(inputButton, 0, 6);
         return page;
     }
 
-    private async void ToggleInput()
+    private void ToggleInput()
     {
         if (inputSession != null)
         {
@@ -845,36 +921,55 @@ internal sealed class DockWindow : Form
         }
         if (desktopSession != null)
             return;
+        automaticInputWanted = autoConnectInput.Checked;
+        inputRetry.Enabled = automaticInputWanted;
+        StartInput(false);
+    }
 
+    private async void StartInput(bool automatic)
+    {
         string direction = new[] { "left", "right", "up", "down" }[inputSide.SelectedIndex];
         bool clipboard = shareClipboard.Checked;
         var session = new CancellationTokenSource();
         inputSession = session;
         inputStatus.Text = "Connessione via Ethernet…";
-        inputButton.Text = "Disattiva condivisione";
+        SetInputButtons("Disattiva condivisione", true);
         inputSide.Enabled = false;
         shareClipboard.Enabled = false;
-        desktopButton.Text = "Disattiva condivisione";
+        desktopButton.Enabled = false;
         bool stopConfirmed = true;
+        string retryStatus = null;
         try
         {
-            await Task.Run(() => DockTransport.ShareInput(direction, clipboard, session.Token, () =>
+            await Task.Run(() =>
+            {
+                if (automatic)
+                    DockTransport.CheckInputConnection();
+                if (session.IsCancellationRequested)
+                    return;
+                DockTransport.ShareInput(direction, clipboard, session.Token, () =>
                 BeginInvoke((Action)(() =>
                 {
                     if (inputSession == session && !session.IsCancellationRequested)
                         inputStatus.Text = "Condivisione attiva";
-                }))));
+                })));
+            });
         }
         catch (InputStopException error)
         {
             stopConfirmed = false;
+            SetAutomaticInput(false);
             closePending = false;
             MessageBox.Show(this, error.Message, "Arresto della condivisione non confermato",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         catch (Exception error)
         {
-            if (!closePending)
+            if (automaticInputWanted && !session.IsCancellationRequested && !closePending)
+            {
+                retryStatus = "Nuovo tentativo tra pochi secondi. " + error.Message.Split('\n')[0].TrimEnd('\r');
+            }
+            else if (!session.IsCancellationRequested && !closePending)
                 MessageBox.Show(this, error.Message, "Condivisione di mouse e tastiera",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
@@ -882,23 +977,27 @@ internal sealed class DockWindow : Form
         {
             inputSession = null;
             session.Dispose();
-            inputStatus.Text = stopConfirmed ? "Disattivata" : "Arresto non confermato";
+            inputStatus.Text = stopConfirmed ? retryStatus ?? "Disattivata" : "Arresto non confermato";
             inputSide.Enabled = true;
             shareClipboard.Enabled = true;
             desktopButton.Enabled = true;
-            desktopButton.Text = "Desktop remoto";
-            inputButton.Enabled = true;
-            inputButton.Text = "Attiva condivisione";
+            SetInputButtons("Attiva condivisione", true);
             FinishClose();
         }
     }
 
     private void StopInput()
     {
+        SetAutomaticInput(false);
         inputSession.Cancel();
         inputStatus.Text = "Chiusura…";
-        inputButton.Enabled = false;
-        desktopButton.Enabled = false;
+        SetInputButtons("Disattiva condivisione", false);
+    }
+
+    private void SetInputButtons(string caption, bool enabled)
+    {
+        inputButton.Text = inputHeaderButton.Text = caption;
+        inputButton.Enabled = inputHeaderButton.Enabled = enabled;
     }
 
     private void FinishClose()
@@ -1059,7 +1158,7 @@ internal sealed class DockWindow : Form
             return;
         var session = new CancellationTokenSource();
         desktopSession = session;
-        inputButton.Enabled = false;
+        SetInputButtons("Attiva condivisione", false);
         inputStatus.Text = "Chiudi il desktop remoto per usare questa modalità.";
         desktopButton.Text = "Chiudi desktop remoto";
         try
@@ -1076,7 +1175,7 @@ internal sealed class DockWindow : Form
         {
             desktopSession = null;
             desktopButton.Text = "Desktop remoto";
-            inputButton.Enabled = true;
+            SetInputButtons("Attiva condivisione", true);
             inputStatus.Text = "Disattivata";
             session.Dispose();
             FinishClose();
@@ -1086,8 +1185,63 @@ internal sealed class DockWindow : Form
     [STAThread]
     private static void Main()
     {
-        Application.EnableVisualStyles();
-        Application.SetCompatibleTextRenderingDefault(false);
-        Application.Run(new DockWindow());
+        using (var instance = new Mutex(false, @"Local\Vincula.LinuxDock"))
+        {
+            bool ownsInstance;
+            try { ownsInstance = instance.WaitOne(0); }
+            catch (AbandonedMutexException) { ownsInstance = true; }
+            if (!ownsInstance)
+            {
+                ActivateExistingWindow();
+                return;
+            }
+            try
+            {
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                Application.Run(new DockWindow(true));
+            }
+            finally
+            {
+                instance.ReleaseMutex();
+            }
+        }
     }
+
+    private static void ActivateExistingWindow()
+    {
+        using (Process current = Process.GetCurrentProcess())
+        {
+            Process[] processes = Process.GetProcessesByName(current.ProcessName);
+            try
+            {
+                foreach (Process process in processes)
+                {
+                    if (process.Id == current.Id || process.SessionId != current.SessionId || process.HasExited)
+                        continue;
+                    IntPtr window = process.MainWindowHandle;
+                    if (window == IntPtr.Zero)
+                        continue;
+                    if (IsIconic(window))
+                        ShowWindowAsync(window, 9);
+                    SetForegroundWindow(window);
+                    return;
+                }
+            }
+            finally
+            {
+                foreach (Process process in processes)
+                    process.Dispose();
+            }
+        }
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr window);
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindowAsync(IntPtr window, int command);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr window);
 }
