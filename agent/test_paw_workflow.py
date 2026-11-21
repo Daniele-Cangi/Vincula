@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Daniele Cangi
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import asyncio
+import json
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
@@ -57,6 +59,23 @@ class PawWorkflowTests(unittest.TestCase):
             jobs.files.grant(db, "inbox", str(replacement), True)
             with self.assertRaisesRegex(ValueError, "reconfigured"):
                 jobs.paw.arguments(db, jobs.files, identifier, self.root)
+
+    def test_malformed_node_report_does_not_hide_valid_results(self):
+        plan = [{"node_id": node, "job_id": str(uuid4()), "inputs": [{"index": index}]}
+                for index, node in enumerate(("windows", "ubuntu"))]
+        valid = {"index": 1, "sha256": "0" * 64, "score": 0.5,
+                 "decision": "review", "seal_verified": True}
+        malformed = ({"unexpected": []}, [None], [dict(valid, index=0, score="NaN")])
+        for invalid in malformed:
+            def dispatch(node, _request):
+                report = invalid if node == "windows" else [valid]
+                return {"state": "completed", "exit_code": 0,
+                        "stdout": {"text": json.dumps(report), "truncated": False}}
+
+            result = asyncio.run(paw_workflow.reconcile(uuid4(), plan, dispatch))
+            self.assertIsNone(result["results"])
+            self.assertIn("invalid result data", result["parts"][0]["error"])
+            self.assertEqual(result["parts"][1]["results"][0].model_dump(), valid)
 
 
 if __name__ == "__main__":

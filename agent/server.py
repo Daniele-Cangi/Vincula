@@ -579,20 +579,12 @@ class PawPart(BaseModel):
     files: Annotated[list[FileEndpoint], Field(min_length=1, max_length=jobs.paw.MAX_FILES)]
 
 
-class PawResult(BaseModel):
-    index: int
-    sha256: str
-    score: float
-    decision: str
-    seal_verified: Literal[True]
-
-
 class PawPartReport(BaseModel):
     node_id: NodeId
     job_id: UUID
     job: Job | None
     waiting_transfers: list[TransferReceipt]
-    results: list[PawResult] | None
+    results: list[paw_workflow.PawResult] | None
     error: str | None
 
 
@@ -600,7 +592,7 @@ class PawReport(BaseModel):
     analysis_id: UUID
     capability: Literal["paw.analyze_offline"]
     parts: list[PawPartReport]
-    results: list[PawResult] | None
+    results: list[paw_workflow.PawResult] | None
 
 
 @mcp.tool(annotations=READ_ONLY)

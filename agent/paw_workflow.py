@@ -6,11 +6,24 @@
 import asyncio
 import json
 from pathlib import PurePosixPath
+from typing import Annotated, Literal
 from uuid import uuid5
 
 from mcp.server.mcpserver.exceptions import ToolError
+from pydantic import BaseModel, Field, FiniteFloat, StrictInt, TypeAdapter
 
 import jobs
+
+
+class PawResult(BaseModel):
+    index: StrictInt
+    sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    score: FiniteFloat
+    decision: str
+    seal_verified: Literal[True]
+
+
+RESULT_ROWS = TypeAdapter(list[PawResult])
 
 
 def load(analysis_id, request=None):
@@ -85,8 +98,11 @@ def result_rows(details, part):
         return None
     if details["stdout"]["truncated"]:
         raise ValueError("PAW report output is incomplete.")
-    rows = json.loads(details["stdout"]["text"])
-    if [row["index"] for row in rows] != [item["index"] for item in part["inputs"]]:
+    try:
+        rows = RESULT_ROWS.validate_json(details["stdout"]["text"])
+    except ValueError:
+        raise ValueError("PAW report contains invalid result data.") from None
+    if [row.index for row in rows] != [item["index"] for item in part["inputs"]]:
         raise ValueError("PAW report does not match the assigned files.")
     return rows
 
@@ -116,5 +132,5 @@ async def reconcile(analysis_id, plan, dispatch, transfer=None):
     parts = await asyncio.gather(*(process(part) for part in plan))
     results = None
     if all(part["results"] is not None for part in parts):
-        results = sorted((row for part in parts for row in part["results"]), key=lambda row: row["index"])
+        results = sorted((row for part in parts for row in part["results"]), key=lambda row: row.index)
     return {"analysis_id": analysis_id, "capability": jobs.paw.CAPABILITY, "parts": parts, "results": results}

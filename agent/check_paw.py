@@ -17,6 +17,7 @@ from check_jobs import call, session
 import jobs
 
 NODES = ("ubuntu", "windows")
+CAPABILITY = jobs.paw.CAPABILITY
 SPLITS = {
     "full": [
         ("ubuntu", [("ubuntu", 0), ("windows", 0)]),
@@ -51,6 +52,25 @@ def prepare():
         jobs.files.grant(db, "paw-inbox", str(INBOX.resolve()), True)
 
 
+async def wait_for_results(client, args, report):
+    deadline = time.monotonic() + 150
+    while time.monotonic() < deadline:
+        assert all(not part["error"] for part in report["parts"]), report
+        if report["results"] is not None:
+            return report
+        for part in report["parts"]:
+            job = part["job"]
+            if job:
+                assert job["state"] not in {"cancelled", "failed", "unconfirmed"}, report
+                assert job["state"] != "completed" or job["exit_code"] == 0, report
+        await asyncio.sleep(.5)
+        if any(part["job"] is None for part in report["parts"]):
+            report = await call(client, CAPABILITY, args)
+        else:
+            report = await call(client, "get_paw_analysis", {"analysis_id": args["analysis_id"]})
+    raise AssertionError(report)
+
+
 async def check(mode, analysis_id):
     parts = [{"node_id": dest, "files": [{"node_id": node, "root": "paw-samples", "path": f"sample-{index}.eml"}
                                        for node, index in items]} for dest, items in SPLITS[mode]]
@@ -59,31 +79,17 @@ async def check(mode, analysis_id):
         for node in NODES:
             info = await call(client, "discover_capabilities", {"node_id": node})
             provider, = info["capabilities"]
-            assert provider["id"] == "paw.analyze_offline"
-        report = await call(client, "paw.analyze_offline", args)
+            assert provider["id"] == CAPABILITY
+        report = await call(client, CAPABILITY, args)
         if mode == "ask":
             assert all(part["job"] is None and part["waiting_transfers"] for part in report["parts"]), report
             print("Trasferimenti in attesa nei due nodi.", flush=True)
         else:
             assert all(part["job"] is not None and not part["error"] for part in report["parts"]), report
 
-    deadline = time.monotonic() + 150
     async with session() as client:
-        while time.monotonic() < deadline:
-            assert not any(part["error"] for part in report["parts"]), report
-            if report["results"] is not None:
-                break
-            assert not any(part["job"] and (
-                part["job"]["state"] in {"cancelled", "failed", "unconfirmed"}
-                or part["job"]["state"] == "completed" and part["job"]["exit_code"] != 0
-            ) for part in report["parts"]), report
-            await asyncio.sleep(.5)
-            report = await call(client, "paw.analyze_offline" if any(
-                not part["job"] for part in report["parts"]) else "get_paw_analysis",
-                args if any(not part["job"] for part in report["parts"]) else {"analysis_id": analysis_id})
-        else:
-            raise AssertionError(report)
-        replay = await call(client, "paw.analyze_offline", args)
+        report = await wait_for_results(client, args, report)
+        replay = await call(client, CAPABILITY, args)
         assert replay["results"] == report["results"]
         assert [part["job"]["created"] for part in replay["parts"]] == [
             part["job"]["created"] for part in report["parts"]

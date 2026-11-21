@@ -278,21 +278,23 @@ def shell_rpc(operation, session_id, job_id=None, program=None, after=0):
         return dict(session, mode=mode(db), commands=history, output=output, next_after=next_after)
 
 
+def dispatch_paw(operation, job_id=None, revision=None, inputs=None):
+    with transaction() as db:
+        if operation == "describe":
+            return paw.describe(db, files)
+        key = str(UUID(job_id))
+        if operation == "queue":
+            paw.queue(db, files, mode(db), key, revision, inputs)
+            return job(db, key)
+        if operation == "read":
+            exists = db.execute("SELECT 1 FROM paw_jobs WHERE id=?", (key,)).fetchone()
+            return read_output(db, key) if exists else None
+        raise ValueError("Unknown PAW operation.")
+
+
 def dispatch(action, **payload):
     if action == "paw":
-        with transaction() as db:
-            if payload["operation"] == "describe":
-                return paw.describe(db, files)
-            if payload["operation"] == "queue":
-                job_id = str(UUID(payload["job_id"]))
-                paw.queue(db, files, mode(db), job_id, payload["revision"], payload["inputs"])
-                return job(db, job_id)
-            if payload["operation"] == "read":
-                job_id = str(UUID(payload["job_id"]))
-                if db.execute("SELECT 1 FROM paw_jobs WHERE id=?", (job_id,)).fetchone():
-                    return read_output(db, job_id)
-                return None
-            raise ValueError("Unknown PAW operation.")
+        return dispatch_paw(**payload)
     if action == "files":
         try:
             with transaction() as db:
