@@ -5,6 +5,7 @@
 
 import asyncio
 import base64
+from collections import defaultdict
 import json
 import os
 import subprocess
@@ -19,6 +20,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
+import batches
 import jobs
 import linux_status
 
@@ -188,10 +190,15 @@ class JobCatalog(BaseModel):
 
 
 def destination_job(node_id, action, job_id=None, program=None):
-    request = {"action": action, "job_id": str(job_id) if job_id else None, "program": program}
+    return destination_request(
+        node_id, {"action": action, "job_id": str(job_id) if job_id else None, "program": program},
+    )
+
+
+def destination_request(node_id, request):
     if node_id == local_node():
         try:
-            return jobs.rpc(**request)
+            return jobs.dispatch(**request)
         except ValueError as error:
             raise ToolError(str(error)) from None
     payload = base64.b64encode(json.dumps(request).encode()).decode("ascii")
@@ -238,6 +245,95 @@ async def read_job(node_id: NodeId, job_id: UUID) -> JobDetails:
 async def stop_job(node_id: NodeId, job_id: UUID) -> Job:
     """Cancel a waiting job or request termination of its running process tree."""
     return await asyncio.to_thread(destination_job, node_id, "stop", job_id)
+
+
+class BatchTaskRequest(BaseModel):
+    program: str = Field(pattern=f"^{jobs.NAME.pattern}$")
+    node_id: NodeId | None = None
+
+
+class BatchTaskResult(BaseModel):
+    index: int
+    node_id: NodeId
+    program: str
+    job_id: UUID
+    job: Job | None = None
+    error: str | None = None
+
+
+class BatchReport(BaseModel):
+    batch_id: UUID
+    origin: NodeId
+    tasks: list[BatchTaskResult]
+
+
+async def registered_programs(node_id):
+    try:
+        catalog = await asyncio.to_thread(destination_job, node_id, "list")
+        return node_id, catalog["programs"]
+    except ToolError:
+        return node_id, []
+
+
+async def batch_report(batch_id, plan, operation):
+    by_node = defaultdict(list)
+    for task in plan:
+        by_node[task["node_id"]].append(task)
+
+    async def contact(node_id, tasks):
+        items = [{"job_id": task["job_id"], "program": task["program"]} for task in tasks]
+        request = {"action": "batch", "operation": operation, "items": items}
+        try:
+            replies = await asyncio.to_thread(destination_request, node_id, request)
+        except ToolError as error:
+            return [BatchTaskResult(**task, error=str(error)) for task in tasks]
+        if not isinstance(replies, list) or len(replies) != len(tasks):
+            return [BatchTaskResult(**task, error="Incomplete batch response from node.") for task in tasks]
+        results = []
+        for task, reply in zip(tasks, replies):
+            try:
+                result = BatchTaskResult(**task, **reply)
+                if result.job and (result.job.id != result.job_id or result.job.program != result.program):
+                    raise ValueError("Mismatched job")
+            except (TypeError, ValueError):
+                result = BatchTaskResult(**task, error="Invalid job response from node.")
+            results.append(result)
+        return results
+
+    parts = await asyncio.gather(*(contact(node, tasks) for node, tasks in by_node.items()))
+    results = sorted((task for part in parts for task in part), key=lambda task: task.index)
+    return BatchReport(batch_id=batch_id, origin=local_node(), tasks=results)
+
+
+@mcp.tool()
+async def submit_batch(
+    batch_id: UUID, tasks: list[BatchTaskRequest] = Field(min_length=1, max_length=jobs.BATCH_LIMIT),
+) -> BatchReport:
+    """Dispatch registered programs in parallel. Retry with the same UUID and ordered tasks."""
+    request = [task.model_dump() for task in tasks]
+    try:
+        plan = await asyncio.to_thread(batches.load, batch_id, request)
+        if plan is None:
+            catalogs = {}
+            if any(task.node_id is None for task in tasks):
+                catalogs = dict(await asyncio.gather(*(registered_programs(node) for node in NODE_IDS)))
+            plan = batches.make_plan(batch_id, local_node(), request, catalogs)
+            plan = await asyncio.to_thread(batches.save, batch_id, request, plan)
+    except ValueError as error:
+        raise ToolError(str(error)) from None
+    return await batch_report(batch_id, plan, "start")
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_batch(batch_id: UUID) -> BatchReport:
+    """Read each task's state and exit code on the PC where the batch was submitted."""
+    try:
+        plan = await asyncio.to_thread(batches.load, batch_id)
+    except ValueError as error:
+        raise ToolError(str(error)) from None
+    if plan is None:
+        raise ToolError("Unknown batch ID on this origin.")
+    return await batch_report(batch_id, plan, "status")
 
 
 if __name__ == "__main__":

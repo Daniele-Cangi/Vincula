@@ -23,6 +23,10 @@ Sul nodo di destinazione puoi scegliere **Richiedi approvazione** oppure
 **Accesso completo ai programmi autorizzati**. I lavori continuano anche
 quando il client MCP si scollega. [Configurazione e strumenti per i lavori](docs/lavori-mcp.md)
 
+I lotti di calcolo assegnano lavori indipendenti a Windows e Ubuntu,
+li eseguono in parallelo e conservano gli identificatori per il recupero
+dopo una riconnessione. [Calcolo distribuito via MCP](docs/calcolo-distribuito.md)
+
 ## Appunti condivisi
 
 Apri **Linux Dock su Windows** per avviare la condivisione. Una volta
