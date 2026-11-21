@@ -26,7 +26,8 @@ Condividere il mouse e la tastiera di Windows
 Linux Dock avvia la condivisione all'apertura e ritenta se il collegamento
 cade. Ubuntu deve avere una sessione X11 aperta. Il lato iniziale è
 «A sinistra di Windows». Nella scheda «Mouse e tastiera» puoi cambiarlo
-e modificare le opzioni per la prossima sessione. L'app ricorda le preferenze.
+anche durante la condivisione. Al cambio di lato la sessione si riconnette
+automaticamente e l'app ricorda la scelta.
 Porta il puntatore oltre il bordo scelto per continuare sull'altro PC.
 Ctrl+F12 cambia computer. «Disattiva condivisione», accanto a «Desktop remoto»,
 ferma la sessione da qualsiasi scheda, anche durante un trasferimento o uno

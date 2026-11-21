@@ -18,8 +18,10 @@ con `Ctrl+V` o con il comando Incolla dell'app di destinazione.
 Gli appunti si sincronizzano in entrambe le direzioni.
 
 Nella scheda **Mouse e tastiera** puoi cambiare il lato dello schermo
-Ubuntu, gli appunti condivisi e l'avvio automatico. Linux Dock ricorda le
-preferenze. **Disattiva condivisione**, in alto accanto a **Desktop remoto**,
+Ubuntu anche con la condivisione attiva. Al cambio di lato la condivisione
+si riconnette automaticamente. Linux Dock ricorda il lato scelto e le
+preferenze per gli appunti condivisi e l'avvio automatico.
+**Disattiva condivisione**, in alto accanto a **Desktop remoto**,
 ferma la sessione e sospende i tentativi automatici fino alla prossima
 apertura o alla riattivazione manuale. Per i singoli file usa
 **Trasferimenti**.

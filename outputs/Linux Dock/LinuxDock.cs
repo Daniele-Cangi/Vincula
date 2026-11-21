@@ -676,6 +676,7 @@ internal sealed class DockWindow : Form
     private CancellationTokenSource desktopSession;
     private bool closePending;
     private bool automaticInputWanted;
+    private bool restartInputAfterSideChange;
     private string linuxHome = "";
 
     private sealed class DockTabs : TabControl
@@ -769,6 +770,8 @@ internal sealed class DockWindow : Form
                 return;
             }
 
+            using (var background = new SolidBrush(Canvas))
+                args.Graphics.FillRectangle(background, ClientRectangle);
             CheckBoxState state = Checked ? CheckBoxState.CheckedDisabled : CheckBoxState.UncheckedDisabled;
             Size glyph = CheckBoxRenderer.GetGlyphSize(args.Graphics, state);
             CheckBoxRenderer.DrawCheckBox(args.Graphics, new Point(0, (Height - glyph.Height) / 2), state);
@@ -898,6 +901,7 @@ internal sealed class DockWindow : Form
         layout.Controls.Add(footer, 0, 2);
         if (useSavedInputSettings)
             InitializeInputSettings();
+        inputSide.SelectedIndexChanged += ChangeInputSide;
         Shown += delegate {
             if (useSavedInputSettings)
                 SetAutomaticInput(autoConnectInput.Checked);
@@ -1124,6 +1128,15 @@ internal sealed class DockWindow : Form
         StartInput(false);
     }
 
+    private void ChangeInputSide(object sender, EventArgs args)
+    {
+        if (inputSide.SelectedIndex < 0 || inputSession == null || inputSession.IsCancellationRequested || closePending)
+            return;
+        restartInputAfterSideChange = true;
+        SetInputStatus("Cambio di lato…", Waiting);
+        inputSession.Cancel();
+    }
+
     private async void StartInput(bool automatic)
     {
         string direction = new[] { "left", "right", "up", "down" }[inputSide.SelectedIndex];
@@ -1132,7 +1145,6 @@ internal sealed class DockWindow : Form
         inputSession = session;
         SetInputStatus("Connessione via Ethernet…", Waiting);
         SetInputButtons("Disattiva condivisione", true, stop: true);
-        inputSide.Enabled = false;
         shareClipboard.Enabled = false;
         desktopButton.Enabled = false;
         bool stopConfirmed = true;
@@ -1175,18 +1187,27 @@ internal sealed class DockWindow : Form
         {
             inputSession = null;
             session.Dispose();
-            SetInputStatus(stopConfirmed ? retryStatus ?? "Disattivata" : "Arresto non confermato",
-                stopConfirmed ? (retryStatus == null ? Muted : Waiting) : Danger);
-            inputSide.Enabled = true;
-            shareClipboard.Enabled = true;
-            desktopButton.Enabled = true;
-            SetInputButtons("Attiva condivisione", true);
-            FinishClose();
+            bool restart = restartInputAfterSideChange && stopConfirmed && !closePending;
+            restartInputAfterSideChange = false;
+            if (restart)
+            {
+                StartInput(false);
+            }
+            else
+            {
+                SetInputStatus(stopConfirmed ? retryStatus ?? "Disattivata" : "Arresto non confermato",
+                    stopConfirmed ? (retryStatus == null ? Muted : Waiting) : Danger);
+                shareClipboard.Enabled = true;
+                desktopButton.Enabled = true;
+                SetInputButtons("Attiva condivisione", true);
+                FinishClose();
+            }
         }
     }
 
     private void StopInput()
     {
+        restartInputAfterSideChange = false;
         SetAutomaticInput(false);
         inputSession.Cancel();
         SetInputStatus("Chiusura…", Waiting);
