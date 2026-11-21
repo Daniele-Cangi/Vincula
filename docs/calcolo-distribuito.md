@@ -63,8 +63,5 @@ che un nuovo invio conservi gli stessi UUID e tempi di creazione.
 Alla fine rimuovi le registrazioni di prova nei rispettivi nodi e ripristina
 il livello dei permessi desiderato.
 
-La prova con PAW ha ripartito quattro messaggi sintetici in due gruppi
-da due. Ogni nodo ha eseguito l’analisi statica offline con
-`paw full --no-egress` e ha verificato i sigilli. Gli SHA-256 degli
-originali, i punteggi e le decisioni coincidono con il riferimento
-calcolato interamente su Ubuntu. [Primo collaudo PAW con Vincula](casi-duso/paw-windows-linux.md)
+Per scegliere file, parametri e ripartizione a ogni esecuzione, registra
+una [capacità esterna](capacita-mcp.md) sui nodi che possono eseguirla.
