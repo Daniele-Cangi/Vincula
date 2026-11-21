@@ -1,6 +1,6 @@
 # Scoperta e stato dei nodi via MCP
 
-Vincula espone due strumenti in sola lettura. Il client MCP avvia
+Per scoprire i nodi e leggerne lo stato, Vincula espone due strumenti in sola lettura. Il client MCP avvia
 `agent/server.py` sul proprio PC tramite standard input e output. Il server
 legge lo stato locale sul posto e raggiunge l’altro PC con OpenSSH sul
 collegamento Ethernet. La sessione MCP usa i permessi dell’account che
@@ -41,7 +41,9 @@ Nel client MCP configura come comando il percorso assoluto del Python
 dell’ambiente virtuale e come unico argomento il percorso assoluto di
 `agent/server.py`. Usa il trasporto `stdio`.
 
-## Strumenti
+Per avviare, ritrovare e fermare programmi consulta la [guida ai lavori autorizzati](lavori-mcp.md).
+
+## Strumenti di stato
 
 | Strumento | Risultato |
 | --- | --- |

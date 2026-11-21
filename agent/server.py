@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Daniele Cangi
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Read-only MCP server for the two nodes configured in Vincula."""
+"""Status and destination-authorized jobs for the two configured Vincula nodes."""
 
 import asyncio
 import base64
@@ -15,9 +15,11 @@ from typing import Literal
 from uuid import UUID
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
+import jobs
 import linux_status
 
 dock_dir = Path(__file__).resolve().parents[1] / "outputs" / "Windows Dock"
@@ -29,7 +31,7 @@ Availability = Literal["available", "unavailable", "not_configured"]
 NODE_IDS: tuple[NodeId, ...] = ("ubuntu", "windows")
 PROBE_TIMEOUT = 12
 
-mcp = MCPServer("vincula", instructions="Read the status of the two configured Vincula nodes.")
+mcp = MCPServer("vincula", instructions="Inspect Vincula nodes and manage their locally authorized programs.")
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 
 
@@ -95,23 +97,26 @@ def windows_ssh_env() -> dict[str, str]:
 
 
 def remote_linux_status() -> dict:
+    probe = base64.b64encode(Path(linux_status.__file__).read_bytes()).decode("ascii")
+    return linux_ssh_json(f"printf %s {probe} | base64 -d | python3 -IB -")
+
+
+def linux_ssh_json(command: str) -> dict:
     system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
     ssh = system_root / "System32" / "OpenSSH" / "ssh.exe"
-    # Like Linux Dock, send the fixed probe as part of the command so SSH can close stdin.
-    probe = base64.b64encode(Path(linux_status.__file__).read_bytes()).decode("ascii")
     # Windows OpenSSH can leave a captured pipe open after delivering its output.
     with TemporaryFile() as output, TemporaryFile() as errors:
         subprocess.run(
             [ssh, "-F", linux_ssh_config(), "-nT", "-o", "BatchMode=yes",
              "-o", "StrictHostKeyChecking=yes", "-o", "IdentitiesOnly=yes",
              "-o", "ConnectTimeout=6", "-o", "ClearAllForwardings=yes",
-             "linux-dock", f"printf %s {probe} | base64 -d | python3 -IB -"],
+             "linux-dock", command],
             stdin=subprocess.DEVNULL, stdout=output, stderr=errors,
             creationflags=subprocess.CREATE_NO_WINDOW, env=windows_ssh_env(),
             timeout=PROBE_TIMEOUT, check=True,
         )
         output.seek(0)
-        return json.loads(output.read(16 * 1024))
+        return json.loads(output.read(128 * 1024))
 
 
 def windows_metrics(is_local: bool) -> Metrics:
@@ -155,6 +160,84 @@ async def list_nodes() -> Inventory:
 async def get_node_status(node_id: NodeId) -> NodeStatus:
     """Read OS, uptime, CPU and physical memory on the requested node."""
     return await asyncio.to_thread(node_status, node_id, local_node())
+
+
+class Job(BaseModel):
+    id: UUID
+    program: str
+    state: Literal["pending", "queued", "running", "stopping", "completed", "cancelled", "failed", "unconfirmed"]
+    exit_code: int | None
+    created: float
+    finished: float | None
+
+
+class LogTail(BaseModel):
+    text: str
+    truncated: bool
+
+
+class JobDetails(Job):
+    stdout: LogTail
+    stderr: LogTail
+
+
+class JobCatalog(BaseModel):
+    mode: Literal["ask", "full"]
+    programs: list[str]
+    jobs: list[Job]
+
+
+def destination_job(node_id, action, job_id=None, program=None):
+    request = {"action": action, "job_id": str(job_id) if job_id else None, "program": program}
+    if node_id == local_node():
+        try:
+            return jobs.rpc(**request)
+        except ValueError as error:
+            raise ToolError(str(error)) from None
+    payload = base64.b64encode(json.dumps(request).encode()).decode("ascii")
+    try:
+        if node_id == "ubuntu":
+            reply = linux_ssh_json(f'python3 -IB "$HOME/.local/share/vincula-jobs/jobs.py" rpc {payload}')
+        else:
+            script = (
+                "$helper = Join-Path $env:LOCALAPPDATA 'Vincula-Jobs/jobs.py'\n"
+                f"& py.exe -3 -IB $helper rpc '{payload}'\nexit $LASTEXITCODE"
+            )
+            response = windows_ssh._powershell(script, timeout=PROBE_TIMEOUT)
+            windows_ssh._require_success(response)
+            reply = json.loads(response.stdout)
+    except (windows_ssh.LinkError, OSError, subprocess.SubprocessError, ValueError):
+        raise ToolError("Job service unavailable. Check the connection and destination installation. "
+                         "Retry a start with the same job ID.") from None
+    if "error" in reply:
+        raise ToolError(reply["error"])
+    return reply["result"]
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def list_jobs(node_id: NodeId) -> JobCatalog:
+    """List permission mode, registered program names and the 50 newest jobs on this node."""
+    return await asyncio.to_thread(destination_job, node_id, "list")
+
+
+@mcp.tool()
+async def start_job(node_id: NodeId, program: str, job_id: UUID) -> Job:
+    """Request a registered program. Supply a fresh UUID and reuse it for retries."""
+    if not jobs.NAME.fullmatch(program):
+        raise ToolError("Invalid program name.")
+    return await asyncio.to_thread(destination_job, node_id, "start", job_id, program)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def read_job(node_id: NodeId, job_id: UUID) -> JobDetails:
+    """Read durable job state, exit code and the last 4096 bytes of stdout and stderr."""
+    return await asyncio.to_thread(destination_job, node_id, "read", job_id)
+
+
+@mcp.tool()
+async def stop_job(node_id: NodeId, job_id: UUID) -> Job:
+    """Cancel a waiting job or request termination of its running process tree."""
+    return await asyncio.to_thread(destination_job, node_id, "stop", job_id)
 
 
 if __name__ == "__main__":

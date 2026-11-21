@@ -20,8 +20,12 @@ async def check(peer_configured: bool, env: dict[str, str]) -> None:
     )
     async with Client(params, read_timeout_seconds=20) as client:
         tools = (await client.list_tools()).tools
-        assert {tool.name for tool in tools} == {"list_nodes", "get_node_status"}
-        assert all(tool.annotations.read_only_hint for tool in tools)
+        assert {tool.name for tool in tools} == {
+            "list_nodes", "get_node_status", "list_jobs", "start_job", "read_job", "stop_job",
+        }
+        assert {tool.name for tool in tools if tool.annotations and tool.annotations.read_only_hint} == {
+            "list_nodes", "get_node_status", "list_jobs", "read_job",
+        }
 
         origin = local_node()
         inventory = (await client.call_tool("list_nodes")).structured_content
