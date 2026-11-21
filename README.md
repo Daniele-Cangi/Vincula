@@ -16,6 +16,9 @@ Nel primo caso d’uso, Codex ha usato Vincula da Ubuntu per collaudare PAW su
 Windows nativo. Per lo stesso messaggio, i tre punteggi del modello coincidono
 con quelli misurati su Linux. [Collaudo PAW e risultati](docs/casi-duso/paw-windows-linux.md)
 
+Il [server MCP di Vincula](docs/agent-mcp.md) permette a un agente di scoprire
+i due nodi configurati e consultarne lo stato, partendo da Windows o da Ubuntu.
+
 ## Appunti condivisi
 
 Apri **Linux Dock su Windows** per avviare la condivisione. Una volta
