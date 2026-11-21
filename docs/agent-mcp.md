@@ -45,6 +45,8 @@ Per avviare, ritrovare e fermare programmi consulta la [guida ai lavori autorizz
 Per scoprire i comandi presenti sul nodo e inviarli uno alla volta consulta la
 [guida alle sessioni interattive](sessioni-mcp.md).
 Per sfogliare, leggere e trasferire contenuti consulta la [guida ai file](file-mcp.md).
+Per rendere disponibili nuove operazioni ai client MCP, consulta la
+[guida alle capacità esterne](capacita-mcp.md).
 
 ## Strumenti di stato
 

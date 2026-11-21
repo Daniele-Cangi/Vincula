@@ -12,10 +12,6 @@ script ed espongono il desktop remoto e la condivisione di mouse e tastiera.
 
 ## Vincula Agent Infrastructure
 
-Nel primo caso d’uso, Codex ha usato Vincula da Ubuntu per collaudare PAW su
-Windows nativo. Per lo stesso messaggio, i tre punteggi del modello coincidono
-con quelli misurati su Linux. [Collaudo PAW e risultati](docs/casi-duso/paw-windows-linux.md)
-
 Il [server MCP di Vincula](docs/agent-mcp.md) permette a un agente di scoprire
 i due nodi configurati e consultarne lo stato, partendo da Windows o da Ubuntu.
 
@@ -34,9 +30,10 @@ e approvazioni sul nodo di destinazione. [Scoperta e sessioni MCP](docs/sessioni
 Via MCP l’agente può anche sfogliare, leggere e trasferire file tra i due PC
 nelle cartelle abilitate dall’operatore. [Accesso ai file](docs/file-mcp.md)
 
-La capacità `paw.analyze_offline` permette all’agente di scegliere nuovi
-messaggi EML e ripartirli fra i due PC con una sola registrazione di PAW
-per nodo. [Analisi PAW distribuita](docs/paw-mcp.md)
+Le capacità MCP permettono a un agente di scoprire e usare programmi
+installati su Windows e Ubuntu, passando parametri e file e distribuendo
+il lavoro tra i nodi. Per aggiungere una capacità, registra l’adattatore
+sul nodo che la offre. [Capacità esterne via MCP](docs/capacita-mcp.md)
 
 ## Appunti condivisi
 

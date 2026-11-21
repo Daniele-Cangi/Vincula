@@ -19,12 +19,12 @@ from uuid import UUID, uuid5
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, JsonValue
 
 import batches
 import jobs
 import linux_status
-import paw_workflow
+import capability_workflow
 
 dock_dir = Path(__file__).resolve().parents[1] / "outputs" / "Windows Dock"
 sys.path.insert(0, str(dock_dir))
@@ -560,84 +560,102 @@ async def transfer_file(transfer_id: UUID, source: FileEndpoint, destination: Fi
     return await asyncio.to_thread(transfer_with_lock, transfer_id, source, destination)
 
 
-class PawProvider(BaseModel):
-    id: Literal["paw.analyze_offline"]
-    revision: str
-    paw_version: str
-    inbox: str
-    input_extension: str
+class CapabilityParameter(BaseModel):
+    type: Literal["string", "integer", "boolean", "number"]
+    required: bool = False
+    enum: list[JsonValue] | None = None
+    description: str = ""
+
+
+class CapabilityContract(BaseModel):
     max_files: int
     max_input_bytes: int
+    extensions: list[str]
+    parameters: dict[str, CapabilityParameter]
+
+
+class CapabilityProvider(BaseModel):
+    id: str
+    version: str
+    revision: str
+    description: str
+    inbox: str | None
+    contract: CapabilityContract
 
 
 class Capabilities(BaseModel):
-    capabilities: list[PawProvider]
+    capabilities: list[CapabilityProvider]
 
 
-class PawPart(BaseModel):
+class CapabilityPart(BaseModel):
     node_id: NodeId
-    files: Annotated[list[FileEndpoint], Field(min_length=1, max_length=jobs.paw.MAX_FILES)]
+    files: Annotated[list[FileEndpoint], Field(max_length=jobs.capabilities.MAX_FILES)] = Field(default_factory=list)
+    parameters: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-class PawPartReport(BaseModel):
+class CapabilityOutput(BaseModel):
+    value: JsonValue
+
+
+class CapabilityPartReport(BaseModel):
     node_id: NodeId
     job_id: UUID
     job: Job | None
     waiting_transfers: list[TransferReceipt]
-    results: list[paw_workflow.PawResult] | None
+    output: CapabilityOutput | None
     error: str | None
 
 
-class PawReport(BaseModel):
-    analysis_id: UUID
-    capability: Literal["paw.analyze_offline"]
-    parts: list[PawPartReport]
-    results: list[paw_workflow.PawResult] | None
+class CapabilityReport(BaseModel):
+    run_id: UUID
+    capability_id: str
+    parts: list[CapabilityPartReport]
 
 
 @mcp.tool(annotations=READ_ONLY)
 async def discover_capabilities(node_id: NodeId) -> Capabilities:
-    """List the locally configured typed capabilities and their input constraints."""
-    provider = await paw_workflow.node_call(destination_request, node_id, "describe")
-    return Capabilities(capabilities=[provider] if provider else [])
+    """List operator-registered capabilities, versions, parameters and file requirements on a node."""
+    providers = await capability_workflow.node_call(destination_request, node_id, "describe")
+    return Capabilities(capabilities=providers)
 
 
-def transfer_paw_input(transfer_id, source, destination):
+def transfer_capability_input(transfer_id, source, destination):
     return transfer_with_lock(transfer_id, FileEndpoint.model_validate(source),
                               FileEndpoint.model_validate(destination)).model_dump(mode="json")
 
 
-@mcp.tool(name=jobs.paw.CAPABILITY)
-async def submit_paw_analysis(
-    analysis_id: UUID, parts: Annotated[list[PawPart], Field(min_length=1, max_length=2)],
-) -> PawReport:
-    """Analyze selected EML files offline. Repeat the same plan after transfer approvals."""
-    request = [part.model_dump(mode="json") for part in parts]
+@mcp.tool()
+async def submit_capability(
+    run_id: UUID, capability_id: str, parts: Annotated[list[CapabilityPart], Field(min_length=1, max_length=2)],
+) -> CapabilityReport:
+    """Run a discovered capability on one or both nodes. Repeat the same run after transfer approvals."""
+    request = {"capability_id": capability_id, "parts": [part.model_dump(mode="json") for part in parts]}
     try:
-        paw_workflow.validate_request(request)
-        plan = await asyncio.to_thread(paw_workflow.load, analysis_id, request)
+        jobs.capabilities.valid_id(capability_id)
+        plan = await asyncio.to_thread(capability_workflow.load, run_id, request)
         if plan is None:
-            nodes = [part.node_id for part in parts]
+            nodes = list(dict.fromkeys(part.node_id for part in parts))
             providers = await asyncio.gather(*(
-                paw_workflow.node_call(destination_request, node, "describe") for node in nodes
+                capability_workflow.node_call(destination_request, node, "describe", capability_id=capability_id)
+                for node in nodes
             ))
-            plan = await asyncio.to_thread(paw_workflow.make_plan, analysis_id, request,
+            plan = await asyncio.to_thread(capability_workflow.make_plan, run_id, request,
                                            dict(zip(nodes, providers)), local_node())
     except ValueError as error:
         raise ToolError(str(error)) from None
-    return await paw_workflow.reconcile(analysis_id, plan, destination_request, transfer_paw_input)
+    return await capability_workflow.reconcile(run_id, plan, destination_request, transfer_capability_input)
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def get_paw_analysis(analysis_id: UUID) -> PawReport:
-    """Read the status and combined offline results of an analysis submitted on this origin."""
+async def get_capability_run(run_id: UUID) -> CapabilityReport:
+    """Read parts, job output and status for a capability run submitted from this node."""
     try:
-        plan = await asyncio.to_thread(paw_workflow.load, analysis_id)
+        plan = await asyncio.to_thread(capability_workflow.load, run_id)
     except ValueError as error:
         raise ToolError(str(error)) from None
     if plan is None:
-        raise ToolError("Unknown PAW analysis on this origin.")
-    return await paw_workflow.reconcile(analysis_id, plan, destination_request)
+        raise ToolError("Unknown capability run on this origin.")
+    return await capability_workflow.reconcile(run_id, plan, destination_request)
 
 
 if __name__ == "__main__":
