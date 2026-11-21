@@ -52,6 +52,8 @@ class PawWorkflowTests(unittest.TestCase):
         replacement.mkdir()
         with jobs.transaction() as db:
             jobs.decide(db, identifier, True)
+            argv = jobs.paw.arguments(db, jobs.files, identifier, self.root)
+            self.assertEqual(argv[4:], [identifier])
             jobs.files.grant(db, "inbox", str(replacement), True)
             with self.assertRaisesRegex(ValueError, "reconfigured"):
                 jobs.paw.arguments(db, jobs.files, identifier, self.root)

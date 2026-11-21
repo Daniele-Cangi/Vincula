@@ -3,16 +3,18 @@
 
 """Node-local adapter for offline PAW analysis."""
 
-import base64
+from contextlib import closing
 from hashlib import sha256
 from importlib.metadata import version
+from importlib.util import module_from_spec, spec_from_file_location
 import json
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import time
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 CAPABILITY = "paw.analyze_offline"
 MAX_FILES = 4
@@ -96,7 +98,7 @@ def queue(db, files, mode, job_id, revision, inputs):
                (job_id, CAPABILITY, "[]", "queued" if mode == "full" else "pending", time.time()))
 
 
-def arguments(db, files, job_id, home):
+def authorized_inputs(db, files, job_id):
     row = provider(db, files)
     manifest = json.loads(db.execute("SELECT manifest FROM paw_jobs WHERE id=?", (job_id,)).fetchone()["manifest"])
     if row is None or row["revision"] != manifest["revision"]:
@@ -108,10 +110,13 @@ def arguments(db, files, job_id, home):
         path = files.checked_path(db, item["root"], item["path"])
         if files.file_info(path).st_size > MAX_INPUT_BYTES:
             raise ValueError("A PAW input exceeds 4 MiB.")
-        assigned.append({"index": item["index"], "file": str(path), "sha256": item.get("sha256")})
-    manifest = {"paw_version": row["version"], "inputs": assigned}
-    payload = base64.b64encode(json.dumps(manifest).encode()).decode("ascii")
-    return [row["python"], "-I", "-B", str(home / "vincula_paw.py"), payload]
+        assigned.append({"index": item["index"], "file": path, "sha256": item.get("sha256")})
+    return row, assigned
+
+
+def arguments(db, files, job_id, home):
+    row, _ = authorized_inputs(db, files, job_id)
+    return [row["python"], "-I", "-B", str(home / "vincula_paw.py"), job_id]
 
 
 def run_sample(index, raw):
@@ -138,12 +143,24 @@ def run_sample(index, raw):
                 "score": score["score"], "decision": score["decision"], "seal_verified": True}
 
 
-def execute(manifest):
-    if version("paw") != manifest["paw_version"]:
+def execute(job_id):
+    home = Path(__file__).resolve().parent
+    spec = spec_from_file_location("vincula_files", home / "vincula_files.py")
+    files = module_from_spec(spec)
+    spec.loader.exec_module(files)
+    database = (home / "jobs.sqlite3").as_uri() + "?mode=ro"
+    with closing(sqlite3.connect(database, uri=True)) as db:
+        db.row_factory = sqlite3.Row
+        db.execute("BEGIN")
+        job = db.execute("SELECT program,state FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if not job or (job["program"], job["state"]) != (CAPABILITY, "running"):
+            raise ValueError("PAW requires a running job approved by the destination worker.")
+        provider, inputs = authorized_inputs(db, files, job_id)
+    if version("paw") != provider["version"]:
         raise ValueError("Installed PAW version differs from the registered version.")
     report = []
-    for item in manifest["inputs"]:
-        with Path(item["file"]).open("rb") as source:
+    for item in inputs:
+        with item["file"].open("rb") as source:
             raw = source.read(MAX_INPUT_BYTES + 1)
         if len(raw) > MAX_INPUT_BYTES:
             raise ValueError("A PAW input exceeds 4 MiB.")
@@ -156,7 +173,7 @@ def execute(manifest):
 
 if __name__ == "__main__":
     try:
-        print(json.dumps(execute(json.loads(base64.b64decode(sys.argv[1], validate=True)))))
+        print(json.dumps(execute(str(UUID(sys.argv[1])))))
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
         print(str(error), file=sys.stderr)
         sys.exit(1)
