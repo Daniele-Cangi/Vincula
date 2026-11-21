@@ -27,6 +27,10 @@ I lotti di calcolo assegnano lavori indipendenti a Windows e Ubuntu,
 li eseguono in parallelo e conservano gli identificatori per il recupero
 dopo una riconnessione. [Calcolo distribuito via MCP](docs/calcolo-distribuito.md)
 
+Un agente può cercare i comandi installati sul `PATH` dell’altro PC e
+aprire una sessione interattiva per le voci del catalogo, con cronologia
+e approvazioni sul nodo di destinazione. [Scoperta e sessioni MCP](docs/sessioni-mcp.md)
+
 ## Appunti condivisi
 
 Apri **Linux Dock su Windows** per avviare la condivisione. Una volta

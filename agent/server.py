@@ -12,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryFile
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from mcp.server import MCPServer
@@ -336,6 +336,78 @@ async def get_batch(batch_id: UUID) -> BatchReport:
     if plan is None:
         raise ToolError("Unknown batch ID on this origin.")
     return await batch_report(batch_id, plan, "status")
+
+
+class InstalledTools(BaseModel):
+    source: Literal["worker", "request"]
+    mode: Literal["ask", "full"]
+    commands: list[str]
+    next_offset: int | None
+
+
+class ShellEntry(BaseModel):
+    sequence: int
+    job: Job
+
+
+class ShellSession(BaseModel):
+    id: UUID
+    created: float
+    closed: float | None
+    mode: Literal["ask", "full"]
+    commands: list[ShellEntry]
+    output: JobDetails | None
+    next_after: int | None
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def discover_tools(
+    node_id: NodeId,
+    prefix: Annotated[str, Field(max_length=80)] = "",
+    offset: Annotated[int, Field(ge=0, le=1_000_000)] = 0,
+    limit: Annotated[int, Field(ge=1, le=jobs.PAGE_LIMIT)] = jobs.PAGE_LIMIT,
+) -> InstalledTools:
+    """List installed executable names on the node's PATH without granting execution rights."""
+    return await asyncio.to_thread(destination_request, node_id, {
+        "action": "discover", "prefix": prefix, "offset": offset, "limit": limit,
+    })
+
+
+def shell_request(node_id, operation, session_id, **payload):
+    return destination_request(node_id, {
+        "action": "shell", "operation": operation, "session_id": str(session_id), **payload,
+    })
+
+
+@mcp.tool()
+async def open_shell(node_id: NodeId, session_id: UUID) -> ShellSession:
+    """Open or recover a durable command session for authorized program names on this node."""
+    return await asyncio.to_thread(shell_request, node_id, "open", session_id)
+
+
+@mcp.tool()
+async def send_shell_command(
+    node_id: NodeId, session_id: UUID, job_id: UUID,
+    program: Annotated[str, Field(pattern=f"^{jobs.NAME.pattern}$")],
+) -> Job:
+    """Send one registered program name. Each command follows the destination approval policy."""
+    return await asyncio.to_thread(shell_request, node_id, "send", session_id, job_id=str(job_id), program=program)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def read_shell(
+    node_id: NodeId, session_id: UUID, job_id: UUID | None = None,
+    after: Annotated[int, Field(ge=0, le=2**63 - 1)] = 0,
+) -> ShellSession:
+    """Read a page of command states and optionally the output of a command in this session."""
+    return await asyncio.to_thread(shell_request, node_id, "read", session_id,
+                                   job_id=str(job_id) if job_id else None, after=after)
+
+
+@mcp.tool()
+async def close_shell(node_id: NodeId, session_id: UUID) -> ShellSession:
+    """Close the session and stop its active command. The history stays available."""
+    return await asyncio.to_thread(shell_request, node_id, "close", session_id)
 
 
 if __name__ == "__main__":
