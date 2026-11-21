@@ -22,9 +22,11 @@ async def check(peer_configured: bool, env: dict[str, str]) -> None:
         tools = (await client.list_tools()).tools
         assert {tool.name for tool in tools} == {
             "list_nodes", "get_node_status", "list_jobs", "start_job", "read_job", "stop_job",
+            "submit_batch", "get_batch",
         }
         assert {tool.name for tool in tools if tool.annotations and tool.annotations.read_only_hint} == {
             "list_nodes", "get_node_status", "list_jobs", "read_job",
+            "get_batch",
         }
 
         origin = local_node()

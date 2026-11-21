@@ -24,6 +24,7 @@ ROOT = (Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local"
 DATABASE = ROOT / "jobs.sqlite3"
 TAIL_BYTES = 4096
 NAME = re.compile(r"[a-z][a-z0-9_-]{0,47}")
+BATCH_LIMIT = 12
 SUMMARY = "id, program, state, exit_code, created, finished"
 
 
@@ -57,6 +58,9 @@ def initialize():
             CREATE TABLE IF NOT EXISTS jobs(
                 id TEXT PRIMARY KEY, program TEXT NOT NULL, argv TEXT NOT NULL,
                 state TEXT NOT NULL, exit_code INTEGER, created REAL NOT NULL, finished REAL
+            );
+            CREATE TABLE IF NOT EXISTS batches(
+                id TEXT PRIMARY KEY, request TEXT NOT NULL, plan TEXT NOT NULL
             );
         """)
     installed = ROOT / "jobs.py"
@@ -125,12 +129,28 @@ def rpc(action, job_id=None, program=None):
             db.execute("UPDATE jobs SET state='cancelled',finished=? WHERE id=? AND state IN ('pending','queued')",
                        (time.time(), job_id))
             db.execute("UPDATE jobs SET state='stopping' WHERE id=? AND state='running'", (job_id,))
-        elif action != "read":
+        elif action not in {"read", "status"}:
             raise ValueError("Unknown job operation.")
         result = job(db, job_id)
         if action == "read":
             result.update(stdout=tail(job_id, "out"), stderr=tail(job_id, "err"))
         return result
+
+
+def dispatch(action, **payload):
+    if action != "batch":
+        return rpc(action, **payload)
+
+    operation, items = payload["operation"], payload["items"]
+    if operation not in {"start", "status"} or not 1 <= len(items) <= BATCH_LIMIT:
+        raise ValueError("Invalid batch request.")
+    results = []
+    for item in items:
+        try:
+            results.append({"job": rpc(operation, item["job_id"], item["program"])})
+        except ValueError as error:
+            results.append({"error": str(error)})
+    return results
 
 
 def set_mode(db, new_mode):
@@ -314,8 +334,8 @@ def main():
     elif args.command == "rpc":
         try:
             request = json.loads(base64.b64decode(args.payload, validate=True))
-            result = {"result": rpc(**request)}
-        except (ValueError, sqlite3.Error, OSError) as error:
+            result = {"result": dispatch(**request)}
+        except (ValueError, KeyError, TypeError, sqlite3.Error, OSError) as error:
             result = {"error": str(error)}
         print(json.dumps(result))
     else:
