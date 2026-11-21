@@ -10,42 +10,100 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
+gi.require_version("GdkPixbuf", "2.0")
 gi.require_version("GdkX11", "3.0")
-from gi.repository import Gdk, GdkX11, Gio, GLib, Gtk
+from gi.repository import Gdk, GdkPixbuf, GdkX11, Gio, GLib, Gtk, Pango
 
 import windows_ssh as windows
 from remote_desktop import share_input, show_windows
 
 
 STYLE = b"""
-window { background: #f3f5f9; color: #18283d; }
-window button { background-image: none; background-color: #fff; color: #243b54;
-                border-color: #becddc; text-shadow: none; box-shadow: none; }
-window button:hover { background-color: #e9f1fb; }
-window button.suggested-action, window stackswitcher button:checked {
-    background-color: #215f9f; color: #fff; border-color: #215f9f;
+window.dock, .dock viewport, .dock scrolledwindow { background-color: #0a111a; color: #e8f2f8; }
+.dock label { color: #e8f2f8; }
+.dock button {
+    min-height: 29px;
+    padding: 3px 12px;
+    border-radius: 6px;
+    border: 1px solid #2b4051;
+    background-image: none;
+    background-color: #152333;
+    color: #e8f2f8;
+    text-shadow: none;
+    box-shadow: none;
 }
-window button.suggested-action:hover { background-color: #184d84; }
-window button:disabled { opacity: 0.65; }
-window entry { background: #fff; color: #18283d; border-color: #becddc; }
-window entry placeholder { color: #5a7088; }
-.hero { background: #12243b; color: #fff; padding: 22px 26px; }
-.hero-title { font-size: 25px; font-weight: bold; }
-.hero-meta { color: #b3c5d9; font-size: 12px; }
-.connection { color: #e6edf6; background: #253e56; border-radius: 15px;
-              padding: 6px 12px; font-size: 12px; }
-.connection.online { color: #d6fdec; background: #205847; }
-.section-title { font-size: 21px; font-weight: bold; color: #142941; }
-.card { padding: 15px 17px; border-radius: 11px; background: #fff;
-        border: 1px solid #dce4ee; }
-.card-title { font-weight: bold; color: #21384f; }
-.metric { font-size: 22px; font-weight: bold; color: #203d5c; }
-.muted { color: #536982; }
-.footer { color: #38516e; padding: 10px 25px;
-          border-top: 1px solid #dce4ee; }
-.footer.failed { color: #9d3028; }
-.console text { background: #12243b; color: #e3edf9; }
-progressbar progress { background: #286eb2; border-color: #286eb2; }
+.dock button:hover { background-color: #203446; border-color: #476376; }
+.dock button.suggested-action { background-color: #56e0df; border-color: #56e0df; color: #07222a; }
+.dock button.suggested-action:hover { background-color: #8ceceb; border-color: #8ceceb; }
+.dock button.stop-action { background-color: #48232c; border-color: #bb6674; color: #ffc3c8; }
+.dock button.stop-action:hover { background-color: #612e39; }
+.dock button:disabled { background-color: #111a25; border-color: #223141; color: #8193a5; }
+.dock button label { color: inherit; }
+.dock button:focus, .dock entry:focus {
+    outline: 2px solid #56e0df;
+    outline-offset: -3px;
+}
+.dock entry {
+    min-height: 28px;
+    padding: 3px 9px;
+    border-radius: 5px;
+    border: 1px solid #2b4051;
+    background: #0b1520;
+    color: #e8f2f8;
+    caret-color: #56e0df;
+    box-shadow: none;
+}
+.dock entry:focus { border-color: #56e0df; }
+.dock entry placeholder { color: #9aafc2; }
+.dock .hero {
+    background: #0e1926;
+    padding: 18px 24px;
+    border-bottom: 1px solid #26394a;
+    box-shadow: inset 3px 0 #56e0df;
+}
+.dock .hero-title { font-size: 27px; font-weight: bold; }
+.dock .hero-meta { color: #9eb5c7; font-family: monospace; font-size: 11px; }
+.dock .connection {
+    color: #f6d295; background: #30271c; border: 1px solid #5c4931;
+    border-radius: 6px; padding: 6px 9px;
+    font-family: monospace; font-size: 11px; font-weight: bold;
+}
+.dock .connection.online { color: #82edb4; background: #173329; border-color: #306450; }
+.dock .navigation button {
+    border-radius: 0;
+    border-color: transparent;
+    border-bottom: 2px solid transparent;
+    background-color: #0a111a;
+    color: #a2b7c9;
+}
+.dock .navigation button:hover { background-color: #142333; color: #e8f2f8; }
+.dock .navigation button:checked {
+    border-bottom-color: #56e0df;
+    background-color: #101e2b;
+    color: #56e0df;
+    font-weight: bold;
+}
+.dock .section-title { font-size: 20px; font-weight: bold; }
+.dock .card {
+    padding: 14px 16px;
+    border-radius: 8px;
+    background: #132131;
+    border: 1px solid #2b4051;
+}
+.dock .card-title { color: #c0d3e4; font-weight: bold; }
+.dock .metric { font-size: 21px; font-weight: bold; }
+.dock .muted { color: #a2b7c9; }
+.dock .session-online { color: #82edb4; }
+.dock .session-waiting { color: #f6d295; }
+.dock .footer {
+    background-color: #0e1926; color: #a2b7c9; padding: 9px 24px;
+    border-top: 1px solid #26394a;
+}
+.dock .footer.failed { color: #ffc3c8; }
+.dock .console text { background: #0b1520; color: #e8f2f8; }
+.dock .console text selection, .dock entry selection { background: #56e0df; color: #07222a; }
+.dock progressbar trough { background: #243648; border-color: #243648; }
+.dock progressbar progress { background: #56e0df; border-color: #56e0df; }
 """
 
 
@@ -93,6 +151,7 @@ def uptime(seconds):
 class DockWindow(Gtk.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="Windows Dock")
+        self.get_style_context().add_class("dock")
         self.set_default_size(860, 730)
         self.set_size_request(660, 510)
         self.connect("delete-event", self.on_close)
@@ -113,6 +172,7 @@ class DockWindow(Gtk.ApplicationWindow):
 
         self.content = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
         tabs = Gtk.StackSwitcher(stack=self.content, halign=Gtk.Align.START)
+        tabs.get_style_context().add_class("navigation")
         tabs.set_margin_start(24)
         tabs.set_margin_end(24)
         tabs.set_margin_top(14)
@@ -132,9 +192,17 @@ class DockWindow(Gtk.ApplicationWindow):
     def build_header(self):
         header = Gtk.Box(spacing=14)
         header.get_style_context().add_class("hero")
+        try:
+            path = Path(__file__).with_name("windows-dock-icon.png")
+            logo = Gtk.Image.new_from_pixbuf(GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), 48, 48, True))
+        except GLib.Error:
+            logo = Gtk.Image.new_from_icon_name("computer", Gtk.IconSize.DIALOG)
+        logo.set_valign(Gtk.Align.CENTER)
+        add(header, logo)
         titles = vertical(3)
-        add(titles, label("Windows Dock", "hero-title"))
-        self.host_line = label(f"Windows  ·  {windows.HOST}  ·  {windows.USER}", "hero-meta")
+        add(titles, label("Vincula", "hero-title"))
+        self.host_line = label(f"Windows Dock  ·  {windows.HOST}", "hero-meta")
+        self.host_line.set_ellipsize(Pango.EllipsizeMode.END)
         add(titles, self.host_line)
         add(header, titles, True)
         self.connection = label("SSH da verificare", "connection")
@@ -176,7 +244,8 @@ class DockWindow(Gtk.ApplicationWindow):
 
     def show_status(self, report):
         self.profile = PureWindowsPath(report["profile"])
-        self.host_line.set_text(f"{report['host'].lower()}  ·  {windows.HOST}  ·  {report['user']}")
+        self.host_line.set_text(f"Windows Dock  ·  {windows.HOST}")
+        self.host_line.set_tooltip_text(f"{report['host'].lower()} · {report['user']}")
         self.connection.set_label("SSH attivo")
         self.connection.get_style_context().add_class("online")
         for child in self.status_body.get_children():
@@ -437,6 +506,9 @@ class DockWindow(Gtk.ApplicationWindow):
     def input_connected(self):
         if self.remote_mode == "input" and not self.remote_stop.is_set():
             self.input_status.set_label("Condivisione attiva")
+            style = self.input_status.get_style_context()
+            style.remove_class("session-waiting")
+            style.add_class("session-online")
         return False
 
     def toggle_remote(self, mode, job):
@@ -450,11 +522,14 @@ class DockWindow(Gtk.ApplicationWindow):
         self.remote_mode = mode
         self.input_button.set_sensitive(mode == "input")
         self.input_edge.set_sensitive(False)
+        self.desktop_button.get_style_context().add_class("stop-action")
         if mode == "desktop":
             self.desktop_button.set_label("Chiudi desktop remoto")
             self.input_status.set_label("Chiudi il desktop remoto per usare questa modalità.")
         else:
             self.input_status.set_label("Connessione via Ethernet…")
+            self.input_status.get_style_context().add_class("session-waiting")
+            self.input_button.get_style_context().add_class("stop-action")
             self.input_button.set_label("Disattiva condivisione")
             self.desktop_button.set_label("Disattiva condivisione")
 
@@ -474,16 +549,24 @@ class DockWindow(Gtk.ApplicationWindow):
         self.input_button.set_sensitive(False)
         if self.remote_mode == "input":
             self.input_status.set_label("Chiusura…")
+            style = self.input_status.get_style_context()
+            style.remove_class("session-online")
+            style.add_class("session-waiting")
 
     def finish_remote(self, mode, error):
         self.remote_stop = None
         self.remote_mode = None
         self.desktop_button.set_label("Desktop remoto")
+        self.desktop_button.get_style_context().remove_class("stop-action")
         self.desktop_button.set_sensitive(True)
         self.input_button.set_label("Attiva condivisione")
+        self.input_button.get_style_context().remove_class("stop-action")
         self.input_button.set_sensitive(True)
         self.input_edge.set_sensitive(True)
         self.input_status.set_label("Disattivata")
+        style = self.input_status.get_style_context()
+        style.remove_class("session-online")
+        style.remove_class("session-waiting")
         if error and not self.close_pending:
             title = "Condivisione di mouse e tastiera" if mode == "input" else "Collegamento desktop remoto"
             dialog = Gtk.MessageDialog(transient_for=self, modal=True,

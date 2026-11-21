@@ -628,14 +628,26 @@ df -h -x tmpfs -x devtmpfs -x squashfs --output=target,used,avail,pcent"));
 internal sealed class DockWindow : Form
 {
     private const string InputSettings = @"HKEY_CURRENT_USER\Software\Vincula\Linux Dock";
-    private static readonly Color Navy = Color.FromArgb(18, 36, 59);
-    private static readonly Color Blue = Color.FromArgb(33, 95, 159);
-    private static readonly Color Ink = Color.FromArgb(24, 40, 61);
-    private readonly TabControl tabs = new TabControl();
+    private static readonly Color Canvas = Color.FromArgb(10, 17, 26);
+    private static readonly Color Header = Color.FromArgb(14, 25, 38);
+    private static readonly Color Surface = Color.FromArgb(19, 33, 49);
+    private static readonly Color Inset = Color.FromArgb(11, 21, 32);
+    private static readonly Color Line = Color.FromArgb(43, 64, 81);
+    private static readonly Color Ink = Color.FromArgb(232, 242, 248);
+    private static readonly Color Muted = Color.FromArgb(162, 183, 201);
+    private static readonly Color Cyan = Color.FromArgb(86, 224, 223);
+    private static readonly Color OnCyan = Color.FromArgb(7, 34, 42);
+    private static readonly Color Online = Color.FromArgb(130, 237, 180);
+    private static readonly Color Waiting = Color.FromArgb(246, 210, 149);
+    private static readonly Color Danger = Color.FromArgb(255, 195, 200);
+    private readonly TabControl tabs = new DockTabs();
     private readonly Label footer = new Label();
     private readonly Label connection = new Label();
     private readonly TextBox status = ConsoleBox();
     private readonly TextBox output = ConsoleBox();
+    private readonly Label systemMetric = MetricValue();
+    private readonly Label cpuMetric = MetricValue();
+    private readonly Label ramMetric = MetricValue();
     private bool busy;
     private readonly Button desktopButton;
     private readonly Button inputHeaderButton;
@@ -658,7 +670,79 @@ internal sealed class DockWindow : Form
     private bool automaticInputWanted;
     private string linuxHome = "";
 
+    private sealed class DockTabs : TabControl
+    {
+        public DockTabs()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer
+                | ControlStyles.ResizeRedraw, true);
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs args)
+        {
+            args.Graphics.Clear(Canvas);
+        }
+
+        protected override void OnPaint(PaintEventArgs args)
+        {
+            for (int index = 0; index < TabCount; index++)
+            {
+                Rectangle bounds = GetTabRect(index);
+                bool selected = index == SelectedIndex;
+                using (var background = new SolidBrush(selected ? Surface : Canvas))
+                    args.Graphics.FillRectangle(background, bounds);
+                if (selected)
+                {
+                    using (var accent = new SolidBrush(Cyan))
+                        args.Graphics.FillRectangle(accent, bounds.Left, bounds.Bottom - 2, bounds.Width, 2);
+                }
+                TextRenderer.DrawText(args.Graphics, TabPages[index].Text, Font, bounds,
+                    selected ? Cyan : Muted, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter
+                        | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+                if (selected && Focused && ShowFocusCues)
+                {
+                    bounds.Inflate(-3, -3);
+                    ControlPaint.DrawFocusRectangle(args.Graphics, bounds, Ink, Surface);
+                }
+            }
+        }
+
+        protected override void OnSelectedIndexChanged(EventArgs args)
+        {
+            base.OnSelectedIndexChanged(args);
+            Invalidate();
+        }
+
+        protected override void OnGotFocus(EventArgs args)
+        {
+            base.OnGotFocus(args);
+            Invalidate();
+        }
+
+        protected override void OnLostFocus(EventArgs args)
+        {
+            base.OnLostFocus(args);
+            Invalidate();
+        }
+    }
+
     public DockWindow() : this(false) { }
+
+    private Image LoadBrandImage()
+    {
+        string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "linux-dock-icon.png");
+        try
+        {
+            if (File.Exists(path))
+            {
+                using (var source = Image.FromFile(path))
+                    return new Bitmap(source, 96, 96);
+            }
+        }
+        catch (ArgumentException) { }
+        catch (IOException) { }
+        return Icon.ToBitmap();
+    }
 
     private DockWindow(bool useSavedInputSettings)
     {
@@ -674,7 +758,7 @@ internal sealed class DockWindow : Form
         MinimumSize = new Size(680, 510);
         ClientSize = new Size(860, 650);
         StartPosition = FormStartPosition.CenterScreen;
-        BackColor = Color.FromArgb(243, 245, 249);
+        BackColor = Canvas;
         Font = new Font("Segoe UI", 10);
         ForeColor = Ink;
         FormClosing += delegate(object sender, FormClosingEventArgs args) {
@@ -699,17 +783,29 @@ internal sealed class DockWindow : Form
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         Controls.Add(layout);
 
-        var hero = new Panel { BackColor = Navy, Dock = DockStyle.Fill, Margin = new Padding(0) };
-        hero.Controls.Add(new Label { Text = "Linux Dock", AutoSize = true, ForeColor = Color.White,
-            Font = new Font("Segoe UI", 19, FontStyle.Bold), Left = 20, Top = 13 });
-        hero.Controls.Add(new Label { Text = "Ubuntu  ·  SSH via Ethernet",
-            ForeColor = Color.LightSteelBlue, AutoSize = true, Left = 22, Top = 57 });
+        var hero = new Panel { BackColor = Header, Dock = DockStyle.Fill, Margin = new Padding(0) };
+        hero.Paint += delegate(object sender, PaintEventArgs args) {
+            using (var accent = new SolidBrush(Cyan))
+                args.Graphics.FillRectangle(accent, 0, 0, 3, hero.ClientSize.Height);
+            using (var border = new Pen(Line))
+                args.Graphics.DrawLine(border, 0, hero.ClientSize.Height - 1,
+                    hero.ClientSize.Width, hero.ClientSize.Height - 1);
+        };
+        var logo = new PictureBox { Image = LoadBrandImage(), Size = new Size(48, 48),
+            SizeMode = PictureBoxSizeMode.Zoom, Left = 22, Top = 22 };
+        hero.Controls.Add(logo);
+        FormClosed += delegate { logo.Image.Dispose(); };
+        hero.Controls.Add(new Label { Text = "Vincula", AutoSize = true, ForeColor = Ink,
+            Font = new Font("Segoe UI", 21, FontStyle.Bold), Left = 82, Top = 12 });
+        hero.Controls.Add(new Label { Text = "Linux Dock  ·  Ubuntu via SSH",
+            ForeColor = Muted, AutoSize = true, Font = new Font("Consolas", 9), Left = 84, Top = 55 });
         connection.AutoSize = true;
-        connection.ForeColor = Color.LightSteelBlue;
-        connection.Text = "SSH da verificare";
-        connection.Top = 22;
+        connection.Font = new Font("Consolas", 9, FontStyle.Bold);
+        connection.Padding = new Padding(9, 4, 9, 4);
+        SetConnection("SSH da verificare", false);
+        connection.Top = 13;
         hero.Controls.Add(connection);
-        desktopButton = ActionButton("Desktop remoto", ToggleDesktop);
+        desktopButton = ActionButton("Desktop remoto", ToggleDesktop, primary: false);
         inputHeaderButton = ActionButton("Attiva condivisione", ToggleInput);
         var actions = new FlowLayoutPanel {
             Top = 47, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
@@ -730,6 +826,8 @@ internal sealed class DockWindow : Form
 
         tabs.Dock = DockStyle.Fill;
         tabs.Margin = new Padding(16, 14, 16, 0);
+        tabs.ItemSize = new Size(0, 35);
+        tabs.Padding = new Point(14, 5);
         tabs.TabPages.Add(BuildStatus());
         tabs.TabPages.Add(BuildTransfers());
         tabs.TabPages.Add(BuildScripts());
@@ -742,6 +840,8 @@ internal sealed class DockWindow : Form
         footer.Padding = new Padding(15, 0, 0, 0);
         footer.AutoEllipsis = true;
         footer.Text = "Pronto";
+        footer.BackColor = Header;
+        footer.ForeColor = Muted;
         layout.Controls.Add(footer, 0, 2);
         if (useSavedInputSettings)
             InitializeInputSettings();
@@ -804,12 +904,54 @@ internal sealed class DockWindow : Form
     private TabPage BuildStatus()
     {
         var page = Page("Stato");
-        var content = PageLayout(page, 2);
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 45));
+        var content = PageLayout(page, 3);
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 86));
         content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        content.Controls.Add(ActionButton("Aggiorna", RefreshStatus), 0, 0);
-        content.Controls.Add(status, 0, 1);
+        var heading = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        heading.Controls.Add(new Label { Text = "Stato di Ubuntu", Dock = DockStyle.Fill,
+            Font = new Font("Segoe UI", 15, FontStyle.Bold), TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
+        heading.Controls.Add(ActionButton("Aggiorna", RefreshStatus), 1, 0);
+        content.Controls.Add(heading, 0, 0);
+        var metrics = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1 };
+        metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
+        metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+        metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
+        metrics.Controls.Add(MetricCard("Sistema", systemMetric), 0, 0);
+        metrics.Controls.Add(MetricCard("Processore", cpuMetric), 1, 0);
+        metrics.Controls.Add(MetricCard("Memoria", ramMetric), 2, 0);
+        content.Controls.Add(metrics, 0, 1);
+        content.Controls.Add(status, 0, 2);
         return page;
+    }
+
+    private static Label MetricValue()
+    {
+        return new Label { Text = "—", Dock = DockStyle.Fill, ForeColor = Ink,
+            Font = new Font("Segoe UI", 13, FontStyle.Bold), TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true };
+    }
+
+    private static Control MetricCard(string caption, Label value)
+    {
+        var card = new Panel { BackColor = Surface, Dock = DockStyle.Fill,
+            Margin = new Padding(0, 0, 7, 8), Padding = new Padding(12, 7, 12, 5) };
+        card.Controls.Add(value);
+        card.Controls.Add(new Label { Text = caption, Dock = DockStyle.Top, ForeColor = Muted, Height = 23 });
+        card.Paint += delegate(object sender, PaintEventArgs args) {
+            using (var border = new Pen(Line))
+                args.Graphics.DrawRectangle(border, 0, 0, card.ClientSize.Width - 1, card.ClientSize.Height - 1);
+        };
+        return card;
+    }
+
+    private void SetConnection(string text, bool online)
+    {
+        connection.ForeColor = online ? Online : Waiting;
+        connection.BackColor = online ? Color.FromArgb(23, 51, 41) : Color.FromArgb(48, 39, 28);
+        connection.Text = text;
     }
 
     private TabPage BuildTransfers()
@@ -896,6 +1038,9 @@ internal sealed class DockWindow : Form
             "Sopra Windows", "Sotto Windows" });
         inputSide.SelectedIndex = 0;
         inputSide.Dock = DockStyle.Top;
+        inputSide.FlatStyle = FlatStyle.Flat;
+        inputSide.BackColor = Inset;
+        inputSide.ForeColor = Ink;
         inputSide.AccessibleName = "Posizione dello schermo Ubuntu";
         content.Controls.Add(inputSide, 0, 1);
         content.Controls.Add(new Label { Text = "Porta il puntatore oltre il bordo scelto. "
@@ -903,7 +1048,7 @@ internal sealed class DockWindow : Form
             Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 2);
         content.Controls.Add(shareClipboard, 0, 3);
         content.Controls.Add(autoConnectInput, 0, 4);
-        inputStatus.Text = "Disattivata";
+        SetInputStatus("Disattivata", Muted);
         inputStatus.Dock = DockStyle.Fill;
         inputStatus.TextAlign = ContentAlignment.MiddleLeft;
         content.Controls.Add(inputStatus, 0, 5);
@@ -932,8 +1077,8 @@ internal sealed class DockWindow : Form
         bool clipboard = shareClipboard.Checked;
         var session = new CancellationTokenSource();
         inputSession = session;
-        inputStatus.Text = "Connessione via Ethernet…";
-        SetInputButtons("Disattiva condivisione", true);
+        SetInputStatus("Connessione via Ethernet…", Waiting);
+        SetInputButtons("Disattiva condivisione", true, stop: true);
         inputSide.Enabled = false;
         shareClipboard.Enabled = false;
         desktopButton.Enabled = false;
@@ -951,7 +1096,7 @@ internal sealed class DockWindow : Form
                 BeginInvoke((Action)(() =>
                 {
                     if (inputSession == session && !session.IsCancellationRequested)
-                        inputStatus.Text = "Condivisione attiva";
+                        SetInputStatus("Condivisione attiva", Online);
                 })));
             });
         }
@@ -977,7 +1122,8 @@ internal sealed class DockWindow : Form
         {
             inputSession = null;
             session.Dispose();
-            inputStatus.Text = stopConfirmed ? retryStatus ?? "Disattivata" : "Arresto non confermato";
+            SetInputStatus(stopConfirmed ? retryStatus ?? "Disattivata" : "Arresto non confermato",
+                stopConfirmed ? (retryStatus == null ? Muted : Waiting) : Danger);
             inputSide.Enabled = true;
             shareClipboard.Enabled = true;
             desktopButton.Enabled = true;
@@ -990,14 +1136,22 @@ internal sealed class DockWindow : Form
     {
         SetAutomaticInput(false);
         inputSession.Cancel();
-        inputStatus.Text = "Chiusura…";
-        SetInputButtons("Disattiva condivisione", false);
+        SetInputStatus("Chiusura…", Waiting);
+        SetInputButtons("Disattiva condivisione", false, stop: true);
     }
 
-    private void SetInputButtons(string caption, bool enabled)
+    private void SetInputStatus(string text, Color color)
+    {
+        inputStatus.Text = text;
+        inputStatus.ForeColor = color;
+    }
+
+    private void SetInputButtons(string caption, bool enabled, bool stop = false)
     {
         inputButton.Text = inputHeaderButton.Text = caption;
         inputButton.Enabled = inputHeaderButton.Enabled = enabled;
+        StyleButton(inputButton, true, stop);
+        StyleButton(inputHeaderButton, true, stop);
     }
 
     private void FinishClose()
@@ -1013,7 +1167,7 @@ internal sealed class DockWindow : Form
 
     private static TabPage Page(string title)
     {
-        return new TabPage(title) { BackColor = Color.White, ForeColor = Ink };
+        return new TabPage(title) { UseVisualStyleBackColor = false, BackColor = Canvas, ForeColor = Ink };
     }
 
     private static TableLayoutPanel PageLayout(TabPage page, int rows)
@@ -1026,7 +1180,7 @@ internal sealed class DockWindow : Form
 
     private static Control FileCard(string title, Control first, Control second, Control action)
     {
-        var group = new GroupBox { Text = title, Dock = DockStyle.Fill, AutoSize = true,
+        var group = new GroupBox { Text = title, Dock = DockStyle.Fill, AutoSize = true, BackColor = Surface,
             AutoSizeMode = AutoSizeMode.GrowAndShrink };
         var box = new TableLayoutPanel { Dock = DockStyle.Top, RowCount = 3,
             ColumnCount = 1, Padding = new Padding(8, 4, 8, 4),
@@ -1051,6 +1205,9 @@ internal sealed class DockWindow : Form
         var label = new Label { Text = caption, AutoSize = true };
         layout.Controls.Add(label, 0, 0);
         text.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        text.BackColor = Inset;
+        text.ForeColor = Ink;
+        text.BorderStyle = BorderStyle.FixedSingle;
         text.AccessibleName = caption;
         layout.Controls.Add(text, 0, 1);
         if (browse != null)
@@ -1060,6 +1217,7 @@ internal sealed class DockWindow : Form
             var button = new Button { Text = "Sfoglia…", AutoSize = true,
                 AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Right,
                 Padding = new Padding(9, 3, 9, 3) };
+            StyleButton(button, false);
             button.Click += delegate { browse(); };
             layout.Controls.Add(button, 1, 1);
         }
@@ -1079,20 +1237,31 @@ internal sealed class DockWindow : Form
         }
     }
 
-    private static Button ActionButton(string text, Action action)
+    private static Button ActionButton(string text, Action action, bool primary = true)
     {
         var button = new Button { Text = text, AutoSize = true, Height = 31,
-            Anchor = AnchorStyles.Top | AnchorStyles.Right, FlatStyle = FlatStyle.Flat,
-            BackColor = Blue, ForeColor = Color.White };
-        button.FlatAppearance.BorderSize = 0;
+            Anchor = AnchorStyles.Top | AnchorStyles.Right, Padding = new Padding(7, 0, 7, 0) };
+        StyleButton(button, primary);
         button.Click += delegate { action(); };
         return button;
+    }
+
+    private static void StyleButton(Button button, bool primary, bool stop = false)
+    {
+        button.UseVisualStyleBackColor = false;
+        button.FlatStyle = FlatStyle.Flat;
+        button.BackColor = stop ? Color.FromArgb(72, 35, 44) : primary ? Cyan : Surface;
+        button.ForeColor = stop ? Danger : primary ? OnCyan : Ink;
+        button.FlatAppearance.BorderSize = 1;
+        button.FlatAppearance.BorderColor = stop ? Color.FromArgb(187, 102, 116) : primary ? Cyan : Line;
+        button.FlatAppearance.MouseOverBackColor = ControlPaint.Light(button.BackColor, .18f);
+        button.FlatAppearance.MouseDownBackColor = ControlPaint.Light(button.BackColor, .09f);
     }
 
     private static TextBox ConsoleBox()
     {
         return new TextBox { ReadOnly = true, Multiline = true, Dock = DockStyle.Fill,
-            BackColor = Navy, ForeColor = Color.FromArgb(226, 237, 249), WordWrap = false,
+            BackColor = Inset, ForeColor = Ink, WordWrap = false, BorderStyle = BorderStyle.FixedSingle,
             ScrollBars = ScrollBars.Both, Font = new Font("Consolas", 11) };
     }
 
@@ -1100,13 +1269,17 @@ internal sealed class DockWindow : Form
     {
         Start("Lettura dello stato di Linux…", DockTransport.Status, report => {
             linuxHome = Regex.Match(report, @"(?m)^Home: (/[^\r\n]*)").Groups[1].Value;
-            status.Text = DisplayText(report);
-            connection.Text = "SSH attivo";
-            connection.ForeColor = Color.PaleGreen;
+            string system = Regex.Match(report, @"(?m)^Sistema: ([^\r\n]+)").Groups[1].Value;
+            string cpu = Regex.Match(report, @"(?m)^CPU: ([^\r\n]+)").Groups[1].Value;
+            Match memory = Regex.Match(report, @"(?m)^RAM: (\S+) usati di (\S+)");
+            systemMetric.Text = system.Length == 0 ? "—" : system;
+            cpuMetric.Text = cpu.Length == 0 ? "—" : cpu;
+            ramMetric.Text = memory.Success ? memory.Groups[1].Value + " / " + memory.Groups[2].Value : "—";
+            status.Text = DisplayText(Regex.Replace(report, @"(?m)^(Sistema|CPU|RAM): [^\r\n]*\r?\n?", ""));
+            SetConnection("SSH attivo", true);
             return "Aggiornato alle " + DateTime.Now.ToString("HH:mm:ss");
         }, () => {
-            connection.Text = "SSH non verificato";
-            connection.ForeColor = Color.LightSteelBlue;
+            SetConnection("SSH non verificato", false);
         });
     }
 
@@ -1128,7 +1301,7 @@ internal sealed class DockWindow : Form
         {
             if (failed != null)
                 failed();
-            footer.ForeColor = Color.DarkRed;
+            footer.ForeColor = Danger;
             footer.Text = error.Message.Replace("\r", "").Replace("\n", " · ");
             footer.AccessibleDescription = error.Message;
         }
@@ -1159,8 +1332,9 @@ internal sealed class DockWindow : Form
         var session = new CancellationTokenSource();
         desktopSession = session;
         SetInputButtons("Attiva condivisione", false);
-        inputStatus.Text = "Chiudi il desktop remoto per usare questa modalità.";
+        SetInputStatus("Chiudi il desktop remoto per usare questa modalità.", Waiting);
         desktopButton.Text = "Chiudi desktop remoto";
+        StyleButton(desktopButton, false, stop: true);
         try
         {
             await Task.Run(() => DockTransport.Desktop(session.Token));
@@ -1175,8 +1349,9 @@ internal sealed class DockWindow : Form
         {
             desktopSession = null;
             desktopButton.Text = "Desktop remoto";
+            StyleButton(desktopButton, false);
             SetInputButtons("Attiva condivisione", true);
-            inputStatus.Text = "Disattivata";
+            SetInputStatus("Disattivata", Muted);
             session.Dispose();
             FinishClose();
         }

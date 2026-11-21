@@ -80,6 +80,7 @@ Add-Type -TypeDefinition $source -OutputType WindowsApplication `
   -ReferencedAssemblies 'System.dll','System.Core.dll','System.Drawing.dll','System.Windows.Forms.dll' `
   -OutputAssembly (Join-Path $dest 'Linux Dock.exe')
 Copy-Item 'outputs/Linux Dock/linux-dock.ico' $dest
+Copy-Item 'outputs/Linux Dock/linux-dock-icon.png' $dest
 & (Join-Path $dest 'Linux Dock.exe')
 ```
 
