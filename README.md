@@ -34,6 +34,10 @@ e approvazioni sul nodo di destinazione. [Scoperta e sessioni MCP](docs/sessioni
 Via MCP l’agente può anche sfogliare, leggere e trasferire file tra i due PC
 nelle cartelle abilitate dall’operatore. [Accesso ai file](docs/file-mcp.md)
 
+La capacità `paw.analyze_offline` permette all’agente di scegliere nuovi
+messaggi EML e ripartirli fra i due PC con una sola registrazione di PAW
+per nodo. [Analisi PAW distribuita](docs/paw-mcp.md)
+
 ## Appunti condivisi
 
 Apri **Linux Dock su Windows** per avviare la condivisione. Una volta

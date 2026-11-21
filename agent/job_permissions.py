@@ -59,7 +59,7 @@ def main():
     def refresh():
         with jobs.transaction() as db:
             choice.set(jobs.mode(db))
-            pending = db.execute("SELECT id,program,argv FROM jobs WHERE state='pending' ORDER BY created").fetchall()
+            pending = jobs.pending_jobs(db)
             file_pending = jobs.files.permission_items(db)
         entries = [("job", row["id"], row["program"],
                     json.dumps(json.loads(row["argv"]), ensure_ascii=False, indent=2)) for row in pending]

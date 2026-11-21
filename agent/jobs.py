@@ -30,10 +30,16 @@ PAGE_LIMIT = 50
 SUMMARY = "id, program, state, exit_code, created, finished"
 ACTIVE = ("pending", "queued", "running", "stopping")
 
-# The SSH entry point runs with Python -I and loads its companion by absolute path.
-files_spec = spec_from_file_location("vincula_files", Path(__file__).resolve().with_name("vincula_files.py"))
-files = module_from_spec(files_spec)
-files_spec.loader.exec_module(files)
+def load_adapter(name):
+    # The SSH entry point runs with Python -I, so load the installed adapter by absolute path.
+    spec = spec_from_file_location(name, Path(__file__).resolve().with_name(f"{name}.py"))
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+files = load_adapter("vincula_files")
+paw = load_adapter("vincula_paw")
 
 
 def initialize():
@@ -82,7 +88,8 @@ def initialize():
             CREATE INDEX IF NOT EXISTS shell_history ON shell_entries(session_id,sequence);
         """)
         db.executescript(files.SCHEMA)
-    for name in ("vincula_files.py", "jobs.py"):
+        db.executescript(paw.SCHEMA)
+    for name in ("vincula_files.py", "vincula_paw.py", "jobs.py"):
         source = Path(__file__).resolve().with_name(name)
         installed = ROOT / name
         if source == installed:
@@ -272,6 +279,20 @@ def shell_rpc(operation, session_id, job_id=None, program=None, after=0):
 
 
 def dispatch(action, **payload):
+    if action == "paw":
+        with transaction() as db:
+            if payload["operation"] == "describe":
+                return paw.describe(db, files)
+            if payload["operation"] == "queue":
+                job_id = str(UUID(payload["job_id"]))
+                paw.queue(db, files, mode(db), job_id, payload["revision"], payload["inputs"])
+                return job(db, job_id)
+            if payload["operation"] == "read":
+                job_id = str(UUID(payload["job_id"]))
+                if db.execute("SELECT 1 FROM paw_jobs WHERE id=?", (job_id,)).fetchone():
+                    return read_output(db, job_id)
+                return None
+            raise ValueError("Unknown PAW operation.")
     if action == "files":
         try:
             with transaction() as db:
@@ -313,6 +334,13 @@ def decide(db, job_id, allowed):
         raise ValueError("Job is not awaiting approval.")
 
 
+def pending_jobs(db):
+    return db.execute(
+        "SELECT j.id,j.program,COALESCE(p.manifest,j.argv) AS argv FROM jobs j "
+        "LEFT JOIN paw_jobs p ON p.id=j.id WHERE j.state='pending' ORDER BY j.created",
+    ).fetchall()
+
+
 def operator(args):
     with transaction() as db:
         if args.command == "mode":
@@ -329,7 +357,7 @@ def operator(args):
             db.execute("UPDATE jobs SET state='cancelled',finished=? WHERE program=? AND state IN ('pending','queued')",
                        (time.time(), args.name))
         elif args.command == "pending":
-            for row in db.execute("SELECT id,program,argv FROM jobs WHERE state='pending' ORDER BY created"):
+            for row in pending_jobs(db):
                 print(json.dumps(dict(row)))
         elif args.command in {"approve", "deny"}:
             decide(db, args.id, args.command == "approve")
@@ -342,6 +370,10 @@ def operator(args):
                 print(json.dumps(dict(row)))
         elif args.command in {"files-approve", "files-deny"}:
             files.decide(db, args.id, args.command == "files-approve")
+        elif args.command == "paw-register":
+            paw.register(db, files, args.python, args.inbox)
+        elif args.command == "paw-revoke":
+            paw.revoke(db)
 
 @contextmanager
 def process_lock(path):
@@ -427,7 +459,9 @@ def run_one(row):
                 if not stopped_before_launch:
                     out = stack.enter_context((ROOT / f"{job_id}.out").open("xb"))
                     err = stack.enter_context((ROOT / f"{job_id}.err").open("xb"))
-                    proc = stack.enter_context(program_process(json.loads(row["argv"]), out, err))
+                    argv = (paw.arguments(db, files, job_id, ROOT) if row["program"] == paw.CAPABILITY
+                            else json.loads(row["argv"]))
+                    proc = stack.enter_context(program_process(argv, out, err))
             if stopped_before_launch:
                 state = "cancelled"
                 return
@@ -462,7 +496,7 @@ def work():
                        (time.time(),))
         while not shutdown.exists():
             with transaction() as db:
-                row = db.execute("SELECT id,argv FROM jobs WHERE state='queued' ORDER BY created LIMIT 1").fetchone()
+                row = db.execute("SELECT id,program,argv FROM jobs WHERE state='queued' ORDER BY created LIMIT 1").fetchone()
                 if row:
                     db.execute("UPDATE jobs SET state='running' WHERE id=?", (row["id"],))
             if row:
@@ -488,6 +522,10 @@ def main():
     grant.add_argument("directory")
     grant.add_argument("--write", action="store_true")
     commands.add_parser("files-revoke").add_argument("alias")
+    capability = commands.add_parser("paw-register")
+    capability.add_argument("python")
+    capability.add_argument("inbox")
+    commands.add_parser("paw-revoke")
     commands.add_parser("files-pending")
     for name in ("files-approve", "files-deny"):
         commands.add_parser(name).add_argument("id")

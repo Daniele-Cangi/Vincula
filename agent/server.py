@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 import batches
 import jobs
 import linux_status
+import paw_workflow
 
 dock_dir = Path(__file__).resolve().parents[1] / "outputs" / "Windows Dock"
 sys.path.insert(0, str(dock_dir))
@@ -202,7 +203,7 @@ def destination_request(node_id, request):
             return jobs.dispatch(**request)
         except ValueError as error:
             raise ToolError(str(error)) from None
-    payload = base64.b64encode(json.dumps(request).encode()).decode("ascii")
+    payload = base64.b64encode(json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode()).decode("ascii")
     try:
         if node_id == "ubuntu":
             reply = linux_ssh_json(f'python3 -IB "$HOME/.local/share/vincula-jobs/jobs.py" rpc {payload}')
@@ -557,6 +558,94 @@ def transfer_with_lock(transfer_id, source, destination):
 async def transfer_file(transfer_id: UUID, source: FileEndpoint, destination: FileEndpoint) -> TransferReceipt:
     """Transfer a file after both nodes grant access. Reuse the UUID while waiting or retrying."""
     return await asyncio.to_thread(transfer_with_lock, transfer_id, source, destination)
+
+
+class PawProvider(BaseModel):
+    id: Literal["paw.analyze_offline"]
+    revision: str
+    paw_version: str
+    inbox: str
+    input_extension: str
+    max_files: int
+    max_input_bytes: int
+
+
+class Capabilities(BaseModel):
+    capabilities: list[PawProvider]
+
+
+class PawPart(BaseModel):
+    node_id: NodeId
+    files: Annotated[list[FileEndpoint], Field(min_length=1, max_length=jobs.paw.MAX_FILES)]
+
+
+class PawResult(BaseModel):
+    index: int
+    sha256: str
+    score: float
+    decision: str
+    seal_verified: Literal[True]
+
+
+class PawPartReport(BaseModel):
+    node_id: NodeId
+    job_id: UUID
+    job: Job | None
+    waiting_transfers: list[TransferReceipt]
+    results: list[PawResult] | None
+    error: str | None
+
+
+class PawReport(BaseModel):
+    analysis_id: UUID
+    capability: Literal["paw.analyze_offline"]
+    parts: list[PawPartReport]
+    results: list[PawResult] | None
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def discover_capabilities(node_id: NodeId) -> Capabilities:
+    """List the locally configured typed capabilities and their input constraints."""
+    provider = await paw_workflow.node_call(destination_request, node_id, "describe")
+    return Capabilities(capabilities=[provider] if provider else [])
+
+
+def transfer_paw_input(transfer_id, source, destination):
+    return transfer_with_lock(transfer_id, FileEndpoint.model_validate(source),
+                              FileEndpoint.model_validate(destination)).model_dump(mode="json")
+
+
+@mcp.tool(name=jobs.paw.CAPABILITY)
+async def submit_paw_analysis(
+    analysis_id: UUID, parts: Annotated[list[PawPart], Field(min_length=1, max_length=2)],
+) -> PawReport:
+    """Analyze selected EML files offline. Repeat the same plan after transfer approvals."""
+    request = [part.model_dump(mode="json") for part in parts]
+    try:
+        paw_workflow.validate_request(request)
+        plan = await asyncio.to_thread(paw_workflow.load, analysis_id, request)
+        if plan is None:
+            nodes = [part.node_id for part in parts]
+            providers = await asyncio.gather(*(
+                paw_workflow.node_call(destination_request, node, "describe") for node in nodes
+            ))
+            plan = await asyncio.to_thread(paw_workflow.make_plan, analysis_id, request,
+                                           dict(zip(nodes, providers)), local_node())
+    except ValueError as error:
+        raise ToolError(str(error)) from None
+    return await paw_workflow.reconcile(analysis_id, plan, destination_request, transfer_paw_input)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_paw_analysis(analysis_id: UUID) -> PawReport:
+    """Read the status and combined offline results of an analysis submitted on this origin."""
+    try:
+        plan = await asyncio.to_thread(paw_workflow.load, analysis_id)
+    except ValueError as error:
+        raise ToolError(str(error)) from None
+    if plan is None:
+        raise ToolError("Unknown PAW analysis on this origin.")
+    return await paw_workflow.reconcile(analysis_id, plan, destination_request)
 
 
 if __name__ == "__main__":
