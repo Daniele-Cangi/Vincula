@@ -162,20 +162,20 @@ def rpc(action, job_id=None, program=None):
 
 def executable_names(path, pathext):
     names = set()
-    extensions = {value.casefold() for value in pathext.split(";")}
+    extensions = {value.strip().casefold() for value in pathext.split(";") if value.strip()}
     for directory in dict.fromkeys(path.split(os.pathsep)):
         if not os.path.isabs(directory):
             continue
         try:
             with os.scandir(directory) as entries:
                 for entry in entries:
-                    if not entry.name.isprintable() or not entry.is_file():
-                        continue
-                    if WINDOWS:
-                        if os.path.splitext(entry.name)[1].casefold() in extensions:
+                    with suppress(OSError):
+                        if not entry.name.isprintable() or not entry.is_file():
+                            continue
+                        if WINDOWS and os.path.splitext(entry.name)[1].casefold() in extensions:
                             names.add(entry.name.casefold())
-                    elif os.access(entry.path, os.X_OK):
-                        names.add(entry.name)
+                        elif not WINDOWS and os.access(entry.path, os.X_OK):
+                            names.add(entry.name)
         except OSError:
             continue
     return names

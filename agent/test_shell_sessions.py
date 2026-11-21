@@ -73,6 +73,12 @@ class ShellTests(unittest.TestCase):
         self.assertIsNone(second["next_offset"])
         self.assertEqual(jobs.rpc("list")["programs"], ["version"])
 
+    def test_empty_pathext_entry_does_not_advertise_extensionless_files(self):
+        (self.root / "tool.exe").touch()
+        (self.root / "notes").touch()
+        with patch.object(jobs, "WINDOWS", True):
+            self.assertEqual(jobs.executable_names(str(self.root), ".EXE; "), {"tool.exe"})
+
 
 if __name__ == "__main__":
     unittest.main()
