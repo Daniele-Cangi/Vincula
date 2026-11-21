@@ -25,10 +25,12 @@ async def check(peer_configured: bool, env: dict[str, str]) -> None:
             "submit_batch", "get_batch",
             "discover_tools", "open_shell", "send_shell_command", "read_shell", "close_shell",
             "list_file_roots", "request_file", "get_file_request", "transfer_file",
+            "discover_capabilities", "paw.analyze_offline", "get_paw_analysis",
         }
         assert {tool.name for tool in tools if tool.annotations and tool.annotations.read_only_hint} == {
             "list_nodes", "get_node_status", "list_jobs", "read_job",
             "get_batch", "discover_tools", "read_shell", "list_file_roots",
+            "discover_capabilities", "get_paw_analysis",
         }
 
         origin = local_node()

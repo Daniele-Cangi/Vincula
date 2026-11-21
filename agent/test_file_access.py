@@ -106,6 +106,16 @@ class FileAccessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "needs authorization"):
             jobs.dispatch("files", operation="stage", request_id=key)
 
+    def test_switch_to_ask_does_not_reopen_completed_export(self):
+        self.full()
+        key = self.request("export", "message.txt")["id"]
+        jobs.dispatch("files", operation="stage", request_id=key)
+        jobs.dispatch("files", operation="cleanup", request_id=key)
+        with jobs.transaction() as db:
+            jobs.set_mode(db, "ask")
+            self.assertEqual(jobs.files.permission_items(db), [])
+        self.assertEqual(jobs.dispatch("files", operation="status", request_id=key)["state"], "completed")
+
 
 if __name__ == "__main__":
     unittest.main()

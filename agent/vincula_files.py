@@ -275,6 +275,9 @@ def commit(db, home, key, expected):
 
 def cleanup(db, home, key):
     row = get_request(db, key)
+    if row["operation"] == "export" and row["result"] and row["state"] in {"approved", "pending"}:
+        # The origin only cleans up after the destination has published the verified copy.
+        db.execute("UPDATE file_requests SET state='completed' WHERE id=?", (key,))
     if row["operation"] == "import" and row["state"] == "completed":
         with suppress(OSError, ValueError):
             path = checked_path(db, row["root"], row["relative"], write=True)
