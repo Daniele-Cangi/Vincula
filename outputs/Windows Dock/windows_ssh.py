@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniele Cangi
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """OpenSSH transport for the direct Ethernet link to Windows."""
 
 import base64

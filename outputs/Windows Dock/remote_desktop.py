@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Daniele Cangi
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Share the Windows desktop or input across the existing SSH link."""
 
 from contextlib import contextmanager

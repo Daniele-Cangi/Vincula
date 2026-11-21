@@ -90,3 +90,13 @@ Deskflow, Barrier, TigerVNC, TightVNC, x11vnc, OpenSSH e x2vnc si installano
 separatamente. La [patch x2vnc](outputs/Windows%20Dock/x2vnc-no-clipboard.patch)
 si applica a x2vnc 1.7.2. Il [testo GPL incluso](outputs/Windows%20Dock/x2vnc-COPYING.txt)
 proviene dalla distribuzione x2vnc.
+
+## Licenza
+
+Il codice originale di Vincula è distribuito con la
+[GNU General Public License v3.0 o successiva](LICENSE)
+(`GPL-3.0-or-later`). Il testo integrale è disponibile nel file `LICENSE`.
+
+La patch per x2vnc conserva la licenza `GPL-2.0-or-later`.
+Il [testo della licenza di x2vnc](outputs/Windows%20Dock/x2vnc-COPYING.txt)
+è incluso accanto alla patch.

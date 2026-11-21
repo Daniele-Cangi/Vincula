@@ -1,4 +1,7 @@
 #!/usr/bin/python3 -B
+# SPDX-FileCopyrightText: 2026 Daniele Cangi
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """GTK desktop console for the Windows Dock Ethernet link."""
 
 from datetime import datetime
