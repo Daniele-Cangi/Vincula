@@ -10,6 +10,12 @@ script ed espongono il desktop remoto e la condivisione di mouse e tastiera.
 | Windows Dock per Ubuntu | [Python e GTK 3](outputs/Windows%20Dock) | [Avvio e uso](outputs/Windows%20Dock/LEGGIMI.txt) |
 | Linux Dock per Windows | [C# e WinForms](outputs/Linux%20Dock) | [Avvio e uso](outputs/Linux%20Dock/LEGGIMI.txt) |
 
+## Vincula Agent Infrastructure
+
+Nel primo caso d’uso, Codex ha usato Vincula da Ubuntu per collaudare PAW su
+Windows nativo. Per lo stesso messaggio, i tre punteggi del modello coincidono
+con quelli misurati su Linux. [Collaudo PAW e risultati](docs/casi-duso/paw-windows-linux.md)
+
 ## Appunti condivisi
 
 Apri **Linux Dock su Windows** per avviare la condivisione. Una volta
