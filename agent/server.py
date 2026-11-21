@@ -293,6 +293,8 @@ async def batch_report(batch_id, plan, operation):
         for task, reply in zip(tasks, replies):
             try:
                 result = BatchTaskResult(**task, **reply)
+                if (result.job is None) == (result.error is None):
+                    raise ValueError("Expected one job result or one error")
                 if result.job and (result.job.id != result.job_id or result.job.program != result.program):
                     raise ValueError("Mismatched job")
             except (TypeError, ValueError):

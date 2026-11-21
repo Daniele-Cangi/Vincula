@@ -71,6 +71,19 @@ class BatchTests(unittest.TestCase):
         self.assertIn("unavailable", report.tasks[0].error)
         self.assertEqual(report.tasks[1].job.exit_code, 0)
 
+    def test_invalid_reply_does_not_hide_the_other_task(self):
+        key = uuid4()
+        request = [{"program": "shared", "node_id": "ubuntu"}] * 2
+        plan = batches.make_plan(key, "ubuntu", request, {})
+        first = plan[0]
+        job = {"id": first["job_id"], "program": first["program"], "state": "completed",
+               "exit_code": 0, "created": 1, "finished": 2}
+        for malformed in ({}, {"job": job, "error": ""}):
+            with patch.object(server, "destination_request", return_value=[{"job": job}, malformed]):
+                report = asyncio.run(server.batch_report(key, plan, "status"))
+            self.assertEqual(report.tasks[0].job.exit_code, 0)
+            self.assertEqual(report.tasks[1].error, "Invalid job response from node.")
+
 
 if __name__ == "__main__":
     unittest.main()
