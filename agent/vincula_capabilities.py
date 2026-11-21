@@ -25,6 +25,7 @@ MAX_FILES = 4
 MAX_PATH_BYTES = 240
 MAX_PARAMETER_BYTES = 512
 MAX_RESULT_BYTES = 3072
+MAX_MANIFEST_BYTES = 16 * 1024
 MAX_ADAPTER_BYTES = 256 * 1024
 
 SCHEMA = """
@@ -110,28 +111,11 @@ def revoke(db, capability_id):
                "WHERE program=? AND state IN ('pending','queued')", (time.time(), capability_id))
 
 
-def register(db, files, manifest):
-    fields = {"id", "version", "python", "adapter", "inbox", "description", "max_files",
-              "max_input_bytes", "extensions", "parameters"}
-    if not isinstance(manifest, dict) or manifest.keys() - fields or not {"id", "version", "python", "adapter"} <= manifest.keys():
-        raise ValueError("Provide a capability manifest with id, version, python and adapter.")
-    capability_id = valid_id(manifest["id"])
+def registered_contract(db, files, manifest):
     release, description = manifest["version"], manifest.get("description", "")
-    if not isinstance(release, str) or not 1 <= len(release) <= 48 or not isinstance(description, str) or len(description) > 300:
+    if (not isinstance(release, str) or not 1 <= len(release) <= 48
+            or not isinstance(description, str) or len(description) > 300):
         raise ValueError("Provide a short version and optional description.")
-    python = Path(manifest["python"])
-    adapter = Path(manifest["adapter"])
-    if not python.is_absolute() or not python.is_file() or not adapter.is_absolute() or adapter.suffix != ".py":
-        raise ValueError("Specify absolute Python interpreter and Python adapter file paths.")
-    with adapter.open("rb") as source:
-        code = source.read(MAX_ADAPTER_BYTES + 1)
-    if not code or len(code) > MAX_ADAPTER_BYTES:
-        raise ValueError("The adapter must contain at most 256 KiB of Python source.")
-    try:
-        compile(code, str(adapter), "exec")
-    except SyntaxError as error:
-        raise ValueError(f"Invalid Python adapter: {error.msg}") from None
-
     inbox = manifest.get("inbox")
     if inbox is not None:
         if not isinstance(inbox, str) or not TOKEN.fullmatch(inbox):
@@ -146,11 +130,32 @@ def register(db, files, manifest):
             or not all(isinstance(ext, str) and EXTENSION.fullmatch(ext) for ext in extensions)):
         raise ValueError("Invalid capability file limits or extensions.")
 
-    definition = {"version": release, "description": description, "inbox": inbox,
-                  "contract": {"max_files": max_files, "max_input_bytes": max_bytes,
-                               "extensions": sorted(set(extensions)),
-                               "parameters": parameter_schema(manifest.get("parameters", {}))}}
-    serialized = encode(definition)
+    return {"version": release, "description": description, "inbox": inbox,
+            "contract": {"max_files": max_files, "max_input_bytes": max_bytes,
+                         "extensions": sorted(set(extensions)),
+                         "parameters": parameter_schema(manifest.get("parameters", {}))}}
+
+
+def register(db, files, manifest):
+    required = {"id", "version", "python", "adapter"}
+    optional = {"inbox", "description", "max_files", "max_input_bytes", "extensions", "parameters"}
+    if not isinstance(manifest, dict) or not required <= manifest.keys() <= (required | optional):
+        raise ValueError("Provide a capability manifest with id, version, python and adapter.")
+    capability_id = valid_id(manifest["id"])
+    serialized = encode(registered_contract(db, files, manifest))
+    python = Path(manifest["python"])
+    adapter = Path(manifest["adapter"])
+    if not python.is_absolute() or not python.is_file() or not adapter.is_absolute() or adapter.suffix != ".py":
+        raise ValueError("Specify absolute Python interpreter and Python adapter file paths.")
+    with adapter.open("rb") as source:
+        code = source.read(MAX_ADAPTER_BYTES + 1)
+    if not code or len(code) > MAX_ADAPTER_BYTES:
+        raise ValueError("The adapter must contain at most 256 KiB of Python source.")
+    try:
+        compile(code, str(adapter), "exec")
+    except SyntaxError as error:
+        raise ValueError(f"Invalid Python adapter: {error.msg}") from None
+
     previous = db.execute("SELECT * FROM capability_providers WHERE id=?", (capability_id,)).fetchone()
     if previous and (previous["python"], previous["definition"], previous["adapter"]) == (str(python), serialized, code):
         return

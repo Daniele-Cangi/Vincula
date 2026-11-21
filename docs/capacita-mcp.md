@@ -52,7 +52,19 @@ Per conservare artefatti oltre la durata del lavoro, l’adattatore può
 scriverli in una cartella concordata e renderli accessibili tramite gli
 strumenti file di Vincula.
 
-Esegui sul nodo `python agent/jobs.py capability-register PERCORSO_MANIFEST`.
+Su Ubuntu passa il manifest su standard input:
+
+```sh
+python agent/jobs.py capability-register < manifest.json
+```
+
+Su Windows esegui da PowerShell:
+
+```powershell
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+Get-Content -Raw -Encoding UTF8 .\manifest.json | py -3 agent/jobs.py capability-register
+```
+
 Vincula conserva una copia del codice registrato. L’adattatore è codice
 fidato ed esegue con i permessi dell’account del worker. Registra solo
 codice e dipendenze che vuoi autorizzare sul nodo. Modificando

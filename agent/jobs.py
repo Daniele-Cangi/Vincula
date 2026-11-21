@@ -377,9 +377,6 @@ def operator(args):
                 print(json.dumps(dict(row)))
         elif args.command in {"files-approve", "files-deny"}:
             files.decide(db, args.id, args.command == "files-approve")
-        elif args.command == "capability-register":
-            with Path(args.manifest).open(encoding="utf-8-sig") as source:
-                capabilities.register(db, files, json.load(source))
         elif args.command == "capability-revoke":
             capabilities.revoke(db, args.id)
 
@@ -530,7 +527,7 @@ def main():
     grant.add_argument("directory")
     grant.add_argument("--write", action="store_true")
     commands.add_parser("files-revoke").add_argument("alias")
-    commands.add_parser("capability-register").add_argument("manifest")
+    commands.add_parser("capability-register", help="Register a capability from a JSON manifest on stdin.")
     commands.add_parser("capability-revoke").add_argument("id")
     commands.add_parser("files-pending")
     for name in ("files-approve", "files-deny"):
@@ -543,6 +540,16 @@ def main():
         work()
     elif args.command == "shutdown":
         (ROOT / "worker.stop").touch()
+    elif args.command == "capability-register":
+        raw = sys.stdin.buffer.read(capabilities.MAX_MANIFEST_BYTES + 1)
+        if len(raw) > capabilities.MAX_MANIFEST_BYTES:
+            parser.error("The capability manifest exceeds 16 KiB.")
+        try:
+            manifest = json.loads(raw)
+            with transaction() as db:
+                capabilities.register(db, files, manifest)
+        except (OSError, ValueError, TypeError) as error:
+            parser.error(str(error))
     elif args.command == "rpc":
         try:
             request = json.loads(base64.b64decode(args.payload, validate=True))

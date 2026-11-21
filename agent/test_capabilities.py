@@ -78,7 +78,9 @@ class CapabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "extension"):
             self.queue(inputs=[{"index": 0, "root": "inbox", "path": "source.exe"}])
         key = str(uuid4())
-        self.assertEqual(self.queue(job_id=key), self.queue(job_id=key))
+        original = self.queue(job_id=key)
+        replay = self.queue(job_id=key)
+        self.assertEqual(replay, original)
         with self.assertRaisesRegex(ValueError, "different capability part"):
             self.queue(job_id=key, parameters={"count": 3})
 
