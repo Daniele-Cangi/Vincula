@@ -25,7 +25,9 @@ DATABASE = ROOT / "jobs.sqlite3"
 TAIL_BYTES = 4096
 NAME = re.compile(r"[a-z][a-z0-9_-]{0,47}")
 BATCH_LIMIT = 12
+PAGE_LIMIT = 50
 SUMMARY = "id, program, state, exit_code, created, finished"
+ACTIVE = ("pending", "queued", "running", "stopping")
 
 
 def initialize():
@@ -62,6 +64,16 @@ def initialize():
             CREATE TABLE IF NOT EXISTS batches(
                 id TEXT PRIMARY KEY, request TEXT NOT NULL, plan TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS worker_environment(
+                id INTEGER PRIMARY KEY CHECK (id=1), path TEXT NOT NULL, pathext TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS shell_sessions(
+                id TEXT PRIMARY KEY, created REAL NOT NULL, closed REAL
+            );
+            CREATE TABLE IF NOT EXISTS shell_entries(
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, job_id TEXT NOT NULL UNIQUE
+            );
+            CREATE INDEX IF NOT EXISTS shell_history ON shell_entries(session_id,sequence);
         """)
     installed = ROOT / "jobs.py"
     if Path(__file__).resolve() != installed:
@@ -105,6 +117,30 @@ def tail(job_id, stream):
         return {"text": "", "truncated": False}
 
 
+def read_output(db, job_id):
+    return dict(job(db, job_id), stdout=tail(job_id, "out"), stderr=tail(job_id, "err"))
+
+
+def enqueue(db, job_id, program):
+    existing = db.execute("SELECT program FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if existing:
+        if existing[0] != program:
+            raise ValueError("Job ID already used for another program.")
+        return
+    registered = db.execute("SELECT argv FROM programs WHERE name=?", (program,)).fetchone()
+    if not registered:
+        raise ValueError("Program is not authorized on this node.")
+    state = "queued" if mode(db) == "full" else "pending"
+    db.execute("INSERT INTO jobs(id,program,argv,state,created) VALUES(?,?,?,?,?)",
+               (job_id, program, registered[0], state, time.time()))
+
+
+def request_stop(db, job_id):
+    db.execute("UPDATE jobs SET state='cancelled',finished=? WHERE id=? AND state IN ('pending','queued')",
+               (time.time(), job_id))
+    db.execute("UPDATE jobs SET state='stopping' WHERE id=? AND state='running'", (job_id,))
+
+
 def rpc(action, job_id=None, program=None):
     """Fixed dispatcher for the local and SSH interfaces."""
     with transaction() as db:
@@ -114,30 +150,122 @@ def rpc(action, job_id=None, program=None):
                     "jobs": [dict(r) for r in db.execute(f"SELECT {SUMMARY} FROM jobs ORDER BY created DESC LIMIT 50")]}
         job_id = str(UUID(job_id))
         if action == "start":
-            existing = db.execute("SELECT program FROM jobs WHERE id=?", (job_id,)).fetchone()
-            if existing:
-                if existing[0] != program:
-                    raise ValueError("Job ID already used for another program.")
-            else:
-                registered = db.execute("SELECT argv FROM programs WHERE name=?", (program,)).fetchone()
-                if not registered:
-                    raise ValueError("Program is not authorized on this node.")
-                state = "queued" if mode(db) == "full" else "pending"
-                db.execute("INSERT INTO jobs(id,program,argv,state,created) VALUES(?,?,?,?,?)",
-                           (job_id, program, registered[0], state, time.time()))
+            enqueue(db, job_id, program)
         elif action == "stop":
-            db.execute("UPDATE jobs SET state='cancelled',finished=? WHERE id=? AND state IN ('pending','queued')",
-                       (time.time(), job_id))
-            db.execute("UPDATE jobs SET state='stopping' WHERE id=? AND state='running'", (job_id,))
-        elif action not in {"read", "status"}:
+            request_stop(db, job_id)
+        elif action == "read":
+            return read_output(db, job_id)
+        elif action != "status":
             raise ValueError("Unknown job operation.")
-        result = job(db, job_id)
-        if action == "read":
-            result.update(stdout=tail(job_id, "out"), stderr=tail(job_id, "err"))
-        return result
+        return job(db, job_id)
+
+
+def executable_names(path, pathext):
+    names = set()
+    extensions = {value.casefold() for value in pathext.split(";")}
+    for directory in dict.fromkeys(path.split(os.pathsep)):
+        if not os.path.isabs(directory):
+            continue
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if not entry.name.isprintable() or not entry.is_file():
+                        continue
+                    if WINDOWS:
+                        if os.path.splitext(entry.name)[1].casefold() in extensions:
+                            names.add(entry.name.casefold())
+                    elif os.access(entry.path, os.X_OK):
+                        names.add(entry.name)
+        except OSError:
+            continue
+    return names
+
+
+def discover_tools(prefix="", offset=0, limit=PAGE_LIMIT):
+    if not (0 <= offset and 1 <= limit <= PAGE_LIMIT):
+        raise ValueError("Invalid inventory page.")
+    with transaction() as db:
+        saved = db.execute("SELECT path,pathext FROM worker_environment WHERE id=1").fetchone()
+        access = mode(db)
+    path, pathext = saved or (os.environ.get("PATH", ""), os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD"))
+    matching = sorted(name for name in executable_names(path, pathext)
+                      if name.casefold().startswith(prefix.casefold()))
+    end = offset + limit
+    return {"source": "worker" if saved else "request", "mode": access,
+            "commands": matching[offset:end], "next_offset": end if end < len(matching) else None}
+
+
+def active_shell_entry(db, session_id):
+    entry = db.execute(
+        "SELECT e.job_id, j.state FROM shell_entries e JOIN jobs j ON j.id=e.job_id "
+        "WHERE e.session_id=? ORDER BY e.sequence DESC LIMIT 1", (session_id,),
+    ).fetchone()
+    return entry["job_id"] if entry and entry["state"] in ACTIVE else None
+
+
+def shell_send(db, session, job_id, program):
+    session_id = session["id"]
+    if not NAME.fullmatch(program):
+        raise ValueError("Enter a single registered program name.")
+    linked = db.execute("SELECT session_id FROM shell_entries WHERE job_id=?", (job_id,)).fetchone()
+    if linked:
+        if linked["session_id"] != session_id:
+            raise ValueError("Job ID belongs to another session.")
+        # A retried request remains safe even after the session was closed.
+        enqueue(db, job_id, program)
+    else:
+        if session["closed"] is not None:
+            raise ValueError("This session is closed.")
+        if active_shell_entry(db, session_id):
+            raise ValueError("Wait for the session's current command or stop it before sending another.")
+        if db.execute("SELECT 1 FROM jobs WHERE id=?", (job_id,)).fetchone():
+            raise ValueError("Job ID already used outside this session.")
+        enqueue(db, job_id, program)
+        db.execute("INSERT INTO shell_entries(session_id,job_id) VALUES(?,?)", (session_id, job_id))
+    return job(db, job_id)
+
+
+def shell_rpc(operation, session_id, job_id=None, program=None, after=0):
+    session_id = str(UUID(session_id))
+    with transaction() as db:
+        if operation == "open":
+            db.execute("INSERT OR IGNORE INTO shell_sessions(id,created) VALUES(?,?)", (session_id, time.time()))
+        session = db.execute("SELECT id,created,closed FROM shell_sessions WHERE id=?", (session_id,)).fetchone()
+        if session is None:
+            raise ValueError("Unknown shell session on this node.")
+        if operation == "send":
+            return shell_send(db, session, str(UUID(job_id)), program)
+        if operation == "close" and session["closed"] is None:
+            current = active_shell_entry(db, session_id)
+            if current:
+                request_stop(db, current)
+            db.execute("UPDATE shell_sessions SET closed=? WHERE id=?", (time.time(), session_id))
+            session = db.execute("SELECT id,created,closed FROM shell_sessions WHERE id=?", (session_id,)).fetchone()
+        if operation not in {"open", "read", "close"}:
+            raise ValueError("Unknown shell operation.")
+        output = None
+        if job_id is not None:
+            job_id = str(UUID(job_id))
+            linked = db.execute(
+                "SELECT 1 FROM shell_entries WHERE session_id=? AND job_id=?", (session_id, job_id),
+            ).fetchone()
+            if not linked:
+                raise ValueError("Unknown command in this shell session.")
+            output = read_output(db, job_id)
+        entries = db.execute(
+            "SELECT sequence,job_id FROM shell_entries WHERE session_id=? AND sequence>? "
+            "ORDER BY sequence LIMIT ?", (session_id, after, PAGE_LIMIT + 1),
+        ).fetchall()
+        history = [{"sequence": entry["sequence"], "job": job(db, entry["job_id"])} for entry in entries[:PAGE_LIMIT]]
+        next_after = history[-1]["sequence"] if len(entries) > PAGE_LIMIT else None
+        return dict(session, mode=mode(db), commands=history, output=output, next_after=next_after)
 
 
 def dispatch(action, **payload):
+    if action == "discover":
+        return discover_tools(**payload)
+    if action == "shell":
+        return shell_rpc(**payload)
     if action != "batch":
         return rpc(action, **payload)
 
@@ -298,6 +426,8 @@ def work():
         shutdown = ROOT / "worker.stop"
         shutdown.unlink(missing_ok=True)
         with transaction() as db:
+            db.execute("INSERT OR REPLACE INTO worker_environment VALUES(1,?,?)",
+                       (os.environ.get("PATH", ""), os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")))
             db.execute("UPDATE jobs SET state='unconfirmed',finished=? WHERE state IN ('running','stopping')",
                        (time.time(),))
         while not shutdown.exists():
