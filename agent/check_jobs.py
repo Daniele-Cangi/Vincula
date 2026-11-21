@@ -46,7 +46,8 @@ async def exercise(target):
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
                 job = await call(first, "read_job", ref)
-                if job["state"] == "running" and "fixture-start" in job["stdout"]["text"]:
+                marker = "child-heartbeat" if program == PROGRAMS[1] else "fixture-start"
+                if job["state"] == "running" and marker in job["stdout"]["text"]:
                     break
                 await asyncio.sleep(.2)
             else:
@@ -73,6 +74,10 @@ async def exercise(target):
                 assert job["state"] == "completed" and job["exit_code"] == 7, job
             else:
                 assert job["state"] == "cancelled" and job["exit_code"] is not None, job
+                # The child's heartbeat must stop along with the registered program.
+                await asyncio.sleep(.75)
+                after = await call(second, "read_job", ref)
+                assert after["stdout"] == job["stdout"], after
             print(f"{sys.platform} -> {target}: {program}, {job['state']}, exit={job['exit_code']}", flush=True)
     async with session() as client:
         reply = await client.call_tool("start_job", dict(node, program="vincula-unregistered-test", job_id=str(uuid4())))
@@ -100,7 +105,7 @@ async def check_approval(target, job_id):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("register", "ubuntu", "windows", *PROGRAMS))
+    parser.add_argument("action", choices=("register", "ubuntu", "windows", *PROGRAMS, "_child"))
     parser.add_argument("--await-approval", metavar="UUID", help="Wait for a local operator to approve this test ID")
     args = parser.parse_args()
     action = args.action
@@ -111,8 +116,14 @@ def main():
     elif action in PROGRAMS:
         print("fixture-start", flush=True)
         print("fixture-stderr", file=sys.stderr, flush=True)
+        if action == PROGRAMS[1]:
+            subprocess.Popen([sys.executable, "-I", Path(__file__).resolve(), "_child"])
         time.sleep(8 if action == PROGRAMS[0] else 60)
         sys.exit(7)
+    elif action == "_child":
+        for _ in range(240):
+            print("child-heartbeat", flush=True)
+            time.sleep(.25)
     elif args.await_approval:
         asyncio.run(check_approval(action, args.await_approval))
     else:

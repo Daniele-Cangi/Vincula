@@ -5,11 +5,11 @@
 
 from argparse import Namespace
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 from uuid import uuid4
-import sys
 
 import jobs
 
@@ -42,6 +42,9 @@ class PermissionsTest(unittest.TestCase):
             jobs.decide(db, second, True)
         self.assertEqual(jobs.rpc("read", first)["state"], "cancelled")
         self.assertEqual(jobs.rpc("read", second)["state"], "queued")
+        with jobs.transaction() as db:
+            jobs.set_mode(db, "ask")
+        self.assertEqual(jobs.rpc("read", second)["state"], "queued")
         self.assertEqual(jobs.rpc("start", first, "version")["state"], "cancelled")
         with self.assertRaises(ValueError):
             jobs.rpc("approve", first)
@@ -56,6 +59,20 @@ class PermissionsTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             jobs.rpc("start", key, "other")
         self.assertEqual(jobs.rpc("stop", key)["state"], "cancelled")
+
+    def test_stop_between_claim_and_launch(self):
+        key = str(uuid4())
+        jobs.rpc("start", key, "version")
+        with jobs.transaction() as db:
+            db.execute("UPDATE jobs SET state='running' WHERE id=?", (key,))
+            row = db.execute("SELECT id,argv FROM jobs WHERE id=?", (key,)).fetchone()
+        self.assertEqual(jobs.rpc("stop", key)["state"], "stopping")
+        with patch.object(jobs, "program_process") as launch:
+            jobs.run_one(row)
+            launch.assert_not_called()
+        result = jobs.rpc("read", key)
+        self.assertEqual(result["state"], "cancelled")
+        self.assertIsNone(result["exit_code"])
 
 
 if __name__ == "__main__":

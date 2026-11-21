@@ -5,7 +5,7 @@
 
 import argparse
 import base64
-from contextlib import closing, contextmanager
+from contextlib import ExitStack, closing, contextmanager, suppress
 import json
 import os
 from pathlib import Path
@@ -134,6 +134,8 @@ def rpc(action, job_id=None, program=None):
 
 
 def set_mode(db, new_mode):
+    if mode(db) == new_mode:
+        return
     db.execute("UPDATE policy SET mode=?", (new_mode,))
     if new_mode == "ask":
         db.execute("UPDATE jobs SET state='pending' WHERE state='queued'")
@@ -167,8 +169,6 @@ def operator(args):
         elif args.command in {"approve", "deny"}:
             decide(db, args.id, args.command == "approve")
 
-
-
 @contextmanager
 def exclusive_worker():
     with (ROOT / "worker.lock").open("a+b") as lock:
@@ -189,24 +189,35 @@ def program_process(argv, stdout, stderr):
         import win32job
         # The helper waits for argv until its entire descendant tree is contained.
         group = win32job.CreateJobObject(None, "Vincula-" + uuid4().hex)
-        limits = win32job.QueryInformationJobObject(group, win32job.JobObjectExtendedLimitInformation)
-        limits["BasicLimitInformation"]["LimitFlags"] |= win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        win32job.SetInformationJobObject(group, win32job.JobObjectExtendedLimitInformation, limits)
-        proc = subprocess.Popen([sys.executable, "-I", __file__, "_launch"], stdin=subprocess.PIPE,
-                                creationflags=subprocess.CREATE_NO_WINDOW, **streams)
         try:
-            win32job.AssignProcessToJobObject(group, int(proc._handle))
-            proc.stdin.write(json.dumps(argv).encode())
-            proc.stdin.close()
-            yield proc
-        finally:
-            if proc.poll() is None:
-                win32job.TerminateJobObject(group, 1)
-            group.Close()
-            if proc.poll() is None:
+            limits = win32job.QueryInformationJobObject(group, win32job.JobObjectExtendedLimitInformation)
+            limits["BasicLimitInformation"]["LimitFlags"] |= win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            win32job.SetInformationJobObject(group, win32job.JobObjectExtendedLimitInformation, limits)
+            proc = subprocess.Popen([sys.executable, "-I", __file__, "_launch"], stdin=subprocess.PIPE,
+                                    creationflags=subprocess.CREATE_NO_WINDOW, **streams)
+            try:
+                win32job.AssignProcessToJobObject(group, int(proc._handle))
+            except Exception:
                 proc.kill()
-            proc.wait()
-            proc.stdin.close()
+                proc.wait()
+                proc.stdin.close()
+                raise
+            try:
+                proc.stdin.write(json.dumps(argv).encode())
+                proc.stdin.close()
+                yield proc
+            finally:
+                with suppress(BrokenPipeError):
+                    proc.stdin.close()
+                win32job.TerminateJobObject(group, 1)
+                proc.wait(timeout=5)
+                deadline = time.monotonic() + 5
+                while win32job.QueryInformationJobObject(group, win32job.JobObjectBasicAccountingInformation)["ActiveProcesses"]:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("Windows could not confirm that the job processes stopped.")
+                    time.sleep(0.025)
+        finally:
+            group.Close()
     else:
         proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, start_new_session=True, **streams)
         try:
@@ -219,25 +230,43 @@ def program_process(argv, stdout, stderr):
             proc.wait()
 
 
+def exited(proc):
+    if WINDOWS:
+        return proc.poll() is not None
+    # Observe the exit without reaping until cleanup has signaled the process group.
+    return os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+
+
 def run_one(row):
     job_id = row["id"]
     code = None
-    state = "failed"
+    state = "unconfirmed"
+    proc = None
     try:
-        with (ROOT / f"{job_id}.out").open("xb") as out, (ROOT / f"{job_id}.err").open("xb") as err:
-            with program_process(json.loads(row["argv"]), out, err) as proc:
-                while proc.poll() is None:
-                    with transaction() as db:
-                        stopping = job(db, job_id)["state"] == "stopping"
-                    if stopping:
-                        state = "cancelled"
-                        break
-                    time.sleep(0.2)
-                else:
-                    state = "completed"
-            code = proc.returncode
+        with ExitStack() as stack:
+            with transaction() as db:
+                stopped_before_launch = job(db, job_id)["state"] == "stopping"
+                if not stopped_before_launch:
+                    out = stack.enter_context((ROOT / f"{job_id}.out").open("xb"))
+                    err = stack.enter_context((ROOT / f"{job_id}.err").open("xb"))
+                    proc = stack.enter_context(program_process(json.loads(row["argv"]), out, err))
+            if stopped_before_launch:
+                state = "cancelled"
+                return
+            while not exited(proc):
+                with transaction() as db:
+                    stopping = job(db, job_id)["state"] == "stopping"
+                if stopping:
+                    break
+                time.sleep(0.2)
+            else:
+                stopping = False
+        state = "cancelled" if stopping else "completed"
+        code = proc.returncode
     except Exception as error:
-        with (ROOT / f"{job_id}.err").open("ab") as err:
+        if proc is None:
+            state = "failed"
+        with suppress(OSError), (ROOT / f"{job_id}.err").open("ab") as err:
             err.write(str(error).encode("utf-8", "replace"))
     finally:
         with transaction() as db:

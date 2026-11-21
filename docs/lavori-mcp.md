@@ -67,7 +67,8 @@ Prima di ripeterli occorre verificarne gli effetti sul nodo.
 `completed` indica che il programma è terminato e il suo codice è disponibile,
 anche se diverso da zero. `cancelled` indica un annullamento, `failed` un
 errore del gestore. L’arresto usa il gruppo di processi su Ubuntu e un Job
-Object su Windows. I log completi restano nella directory del nodo e
+Object su Windows. Un errore durante la verifica dell’arresto lascia il
+lavoro in stato `unconfirmed`. I log completi restano nella directory del nodo e
 richiedono spazio proporzionale all’output dei programmi registrati.
 
 ## Ripetere il collaudo
@@ -80,7 +81,8 @@ completo per il collaudo bidirezionale.
 Da Ubuntu esegui `python agent/check_jobs.py windows`. Da Windows esegui
 `python agent/check_jobs.py ubuntu`. Ogni prova chiude il client MCP e apre
 una nuova sessione mentre il programma gira, verifica UUID e log, recupera il
-codice 7 del primo programma e arresta il secondo. Alla fine rimuovi le due
+codice 7 del primo programma e verifica che l’arresto del secondo fermi anche
+il suo processo figlio. Alla fine rimuovi le due
 registrazioni di prova, `vincula-check-exit` e `vincula-check-stop`, e
 ripristina il livello desiderato.
 
