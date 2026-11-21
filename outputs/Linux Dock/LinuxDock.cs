@@ -15,6 +15,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Win32;
+using CheckBoxState = System.Windows.Forms.VisualStyles.CheckBoxState;
 
 public sealed class DockResult
 {
@@ -638,6 +639,10 @@ internal sealed class DockWindow : Form
     private static readonly Color Line = Color.FromArgb(43, 64, 81);
     private static readonly Color Ink = Color.FromArgb(232, 242, 248);
     private static readonly Color Muted = Color.FromArgb(162, 183, 201);
+    private static readonly Color ControlFill = Color.FromArgb(36, 56, 76);
+    private static readonly Color ControlBorder = Color.FromArgb(116, 140, 163);
+    private static readonly Color DisabledBorder = Color.FromArgb(92, 115, 136);
+    private static readonly Color DisabledInk = Color.FromArgb(194, 211, 225);
     private static readonly Color Cyan = Color.FromArgb(86, 224, 223);
     private static readonly Color OnCyan = Color.FromArgb(7, 34, 42);
     private static readonly Color Online = Color.FromArgb(130, 237, 180);
@@ -655,7 +660,7 @@ internal sealed class DockWindow : Form
     private readonly Button desktopButton;
     private readonly Button inputHeaderButton;
     private readonly ComboBox inputSide = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList };
-    private readonly CheckBox shareClipboard = new CheckBox {
+    private readonly CheckBox shareClipboard = new DockCheckBox {
         Text = "Condividi gli appunti con Ubuntu in entrambe le direzioni",
         AutoSize = true, Anchor = AnchorStyles.Left, Checked = true
     };
@@ -688,24 +693,29 @@ internal sealed class DockWindow : Form
 
         protected override void OnPaint(PaintEventArgs args)
         {
-            for (int index = 0; index < TabCount; index++)
+            using (var active = new SolidBrush(Surface))
+            using (var inactive = new SolidBrush(ControlFill))
+            using (var accent = new SolidBrush(Cyan))
+            using (var border = new Pen(ControlBorder))
             {
-                Rectangle bounds = GetTabRect(index);
-                bool selected = index == SelectedIndex;
-                using (var background = new SolidBrush(selected ? Surface : Canvas))
-                    args.Graphics.FillRectangle(background, bounds);
-                if (selected)
+                for (int index = 0; index < TabCount; index++)
                 {
-                    using (var accent = new SolidBrush(Cyan))
+                    Rectangle bounds = GetTabRect(index);
+                    bounds.Inflate(-1, 0);
+                    bool selected = index == SelectedIndex;
+                    args.Graphics.FillRectangle(selected ? active : inactive, bounds);
+                    if (selected)
                         args.Graphics.FillRectangle(accent, bounds.Left, bounds.Bottom - 2, bounds.Width, 2);
-                }
-                TextRenderer.DrawText(args.Graphics, TabPages[index].Text, Font, bounds,
-                    selected ? Cyan : Muted, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter
-                        | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
-                if (selected && Focused && ShowFocusCues)
-                {
-                    bounds.Inflate(-3, -3);
-                    ControlPaint.DrawFocusRectangle(args.Graphics, bounds, Ink, Surface);
+                    else
+                        args.Graphics.DrawRectangle(border, bounds.Left, bounds.Top, bounds.Width - 1, bounds.Height - 1);
+                    TextRenderer.DrawText(args.Graphics, TabPages[index].Text, Font, bounds,
+                        selected ? Cyan : Ink, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter
+                            | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+                    if (selected && Focused && ShowFocusCues)
+                    {
+                        bounds.Inflate(-3, -3);
+                        ControlPaint.DrawFocusRectangle(args.Graphics, bounds, Ink, Surface);
+                    }
                 }
             }
         }
@@ -726,6 +736,46 @@ internal sealed class DockWindow : Form
         {
             base.OnLostFocus(args);
             Invalidate();
+        }
+    }
+
+    private sealed class DockButton : Button
+    {
+        protected override void OnPaint(PaintEventArgs args)
+        {
+            if (Enabled)
+            {
+                base.OnPaint(args);
+                return;
+            }
+            // WinForms uses system disabled text colors even when a flat button sets ForeColor.
+            using (var background = new SolidBrush(Surface))
+                args.Graphics.FillRectangle(background, ClientRectangle);
+            using (var border = new Pen(DisabledBorder))
+                args.Graphics.DrawRectangle(border, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
+            TextRenderer.DrawText(args.Graphics, Text, Font, ClientRectangle, DisabledInk,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter
+                | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.HidePrefix);
+        }
+    }
+
+    private sealed class DockCheckBox : CheckBox
+    {
+        protected override void OnPaint(PaintEventArgs args)
+        {
+            if (Enabled)
+            {
+                base.OnPaint(args);
+                return;
+            }
+
+            CheckBoxState state = Checked ? CheckBoxState.CheckedDisabled : CheckBoxState.UncheckedDisabled;
+            Size glyph = CheckBoxRenderer.GetGlyphSize(args.Graphics, state);
+            CheckBoxRenderer.DrawCheckBox(args.Graphics, new Point(0, (Height - glyph.Height) / 2), state);
+            Rectangle textBounds = Rectangle.FromLTRB(glyph.Width + 4, 0, Width, Height);
+            TextRenderer.DrawText(args.Graphics, Text, Font, textBounds, DisabledInk,
+                TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine
+                | TextFormatFlags.EndEllipsis | TextFormatFlags.HidePrefix);
         }
     }
 
@@ -1183,7 +1233,8 @@ internal sealed class DockWindow : Form
 
     private static Control FileCard(string title, Control first, Control second, Control action)
     {
-        var group = new GroupBox { Text = title, Dock = DockStyle.Fill, AutoSize = true, BackColor = Surface,
+        var group = new GroupBox { Text = title, Dock = DockStyle.Fill, AutoSize = true,
+            BackColor = Surface, ForeColor = Ink,
             AutoSizeMode = AutoSizeMode.GrowAndShrink };
         var box = new TableLayoutPanel { Dock = DockStyle.Top, RowCount = 3,
             ColumnCount = 1, Padding = new Padding(8, 4, 8, 4),
@@ -1217,7 +1268,7 @@ internal sealed class DockWindow : Form
         {
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             layout.SetColumnSpan(label, 2);
-            var button = new Button { Text = "Sfoglia…", AutoSize = true,
+            var button = new DockButton { Text = "Sfoglia…", AutoSize = true,
                 AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Right,
                 Padding = new Padding(9, 3, 9, 3) };
             StyleButton(button, false);
@@ -1242,7 +1293,7 @@ internal sealed class DockWindow : Form
 
     private static Button ActionButton(string text, Action action, bool primary = true)
     {
-        var button = new Button { Text = text, AutoSize = true, Height = 31,
+        var button = new DockButton { Text = text, AutoSize = true, Height = 31,
             Anchor = AnchorStyles.Top | AnchorStyles.Right, Padding = new Padding(7, 0, 7, 0) };
         StyleButton(button, primary);
         button.Click += delegate { action(); };
@@ -1253,10 +1304,10 @@ internal sealed class DockWindow : Form
     {
         button.UseVisualStyleBackColor = false;
         button.FlatStyle = FlatStyle.Flat;
-        button.BackColor = stop ? Color.FromArgb(72, 35, 44) : primary ? Cyan : Surface;
+        button.BackColor = stop ? Color.FromArgb(72, 35, 44) : primary ? Cyan : ControlFill;
         button.ForeColor = stop ? Danger : primary ? OnCyan : Ink;
         button.FlatAppearance.BorderSize = 1;
-        button.FlatAppearance.BorderColor = stop ? Color.FromArgb(187, 102, 116) : primary ? Cyan : Line;
+        button.FlatAppearance.BorderColor = stop ? Color.FromArgb(187, 102, 116) : primary ? Cyan : ControlBorder;
         button.FlatAppearance.MouseOverBackColor = ControlPaint.Light(button.BackColor, .18f);
         button.FlatAppearance.MouseDownBackColor = ControlPaint.Light(button.BackColor, .09f);
     }
@@ -1320,7 +1371,18 @@ internal sealed class DockWindow : Form
     {
         foreach (TabPage page in tabs.TabPages)
             if (page != inputPage)
-                page.Enabled = enabled;
+                SetJobControlsEnabled(page, enabled);
+    }
+
+    private static void SetJobControlsEnabled(Control container, bool enabled)
+    {
+        foreach (Control control in container.Controls)
+        {
+            if (control is Button || control is TextBox)
+                control.Enabled = enabled;
+            else
+                SetJobControlsEnabled(control, enabled);
+        }
     }
 
     private async void ToggleDesktop()
