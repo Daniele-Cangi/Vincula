@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "outputs" / "Windows Dock"))
 import windows_ssh
-from server import WINDOWS_NVIDIA_LOCATOR, WINDOWS_RESOURCES
+from server import WINDOWS_NVIDIA_LOCATOR, WINDOWS_RESOURCES, WINDOWS_STATUS
 
 
 class WindowsStatusEnvironmentTests(unittest.TestCase):
@@ -64,6 +64,11 @@ class WindowsStatusEnvironmentTests(unittest.TestCase):
 class NvidiaLookupTests(unittest.TestCase):
     def test_resource_query_uses_no_powershell_command_discovery(self):
         self.assertNotIn("Get-Command", WINDOWS_RESOURCES)
+
+    def test_status_command_fits_default_windows_ssh_shell(self):
+        self.assertLessEqual(len(windows_ssh._powershell_command(WINDOWS_STATUS)), 8000)
+        self.assertIn("[IO.File]::Exists", WINDOWS_STATUS)
+        self.assertIn("[IO.Path]::Combine", WINDOWS_STATUS)
 
     @unittest.skipUnless(sys.platform == "win32", "Real Windows PowerShell locator")
     def test_locator_skips_relative_paths_and_handles_quoted_absolute_paths(self):
