@@ -16,6 +16,7 @@ from tempfile import NamedTemporaryFile
 from time import monotonic, sleep
 
 import node_registry
+import desktop_layout
 
 
 class ConflictError(ValueError):
@@ -194,6 +195,18 @@ def execute(request, path):
     if request["action"] == "list":
         request_fields(request, set(), set())
         return snapshot(path)
+    if request["action"] == "desktop_preview":
+        request_fields(request, {"desktop"}, set())
+        before = snapshot(path)
+        if "expected_revision" in request and request["expected_revision"] != before["revision"]:
+            raise ConflictError("The node registry changed. Reload it before previewing this layout.")
+        if before["registry"] is None:
+            raise ValueError("Register this computer before configuring the desktop group.")
+        candidate = deepcopy(before["registry"])
+        if "desktop" in request:
+            candidate["desktop"] = request["desktop"]
+        before["desktop_preview"] = desktop_layout.preview(validate(candidate))
+        return before
     if request["action"] not in {"add", "update", "remove", "desktop"}:
         raise ValueError("Unknown node operation.")
     with edit_lock(path):
@@ -201,7 +214,9 @@ def execute(request, path):
         if "expected_revision" in request and request["expected_revision"] != before["revision"]:
             raise ConflictError("The node registry changed. Reload it before applying this edit.")
         document = edit_document(before["registry"], request)
-        validate(document)
+        registry = validate(document)
+        if request["action"] == "desktop" and registry.desktop is not None:
+            desktop_layout.compile_layout(registry)
         return save(path, document)
 
 
