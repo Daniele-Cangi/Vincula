@@ -17,6 +17,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from tempfile import TemporaryFile
 from uuid import UUID, uuid4
 
 WINDOWS = sys.platform == "win32"
@@ -41,6 +42,8 @@ def load_adapter(name):
 files = load_adapter("vincula_files")
 capabilities = load_adapter("vincula_capabilities")
 plan_journal = load_adapter("plan_journal")
+wire_framing = load_adapter("wire_framing")
+direct_execution = load_adapter("direct_execution")
 
 
 def initialize():
@@ -91,11 +94,13 @@ def initialize():
         db.executescript(files.SCHEMA)
         db.executescript(capabilities.SCHEMA)
         db.executescript(plan_journal.SCHEMA)
+        db.executescript(direct_execution.SCHEMA)
         # Older specialized jobs have no fixed argv or manifest the current worker can launch.
         with db:
             db.execute("UPDATE jobs SET state='cancelled',finished=? WHERE state IN ('pending','queued') "
                        "AND argv='[]' AND id NOT IN (SELECT id FROM capability_jobs)", (time.time(),))
-    for name in ("vincula_files.py", "vincula_capabilities.py", "plan_journal.py", "jobs.py"):
+    for name in ("vincula_files.py", "vincula_capabilities.py", "plan_journal.py", "wire_framing.py",
+                 "direct_execution.py", "jobs.py"):
         source = Path(__file__).resolve().with_name(name)
         installed = ROOT / name
         if source == installed:
@@ -300,6 +305,8 @@ def dispatch_capability(operation, capability_id=None, job_id=None, revision=Non
 
 
 def dispatch(action, **payload):
+    if action == "process":
+        return dispatch_process(**payload)
     if action == "plan":
         with transaction() as db:
             return plan_journal.dispatch(db, **payload)
@@ -330,16 +337,44 @@ def dispatch(action, **payload):
     return results
 
 
+def dispatch_process(operation, protocol_version, job_id=None, **payload):
+    if type(protocol_version) is not int or protocol_version != direct_execution.PROTOCOL_VERSION:
+        raise ValueError("Unsupported direct process protocol version.")
+    with transaction() as db:
+        if operation == "info" and not payload and job_id is None:
+            return dict(direct_execution.support(db), mode=mode(db))
+        key = str(UUID(job_id))
+        if operation == "execute":
+            direct_execution.queue(db, mode(db), key, **payload)
+        elif operation != "read" or payload:
+            raise ValueError("Unknown direct process operation.")
+        details = read_output(db, key)
+        value = direct_execution.result(db, key)
+        # Legacy workers cannot launch a null-argv marker, but may report their own
+        # helper's exit as completed. Only the protocol-aware outcome is a process result.
+        if value["outcome"] is None and details["state"] in {"completed", "failed", "unconfirmed"}:
+            details.update(state="unconfirmed", exit_code=None)
+        elif value["outcome"] is not None:
+            details["exit_code"] = value["outcome"]["program_exit_code"]
+        return dict(details, **value)
+
+
 def set_mode(db, new_mode):
     if mode(db) == new_mode:
         return
     db.execute("UPDATE policy SET mode=?", (new_mode,))
     if new_mode == "ask":
         db.execute("UPDATE jobs SET state='pending' WHERE state='queued'")
+        db.execute("UPDATE direct_process_jobs SET approved_sha256=NULL,approval_mode=NULL "
+                   "WHERE id IN (SELECT id FROM jobs WHERE state='pending')")
         db.execute("UPDATE file_requests SET state='pending' WHERE state='approved' AND auto=1")
 
 
-def decide(db, job_id, allowed):
+def decide(db, job_id, allowed, expected_sha256=None):
+    job_id = str(UUID(job_id))
+    if allowed and db.execute("SELECT 1 FROM direct_process_jobs WHERE id=?", (job_id,)).fetchone():
+        direct_execution.approve(db, job_id, expected_sha256)
+        return
     changed = db.execute("UPDATE jobs SET state=?,finished=? WHERE id=? AND state='pending'",
                          ("queued" if allowed else "cancelled", None if allowed else time.time(), str(UUID(job_id))))
     if not changed.rowcount:
@@ -348,8 +383,9 @@ def decide(db, job_id, allowed):
 
 def pending_jobs(db):
     return db.execute(
-        "SELECT j.id,j.program,COALESCE(p.manifest,j.argv) AS argv FROM jobs j "
-        "LEFT JOIN capability_jobs p ON p.id=j.id WHERE j.state='pending' ORDER BY j.created",
+        "SELECT j.id,j.program,COALESCE(d.manifest,p.manifest,j.argv) AS argv FROM jobs j "
+        "LEFT JOIN capability_jobs p ON p.id=j.id LEFT JOIN direct_process_jobs d ON d.id=j.id "
+        "WHERE j.state='pending' ORDER BY j.created",
     ).fetchall()
 
 
@@ -372,7 +408,9 @@ def operator(args):
             for row in pending_jobs(db):
                 print(json.dumps(dict(row)))
         elif args.command in {"approve", "deny"}:
-            decide(db, args.id, args.command == "approve")
+            decide(db, args.id, args.command == "approve", getattr(args, "sha256", None))
+        elif args.command == "process-access":
+            direct_execution.set_enabled(db, args.access == "enable")
         elif args.command in {"files-grant", "files-revoke"}:
             if not NAME.fullmatch(args.alias):
                 raise ValueError("Invalid folder alias.")
@@ -432,6 +470,26 @@ def stop_linux_program(proc):
             time.sleep(0.025)
 
 
+@contextmanager
+def launch_context(payload):
+    """Keep legacy argv unchanged; new launches carry native options as JSON data."""
+    if not isinstance(payload, dict):
+        yield payload, {"stdin": subprocess.DEVNULL}
+        return
+    if payload.get("protocol_version") != direct_execution.PROTOCOL_VERSION:
+        raise ValueError("Unsupported native launcher protocol.")
+    # The public request bound has already been checked before queueing. The
+    # internal specification additionally inherits the worker environment.
+    spec = direct_execution.request(**payload["request"], _check_size=False)
+    if not Path(spec["argv"][0]).is_absolute() or spec["cwd"] is None or spec["env"] is None:
+        raise ValueError("The native launcher requires a resolved process specification.")
+    with TemporaryFile() as source:
+        source.write((spec["stdin_text"] or "").encode("utf-8"))
+        source.seek(0)
+        yield spec["argv"], {"stdin": source, "cwd": spec["cwd"], "env": spec["env"],
+                            "executable": spec["argv"][0]}
+
+
 def supervise_linux(parent_pid, ready_fd):
     import ctypes
 
@@ -451,24 +509,31 @@ def supervise_linux(parent_pid, ready_fd):
     # PR_SET_CHILD_SUBREAPER keeps escaped descendants available for cleanup/reaping.
     if libc.prctl(36, 1, 0, 0, 0) != 0:
         raise OSError(ctypes.get_errno(), "Could not supervise Linux descendants")
-    argv = json.load(sys.stdin)
+    payload = json.load(sys.stdin)
     if interrupted or os.getppid() != parent_pid:
         raise RuntimeError("The worker exited before its program started.")
-    try:
-        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, start_new_session=True)
-    except Exception as error:
-        os.write(ready_fd, json.dumps({"error": str(error)}).encode() + b"\n")
-        raise
-    try:
-        with suppress(BrokenPipeError):
-            os.write(ready_fd, b'{"started":true}\n')
-        while not interrupted and not exited(proc):
-            reap_linux_children(proc.pid)
-            time.sleep(0.025)
-    finally:
-        stop_linux_program(proc)
+    with launch_context(payload) as (argv, options):
+        try:
+            proc = subprocess.Popen(argv, start_new_session=True, **options)
+        except Exception as error:
+            os.write(ready_fd, json.dumps({"error": str(error)}).encode() + b"\n")
+            raise
+        try:
+            with suppress(BrokenPipeError):
+                os.write(ready_fd, b'{"started":true}\n')
+            while not interrupted and not exited(proc):
+                reap_linux_children(proc.pid)
+                time.sleep(0.025)
+        finally:
+            try:
+                native_exited = exited(proc)
+            finally:
+                stop_linux_program(proc)
     with suppress(BrokenPipeError):
-        os.write(ready_fd, json.dumps({"exit_code": proc.returncode}).encode() + b"\n")
+        result = {"exit_code": proc.returncode}
+        if isinstance(payload, dict):
+            result["native_exited"] = native_exited
+        os.write(ready_fd, json.dumps(result).encode() + b"\n")
     os.close(ready_fd)
     return 0
 
@@ -524,10 +589,72 @@ def linux_program_process(argv, stdout, stderr, worker_lock):
             if launched:
                 line = ready.readline(8192)
                 result = json.loads(line) if line else {}
-                if (proc.returncode != 0 or set(result) != {"exit_code"}
+                expected = {"exit_code", "native_exited"} if isinstance(argv, dict) else {"exit_code"}
+                if (proc.returncode != 0 or set(result) != expected
+                        or ("native_exited" in result and type(result["native_exited"]) is not bool)
                         or type(result["exit_code"]) is not int):
                     raise RuntimeError("Linux supervisor could not confirm the program exit.")
                 proc.returncode = result["exit_code"]
+                proc.native_exited = result.get("native_exited", False)
+
+
+def write_launch_status(path, value):
+    target = Path(path)
+    stage = target.with_suffix(".tmp")
+    stage.write_text(json.dumps(value), encoding="utf-8")
+    stage.replace(target)
+
+
+def windows_launch(payload):
+    if not isinstance(payload, dict):
+        return subprocess.call(payload, stdin=subprocess.DEVNULL)
+    status = payload["status_path"]
+    # The enclosing JobObject owns cleanup even if an acknowledgment is lost.
+    with launch_context(payload) as (argv, options):
+        try:
+            proc = subprocess.Popen(argv, **options)
+        except Exception as error:
+            write_launch_status(status, {"error": str(error)[:4096]})
+            raise
+        write_launch_status(status, {"started": True})
+        code = proc.wait()
+        # Never replace the ready file while another Windows process has it
+        # open without FILE_SHARE_DELETE. Each acknowledgment is immutable.
+        write_launch_status(Path(status).with_suffix(".outcome.json"), {"started": True, "exit_code": code})
+    return 0
+
+
+def read_launch_status(path):
+    try:
+        with path.open("rb") as stream:
+            raw = stream.read(8193)
+        if len(raw) > 8192:
+            raise ValueError("Oversized native launch acknowledgment.")
+        value = json.loads(raw)
+    except FileNotFoundError:
+        return None
+    if not isinstance(value, dict):
+        raise UnconfirmedLaunchError("Invalid native launch acknowledgment.")
+    return value
+
+
+def confirm_windows_launch(proc, status):
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            value = read_launch_status(status)
+        except (ValueError, OSError) as error:
+            raise UnconfirmedLaunchError("Windows could not confirm program launch.") from error
+        if value is not None:
+            if set(value) == {"error"} and isinstance(value["error"], str):
+                raise RuntimeError(value["error"])
+            if (value.get("started") is True and value.keys() <= {"started", "exit_code"}
+                    and ("exit_code" not in value or type(value["exit_code"]) is int)):
+                return
+            raise UnconfirmedLaunchError("Windows returned an invalid launch acknowledgment.")
+        if proc.poll() is not None or time.monotonic() >= deadline:
+            raise UnconfirmedLaunchError("Windows helper exited before confirming program launch.")
+        time.sleep(0.025)
 
 
 @contextmanager
@@ -537,6 +664,9 @@ def program_process(argv, stdout, stderr, worker_lock=None):
         import win32job
         # The helper waits for argv until its entire descendant tree is contained.
         group = win32job.CreateJobObject(None, "Vincula-" + uuid4().hex)
+        status = ROOT / ("launch-" + uuid4().hex + ".json") if isinstance(argv, dict) else None
+        if status is not None:
+            argv = dict(argv, status_path=str(status))
         try:
             limits = win32job.QueryInformationJobObject(group, win32job.JobObjectExtendedLimitInformation)
             limits["BasicLimitInformation"]["LimitFlags"] |= win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
@@ -550,13 +680,18 @@ def program_process(argv, stdout, stderr, worker_lock=None):
                 proc.wait()
                 proc.stdin.close()
                 raise
+            launched = False
             try:
                 proc.stdin.write(json.dumps(argv).encode())
                 proc.stdin.close()
+                if status is not None:
+                    confirm_windows_launch(proc, status)
+                launched = True
                 yield proc
             finally:
                 with suppress(BrokenPipeError):
                     proc.stdin.close()
+                normal_exit = proc.poll() is not None
                 win32job.TerminateJobObject(group, 1)
                 proc.wait(timeout=5)
                 deadline = time.monotonic() + 5
@@ -564,8 +699,25 @@ def program_process(argv, stdout, stderr, worker_lock=None):
                     if time.monotonic() >= deadline:
                         raise TimeoutError("Windows could not confirm that the job processes stopped.")
                     time.sleep(0.025)
+                if status is not None and launched:
+                    result = read_launch_status(status.with_suffix(".outcome.json"))
+                    if (result and result.get("started") is True and set(result) == {"started", "exit_code"}
+                            and type(result["exit_code"]) is int):
+                        proc.returncode = result["exit_code"]
+                        proc.native_exited = True
+                    elif normal_exit:
+                        raise UnconfirmedLaunchError("Windows could not confirm the program exit.")
+                    else:
+                        # A forced stop confirms containment, but not the child's native exit code.
+                        proc.returncode = None
+                        proc.native_exited = False
         finally:
             group.Close()
+            if status is not None:
+                for path in (status, status.with_suffix(".outcome.json")):
+                    with suppress(OSError):
+                        path.unlink(missing_ok=True)
+                        path.with_suffix(".tmp").unlink(missing_ok=True)
     else:
         with linux_program_process(argv, stdout, stderr, worker_lock) as proc:
             yield proc
@@ -583,6 +735,8 @@ def run_one(row, worker_lock=None):
     code = None
     state = "unconfirmed"
     proc = None
+    direct = "program" in row.keys() and row["program"] == direct_execution.PROGRAM
+    reason = "unconfirmed"
     try:
         with ExitStack() as stack:
             with transaction() as db:
@@ -590,30 +744,50 @@ def run_one(row, worker_lock=None):
                 if not stopped_before_launch:
                     out = stack.enter_context((ROOT / f"{job_id}.out").open("xb"))
                     err = stack.enter_context((ROOT / f"{job_id}.err").open("xb"))
-                    argv = (capabilities.arguments(db, job_id, ROOT) if capabilities.ID.fullmatch(row["program"])
-                            else json.loads(row["argv"]))
+                    direct = direct or db.execute("SELECT 1 FROM direct_process_jobs WHERE id=?", (job_id,)).fetchone() is not None
+                    if direct:
+                        spec = direct_execution.launch_spec(db, job_id, os.environ)
+                        argv = {"protocol_version": direct_execution.PROTOCOL_VERSION, "request": spec}
+                    else:
+                        argv = (capabilities.arguments(db, job_id, ROOT) if capabilities.ID.fullmatch(row["program"])
+                                else json.loads(row["argv"]))
                     proc = stack.enter_context(program_process(argv, out, err, worker_lock))
             if stopped_before_launch:
                 state = "cancelled"
+                reason = "stop"
                 return
+            deadline = time.monotonic() + spec["timeout_seconds"] if direct else None
+            timed_out = False
             while not exited(proc):
                 with transaction() as db:
                     stopping = job(db, job_id)["state"] == "stopping"
                 if stopping:
                     break
+                if deadline is not None and time.monotonic() >= deadline:
+                    timed_out = True
+                    break
                 time.sleep(0.2)
             else:
                 stopping = False
-        state = "cancelled" if stopping else "completed"
+        if direct and timed_out and getattr(proc, "native_exited", False):
+            # A late coordinator read must not turn an already confirmed native
+            # exit into a timeout simply because it noticed the helper later.
+            timed_out = False
+        state = "cancelled" if stopping else "failed" if timed_out else "completed"
+        reason = "stop" if stopping else "timeout" if timed_out else "exit"
         code = proc.returncode
     except Exception as error:
         if proc is None and not isinstance(error, UnconfirmedLaunchError):
             state = "failed"
+        reason = "launch_error" if state == "failed" else "unconfirmed"
         with suppress(OSError), (ROOT / f"{job_id}.err").open("ab") as err:
             err.write(str(error).encode("utf-8", "replace"))
     finally:
         with transaction() as db:
             db.execute("UPDATE jobs SET state=?,exit_code=?,finished=? WHERE id=?", (state, code, time.time(), job_id))
+            if direct:
+                started = None if state == "unconfirmed" and proc is None else proc is not None
+                direct_execution.record_outcome(db, job_id, state, code, reason, started)
 
 
 def work():
@@ -647,7 +821,10 @@ def main():
     register.add_argument("argv", nargs=argparse.REMAINDER)
     commands.add_parser("remove").add_argument("name")
     for name in ("approve", "deny"):
-        commands.add_parser(name).add_argument("id")
+        approval = commands.add_parser(name)
+        approval.add_argument("id")
+        approval.add_argument("--sha256", help="Digest of the reviewed native process manifest.")
+    commands.add_parser("process-access").add_argument("access", choices=("enable", "disable"))
     grant = commands.add_parser("files-grant")
     grant.add_argument("alias")
     grant.add_argument("directory")
@@ -660,6 +837,8 @@ def main():
         commands.add_parser(name).add_argument("id")
     commands.add_parser("rpc").add_argument("payload")
     commands.add_parser("journal-stdin")
+    commands.add_parser("journal-framed-stdin")
+    commands.add_parser("process-stdin")
     args = parser.parse_args()
     if args.command == "init":
         initialize()
@@ -677,21 +856,30 @@ def main():
                 capabilities.register(db, files, manifest)
         except (OSError, ValueError, TypeError) as error:
             parser.error(str(error))
-    elif args.command in {"rpc", "journal-stdin"}:
+    elif args.command in {"rpc", "journal-stdin", "journal-framed-stdin", "process-stdin"}:
         try:
-            if args.command == "journal-stdin":
-                raw = sys.stdin.buffer.read(plan_journal.MAX_REQUEST_BYTES + 1)
-                if len(raw) > plan_journal.MAX_REQUEST_BYTES:
-                    raise ValueError("Plan journal request exceeds its size limit.")
+            if args.command in {"journal-stdin", "journal-framed-stdin", "process-stdin"}:
+                maximum = (plan_journal.MAX_REQUEST_BYTES if args.command != "process-stdin"
+                           else direct_execution.MAX_TRANSPORT_BYTES)
+                raw = (sys.stdin.buffer.read(maximum + 1) if args.command == "journal-stdin"
+                       else wire_framing.read(sys.stdin.buffer, maximum))
+                if len(raw) > maximum:
+                    raise ValueError("Plan journal request exceeds its size limit." if args.command == "journal-stdin"
+                                     else "The process stdin request exceeds its size limit.")
                 request = json.loads(raw)
-                if not isinstance(request, dict) or request.get("action") != "plan":
-                    raise ValueError("The journal stdin protocol accepts only plan operations.")
+                action = "process" if args.command == "process-stdin" else "plan"
+                if not isinstance(request, dict) or request.get("action") != action:
+                    raise ValueError("The journal stdin protocol accepts only plan operations." if action == "plan"
+                                     else "The process stdin protocol accepts only process operations.")
             else:
                 request = json.loads(base64.b64decode(args.payload, validate=True))
             result = {"result": dispatch(**request)}
         except (ValueError, KeyError, TypeError, sqlite3.Error, OSError) as error:
             result = {"error": str(error)}
-        print(json.dumps(result))
+        if args.command in {"process-stdin", "journal-framed-stdin"}:
+            sys.stdout.buffer.write(json.dumps(result, ensure_ascii=False).encode("utf-8") + b"\n")
+        else:
+            print(json.dumps(result))
     else:
         operator(args)
 
@@ -701,7 +889,7 @@ if __name__ == "__main__":
         sys.exit(supervise_linux(int(sys.argv[2]), int(sys.argv[3])))
     elif sys.argv[1:] == ["_launch"] and WINDOWS:
         import ctypes
-        code = subprocess.call(json.load(sys.stdin), stdin=subprocess.DEVNULL)
+        code = windows_launch(json.load(sys.stdin))
         ctypes.windll.kernel32.ExitProcess(ctypes.c_uint32(code))
     else:
         main()
