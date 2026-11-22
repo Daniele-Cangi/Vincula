@@ -48,11 +48,13 @@ async def check(topology, include_remotes: bool, env: dict[str, str]) -> None:
             "discover_tools", "open_shell", "send_shell_command", "read_shell", "close_shell",
             "list_file_roots", "request_file", "get_file_request", "transfer_file",
             "discover_capabilities", "submit_capability", "get_capability_run",
+            "get_process_execution_info", "execute_process", "read_process",
         }
         assert {tool.name for tool in tools if tool.annotations and tool.annotations.read_only_hint} == {
             "list_nodes", "get_node_status", "list_jobs", "read_job",
             "get_batch", "discover_tools", "read_shell", "list_file_roots",
             "discover_capabilities", "get_capability_run",
+            "get_process_execution_info", "read_process",
         }
 
         origin = topology.local_id
