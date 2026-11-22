@@ -1,0 +1,6 @@
+# Runtime requirements and the PEP 508 validator used only by CI.
+# Regenerate with uv 0.13.5:
+# uv pip compile .github/requirements-ci.in --universal --python-version 3.10 --generate-hashes --output-file .github/requirements-ci.txt --no-annotate
+# python .github/scripts/check_ci_dependencies.py --record-inputs
+-r ../agent/requirements.txt
+packaging>=25,<27
