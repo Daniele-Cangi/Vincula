@@ -1,6 +1,6 @@
 # Piano Vincula per nodi agenti e desktop
 
-Vincula usa un unico catalogo di computer per l’accesso degli agenti, i lavori distribuiti e il desktop condiviso. L’aggiunta di un computer registra la sua identità, verifica le connessioni disponibili e abilita le funzioni scelte dall’operatore. Gli indirizzi di rete e il sistema operativo sono proprietà del nodo. L’UUID identifica il computer in tutti i componenti.
+L’evoluzione di Vincula usa su ciascun host lo stesso catalogo locale per agenti, lavori distribuiti e desktop condiviso. L’aggiunta di un computer deve registrare la sua identità, verificare le connessioni e abilitare le funzioni scelte dall’operatore. Gli indirizzi di rete e il sistema operativo sono proprietà del nodo. L’UUID identifica il computer in tutti i componenti.
 
 Il piano parte da `main` dopo la PR #8, commit `b470517`. I collaudi su ASUS Ubuntu, Lenovo Windows e Kali X260 hanno verificato inventario, lavori, trasferimenti e perdita della rete di Kali. La verifica del crash del worker richiede una prova distinta. Le valutazioni del testo allegato vengono confrontate con riproduzioni e misure prima di scegliere la soluzione.
 
@@ -10,6 +10,7 @@ Il piano parte da `main` dopo la PR #8, commit `b470517`. I collaudi su ASUS Ubu
 | --- | --- | --- |
 | 1 | Sessioni MCP aggiornate | Configurazione dei client sui tre PC, avvio del runtime verificato e uso dei tre UUID da ciascuna origine. Registrare percorso, versione installata e risultati delle chiamate. |
 | 2 | Aggiunta di un nodo nel catalogo comune | CLI JSON e due interfacce grafiche usano la stessa validazione e la stessa scrittura atomica. Aggiungere e aggiornare nodi senza cambiare il codice, mantenendo gli alias e le installazioni precedenti. |
+| 2b | Esecuzione generale via MCP | Argv, directory, ambiente e input iniziale immutabili, con approvazione della richiesta esatta oppure avvio preautorizzato. Utilizzare nuovi software senza preregistrare ogni invocazione. Distinguere esecuzione non interattiva e terminale PTY. |
 | 3 | Mouse tastiera e appunti su più computer | Un principale esplicito, membri identificati per UUID e layout degli schermi. Configurazione Deskflow generata per il gruppo, trasporti SSH e TLS verificati. Collaudo Windows principale con ASUS e Kali, anche durante un trasferimento. |
 | 4 | Recupero dopo crash Linux | SIGKILL del worker durante un programma con figli. Arresto dei processi controllati, riavvio del worker, esito riconciliabile e ripetizione dello stesso UUID senza nuovo avvio. |
 | 5 | Recupero dei piani da un’altra origine | Manifest durabile con UUID di piano e lavori, recuperabile su un altro computer quando l’origine perde disponibilità. Risultati recuperati e nuove chiamate idempotenti. Coprire lotti e workflow di capacità. |
@@ -28,13 +29,23 @@ La connessione verificata permette di rilevare sistema, risorse, interprete, pro
 
 Il registro mantiene gli UUID e gli alias già usati. Un blocco desktop opzionale riferisce gli stessi UUID e contiene il principale, i membri, la posizione degli schermi e la scelta sugli appunti. Il salvataggio usa lock, revisione attesa e sostituzione atomica. La rimozione di un nodo richiede la risoluzione dei suoi riferimenti nel layout e nei servizi attivi.
 
+Il catalogo condiviso è locale al singolo host. L’aggiunta da Windows non replica automaticamente identità e percorsi SSH negli altri computer. L’enrollment dovrà distribuire i riferimenti pubblici verificati e configurare le rotte di ogni origine autorizzata. Le chiavi private rimangono su chi le usa; il file del registro non va copiato tra host con percorsi locali differenti.
+
 Le due GUI chiamano un runtime locale Python con richieste e risposte JSON. La GUI Ubuntu può usarne direttamente le funzioni. La GUI Windows usa un processo locale senza comporre comandi shell dai dati dell’utente. Il runtime riusa il registro, la validazione e i trasporti esistenti.
+
+## Esecuzione generale
+
+La shell MCP attuale conserva una cronologia di programmi registrati con argomenti fissi. La scoperta del software non ne autorizza automaticamente l’esecuzione. Un adapter generico installato una volta ha già dimostrato comandi parametrizzati differenti tramite le capability, in `ask` e `full`, senza nuove registrazioni per variante. Rimangono il bootstrap del provider e i limiti dei suoi parametri e risultati.
+
+L’API diretta in sviluppo espone `execute_process` e `read_process` con richiesta immutabile e digest. L’operatore abilita la nuova funzione sul nodo; le installazioni esistenti la mantengono disabilitata, così l’aggiornamento non amplia il precedente consenso a `full`. In `ask` la preview mostra esattamente la richiesta approvata; in `full` l’avvio procede con i permessi dell’account. Non introduce elevazione automatica o un isolamento del filesystem del processo. I grant dei tool file conservano la loro funzione nei workflow strutturati.
+
+La prima versione usa input iniziale seguito da EOF e non dichiara un terminale interattivo. PTY/ConPTY e controllo GUI richiedono backend propri. Il requisito di esecuzione generale precede lo scheduler delle risorse, perché l’agente deve poter preparare invocazioni compatibili sui computer scelti.
 
 ## Desktop condiviso
 
 Deskflow fornisce un server sul principale e un client su ciascun altro nodo. Le configurazioni correnti delle app generano una sola coppia `dock-windows` e `dock-ubuntu`. Il generatore nuovo usa nomi derivati dagli UUID e l’intero layout del gruppo. Il principale viene scelto esplicitamente e può essere Windows, Ubuntu o un altro nodo compatibile.
 
-Ogni client usa una connessione locale verso un tunnel SSH dedicato. Le impronte TLS del motore desktop e le chiavi host SSH sono verificate separatamente. I profili di Kali predisposti per MCP consentono comandi e SFTP, mentre gli inoltri desktop richiedono configurazione e identità dedicate con porte loopback limitate. L’enrollment rileva questo requisito prima di tentare la condivisione.
+Il controllo resta su SSH; il trasporto desktop viene verificato separatamente. L’inventario della triade propone TLS reciproco diretto, con regole firewall limitate a programma, porta, indirizzi e interfacce autorizzati. Gli inoltri SSH restano un’alternativa da configurare esplicitamente: le chiavi ristrette di Kali non consentono attualmente il forwarding. L’enrollment deve distinguere la connessione MCP dalla disponibilità desktop, verificare le impronte TLS e impedire di dichiarare pronto un collegamento non collaudato. Il [piano di provisioning](desktop-provisioning.md) raccoglie prerequisiti, scelte e prove ancora da eseguire.
 
 Su Wayland l’avvio e le autorizzazioni dipendono dai portali e dalla sessione grafica. Il collaudo deve verificare il consenso sul desktop, lo stop locale da ciascun computer, la disconnessione del principale, il ritorno di mouse e tastiera alla postazione e gli appunti nelle due direzioni. La scelta `ask` o `full` per i lavori agente e il consenso desktop hanno controlli distinti.
 
@@ -42,7 +53,7 @@ Su Wayland l’avvio e le autorizzazioni dipendono dai portali e dalla sessione 
 
 La riproduzione isolata ha confermato che SIGKILL di un worker Linux avviato direttamente può lasciare vivi il programma e un figlio. Il servizio systemd contiene già i processi nel proprio cgroup. Il percorso CLI richiede una supervisione equivalente per i gruppi di processi che avvia.
 
-La correzione conserva `unconfirmed` dopo un’interruzione senza ricevuta finale. Il nuovo worker deve attendere la pulizia prima di acquisire il lavoro successivo. I test coprono avvio fallito, uscita normale, stop, crash, riavvio concorrente e ripetizione dello stesso UUID. Il supervisore adotta e pulisce anche discendenti che cambiano sessione. Il contenimento mediante cgroup resta necessario per la garanzia forte quando vengono terminati insieme worker e supervisore, o quando i discendenti assumono privilegi diversi.
+La correzione conserva `unconfirmed` dopo un’interruzione senza ricevuta finale. Il nuovo worker deve attendere la pulizia prima di acquisire il lavoro successivo. I test coprono avvio fallito, uscita normale, stop, crash, riavvio concorrente e ripetizione dello stesso UUID. Il supervisore adotta e pulisce anche discendenti che cambiano sessione. Il contenimento mediante cgroup resta necessario per la garanzia forte se il supervisore stesso riceve SIGKILL, anche quando il worker rimane vivo, o quando i discendenti assumono privilegi diversi.
 
 Per i piani serve un manifest durabile con nodi assegnati, UUID dei lavori e trasferimenti, revisione del formato e digest. La replica deve precedere gli effetti che renderebbe irrecuperabili. Un’origine diversa deve poter ritrovare gli identificativi e leggere gli esiti dai worker. L’adozione di un piano preserva le approvazioni sul destinatario e verifica la compatibilità con piani precedenti e ripetizioni concorrenti.
 
@@ -60,6 +71,12 @@ Il goal è attivo dal 22 novembre 2026. Tre sessioni Codex nuove hanno usato MCP
 
 Il [benchmark sui tre PC](benchmark-cpu-tre-nodi.md) è completato con dodici casi validi. Il totale mediano distribuito a freddo è 24,637 secondi, contro 20,491 secondi del seriale locale. Il risultato impone di includere località dei dati e costo del coordinamento nella scelta dei nodi. Le modalità `ask` sono conservate e le fixture sono state rimosse.
 
-Nel ramo di sviluppo sono implementati il runtime JSON del catalogo, il primo pannello Nodi nelle due GUI, la supervisione Linux e il recupero in lettura dei manifest batch e capability. La suite condivisa esegue 79 test con warning fatali su Linux. Proseguono acceptance Windows/Kali e review prima della distribuzione. Il runtime operativo sui tre PC resta congelato a `b470517`.
+Le PR #10 e #11 sono unite su `main`, revisione `96939c5`. La prima comprende CI, piano, collaudi e stato Windows corretto; la seconda catalogo JSON, supervisione Linux e recupero batch/capability. Le rispettive matrici hosted Windows/Linux con Python 3.10 e 3.14 passano, così come i controlli Sonar. La suite del runtime conta 90 test, con esclusioni specifiche della piattaforma. Il [collaudo dei tre worker isolati](collaudo-recupero-triade.md) verifica anche trasferimenti reali e recupero da Windows e Kali senza nuovi effetti.
 
-La PR #10 contiene CI e documentazione. La matrice hosted Linux passa con dipendenze bloccate e hash verificati. È in corso la diagnosi dello stato Windows nel profilo MCP isolato. Il provisioning desktop multinodo, lo scheduler e i trasferimenti per dataset grandi restano incrementi successivi. Ogni incremento viene verificato con test mirati, review e collaudi applicabili prima della pubblicazione.
+La PR #12 contiene il pannello Nodi e l’anteprima del layout nelle due GUI. Lo stress Windows ha rilevato un conflitto fra lettura e sostituzione atomica del registro: la correzione e il relativo ricollaudo precedono il merge. La PR #13 contiene il supervisore desktop autonomo, con prove su Windows e Linux. Le correzioni dei rilievi automatici sono in review; il componente non avvia ancora Deskflow e non è integrato nelle app.
+
+La PR #14, in bozza, aggiunge l’esecuzione generale via MCP e attende CI e review della snapshot pubblicata. Le richieste grandi hanno rivelato un blocco del ponte stdin PowerShell; il percorso Python nativo passa tre ripetizioni SSH reali per richieste di processo da 180 KiB e journal da 189 KiB, senza cambiare la configurazione SSH. La verifica riguarda Windows OpenSSH con shell predefinita `cmd.exe`; un wrapper PowerShell provato separatamente non supera lo stesso collaudo e non è dichiarato compatibile.
+
+Il runtime operativo sui tre PC resta alla revisione precedentemente verificata `b470517` fino alla distribuzione controllata. Il piano di aggiornamento deve ritirare i vecchi processi MCP prima dell’inizializzazione dei nuovi helper: i client precedenti possono altrimenti ricopiare il proprio gestore nella cartella condivisa. Le sessioni interattive già aperte richiedono il rinnovo del client; le prove con nuove sessioni sono registrate separatamente.
+
+Il provisioning desktop multinodo, lo scheduler e i trasferimenti per dataset grandi restano incrementi successivi. Ogni incremento viene verificato con test mirati, review e collaudi applicabili prima della pubblicazione.
