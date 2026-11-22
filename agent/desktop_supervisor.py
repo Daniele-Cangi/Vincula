@@ -21,10 +21,48 @@ from time import monotonic, sleep
 from uuid import UUID, uuid4
 
 import desktop_security
+import desktop_process
 
 
 ACTIVE = {"prepared", "starting", "running", "stopping"}
 MAX_MESSAGE = 65536
+
+
+def start_guardian(directory, diagnostics):
+    """Pass only an OS pipe capability, not a pathname, to the private child."""
+    reader, writer = os.pipe()
+    handle = None
+    try:
+        options = {}
+        if sys.platform == "win32":
+            import msvcrt
+            handle = msvcrt.get_osfhandle(reader)
+            os.set_handle_inheritable(handle, True)
+            startup = subprocess.STARTUPINFO()
+            startup.lpAttributeList = {"handle_list": [handle]}
+            options.update(startupinfo=startup, creationflags=subprocess.CREATE_NO_WINDOW)
+            selector, capability = "--internal-spec-handle", handle
+        else:
+            options.update(pass_fds=(reader,), start_new_session=True)
+            selector, capability = "--internal-spec-fd", reader
+        process = subprocess.Popen([sys.executable, str(Path(__file__).resolve().with_name("desktop_process.py")),
+                                    selector, str(capability)], cwd=str(directory),
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=diagnostics,
+                                   text=True, encoding="utf-8", close_fds=True, **options)
+        return process, writer
+    except (OSError, ValueError):
+        os.close(writer)
+        raise
+    finally:
+        if handle is not None:
+            os.set_handle_inheritable(handle, False)
+        os.close(reader)
+
+
+def send_specification(descriptor, frame):
+    pending = memoryview(frame)
+    while pending:
+        pending = pending[os.write(descriptor, pending):]
 
 
 def canonical_uuid(value):
@@ -267,31 +305,34 @@ class Supervisor:
             for command in self.plan["commands"]:
                 if self.stop_event.is_set():
                     return
-                log_path = session_dir / (command["name"] + ".log")
+                component_dir = session_dir / command["name"]
+                if component_dir.exists():
+                    raise FileExistsError("The component already has a history directory.")
+                desktop_security.private_directory(component_dir)
+                log_path = component_dir / "stdout.log"
                 token = secrets.token_hex(32)
-                specification = session_dir / (command["name"] + ".json")
-                atomic_json(specification, {"argv": command["argv"], "cwd": command.get("cwd"),
-                                            "log": str(log_path), "lease_seconds": self.guardian_lease,
-                                            "heartbeat_token": token})
+                frame = desktop_process.spec_frame({"argv": command["argv"], "cwd": command.get("cwd", str(Path.cwd())),
+                                                   "lease_seconds": self.guardian_lease, "heartbeat_token": token})
                 with self.lock:
                     if self.stop_event.is_set():
                         return
                     self.require_live_lease()
-                with open(session_dir / (command["name"] + "-guardian.log"), "ab", buffering=0) as diagnostics:
-                    process = subprocess.Popen([sys.executable, str(Path(__file__).with_name("desktop_process.py")), str(specification)],
-                                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=diagnostics,
-                                               text=True, encoding="utf-8", close_fds=True,
-                                               creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-                                               start_new_session=sys.platform != "win32")
-                job = {"name": command["name"], "process": process, "ready": Event(), "log": log_path,
-                       "reader_done": Event(), "input_closed": False, "finished": False,
-                       "heartbeat_token": token.encode("ascii")}
-                with self.lock:
-                    self.jobs.append(job)
+                with open(component_dir / "guardian.log", "xb", buffering=0) as diagnostics:
+                    process, writer = start_guardian(component_dir, diagnostics)
+                with os.fdopen(writer, "wb", buffering=0) as specification_pipe:
+                    job = {"name": command["name"], "process": process, "ready": Event(), "log": log_path,
+                           "reader_done": Event(), "input_closed": False, "finished": False,
+                           "heartbeat_token": token.encode("ascii")}
+                    with self.lock:
+                        self.jobs.append(job)
+                        if self.stop_event.is_set():
+                            process.stdin.close()
+                            job["input_closed"] = True
+                    Thread(target=self.read_events, args=(job,), daemon=True).start()
                     if self.stop_event.is_set():
-                        process.stdin.close()
-                        job["input_closed"] = True
-                Thread(target=self.read_events, args=(job,), daemon=True).start()
+                        return
+                    # This write can never hold the control lock or the EOF pipe.
+                    send_specification(specification_pipe.fileno(), frame)
                 expires = monotonic() + 4
                 while not job["ready"].wait(0.03):
                     if self.stop_event.is_set():
