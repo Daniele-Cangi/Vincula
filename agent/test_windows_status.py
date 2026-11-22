@@ -3,16 +3,19 @@
 
 """The local Windows status probe must also work with a filtered MCP environment."""
 
+import base64
 import os
 from pathlib import Path
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "outputs" / "Windows Dock"))
 import windows_ssh
+from server import WINDOWS_NVIDIA_LOCATOR, WINDOWS_RESOURCES
 
 
 class WindowsStatusEnvironmentTests(unittest.TestCase):
@@ -34,6 +37,17 @@ class WindowsStatusEnvironmentTests(unittest.TestCase):
             "systemroot": "C:/Windows", "userprofile": "private-profile",
             "psmodulepath": str(powershell.parent / "Modules"),
         })
+        script = self.script(call)
+        self.assertLess(script.index("$env:PSModulePath = "), script.index("Get-CimInstance"))
+        prelude = script.split("$env:PSModulePath = ", 1)[1].split("\n", 1)[0]
+        self.assertNotIn("Join-Path", prelude)
+        self.assertIn("[Text.Encoding]::UTF8.GetString", prelude)
+
+    @staticmethod
+    def script(call):
+        arguments = call.args[0]
+        payload = arguments[arguments.index("-EncodedCommand") + 1]
+        return base64.b64decode(payload).decode("utf-16le")
 
     def test_explicit_module_path_is_preserved_case_insensitively(self):
         for name, value in (("PSModulePath", "custom-modules"), ("psmodulepath", "")):
@@ -44,6 +58,37 @@ class WindowsStatusEnvironmentTests(unittest.TestCase):
                 matches = [key for key in actual if key.casefold() == "psmodulepath"]
                 self.assertEqual(len(matches), 1)
                 self.assertEqual(actual[matches[0]], value)
+                self.assertNotIn("$env:PSModulePath = ", self.script(call))
+
+
+class NvidiaLookupTests(unittest.TestCase):
+    def test_resource_query_uses_no_powershell_command_discovery(self):
+        self.assertNotIn("Get-Command", WINDOWS_RESOURCES)
+
+    @unittest.skipUnless(sys.platform == "win32", "Real Windows PowerShell locator")
+    def test_locator_skips_relative_paths_and_handles_quoted_absolute_paths(self):
+        with TemporaryDirectory(prefix="vincula-nvidia-locator-") as temporary:
+            root = Path(temporary)
+            first, second = root / "quoted tools", root / "other tools"
+            for directory in (first, second):
+                directory.mkdir()
+                (directory / "nvidia-smi.exe").touch()
+            # These files are only located; the test never executes them.
+            absent = root / "absent"
+            cases = (
+                (f';{first.relative_to(first.anchor)};{str(first)[2:]}', ""),
+                (str(absent), ""),
+                (f';relative;"{first}";{second}', str(first / "nvidia-smi.exe")),
+            )
+            for search_path, expected in cases:
+                with self.subTest(search_path=search_path):
+                    command = "$env:PATH = " + windows_ssh._ps_string(search_path) + "\n"
+                    command += WINDOWS_NVIDIA_LOCATOR + r'''
+[Console]::WriteLine('{"found":"' +
+    [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$nvidia)) + '"}')
+'''
+                    result = windows_ssh.local_status(timeout=12, command=command)
+                    self.assertEqual(base64.b64decode(result["found"]).decode("utf-8"), expected)
 
 
 if __name__ == "__main__":
