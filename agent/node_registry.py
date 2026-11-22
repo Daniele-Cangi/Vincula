@@ -4,10 +4,13 @@
 """Read the operator's node identities and SSH routes. MCP callers only supply node IDs."""
 
 from dataclasses import dataclass
+from contextlib import contextmanager
+from functools import lru_cache, wraps
 from ipaddress import ip_address
 import json
 from pathlib import Path
 import re
+import sys
 from uuid import UUID
 
 SELECTOR_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,63}$"
@@ -15,6 +18,108 @@ MAX_NODES = 64
 SELECTOR = re.compile(SELECTOR_PATTERN)
 HOST = re.compile(r"[A-Za-z0-9][A-Za-z0-9.\-]{0,252}")
 ACCOUNT = re.compile(r"[A-Za-z0-9_.\\@-]{1,120}")
+
+
+@lru_cache(maxsize=1)
+def _windows_registry_identity():
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    security = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.LocalFree.argtypes = [wintypes.LPVOID]
+    kernel.LocalFree.restype = wintypes.LPVOID
+    security.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    security.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID,
+                                            wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    security.ConvertSidToStringSidW.argtypes = [wintypes.LPVOID, ctypes.POINTER(wintypes.LPWSTR)]
+    token = wintypes.HANDLE()
+    if not security.OpenProcessToken(kernel.GetCurrentProcess(), 8, ctypes.byref(token)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        size = wintypes.DWORD()
+        security.GetTokenInformation(token, 1, None, 0, ctypes.byref(size))
+        if not size.value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        data = ctypes.create_string_buffer(size.value)
+        if not security.GetTokenInformation(token, 1, data, size.value, ctypes.byref(size)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        sid = ctypes.cast(data, ctypes.POINTER(wintypes.LPVOID))[0]
+        text = wintypes.LPWSTR()
+        if not security.ConvertSidToStringSidW(sid, ctypes.byref(text)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            return text.value
+        finally:
+            kernel.LocalFree(text)
+    finally:
+        kernel.CloseHandle(token)
+
+
+@contextmanager
+def registry_guard():
+    """Serialize Windows registry access across processes, threads and sessions."""
+    if sys.platform != "win32":
+        yield
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    class SecurityAttributes(ctypes.Structure):
+        _fields_ = [("length", wintypes.DWORD), ("descriptor", wintypes.LPVOID), ("inherit", wintypes.BOOL)]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    security = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel.CreateMutexExW.argtypes = [ctypes.POINTER(SecurityAttributes), wintypes.LPCWSTR,
+                                    wintypes.DWORD, wintypes.DWORD]
+    kernel.CreateMutexExW.restype = wintypes.HANDLE
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.ReleaseMutex.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.LocalFree.argtypes = [wintypes.LPVOID]
+    kernel.LocalFree.restype = wintypes.LPVOID
+    security.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(wintypes.LPVOID), ctypes.POINTER(wintypes.DWORD)]
+    sid = _windows_registry_identity()
+    # Same-account GUI and SSH tokens can have different integrity levels.
+    sddl = f"D:P(A;;0x00100001;;;{sid})(A;;0x00100001;;;SY)S:(ML;;NW;;;ME)"
+    descriptor = wintypes.LPVOID()
+    if not security.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, ctypes.byref(descriptor), None):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        attributes = SecurityAttributes(ctypes.sizeof(SecurityAttributes), descriptor, False)
+        mutex = kernel.CreateMutexExW(ctypes.byref(attributes), "Global\\Vincula.NodeRegistry.v1." + sid,
+                                     0, 0x00100001)  # SYNCHRONIZE | MUTEX_MODIFY_STATE
+        if not mutex:
+            raise ctypes.WinError(ctypes.get_last_error())
+    finally:
+        kernel.LocalFree(descriptor)
+    acquired = False
+    try:
+        result = kernel.WaitForSingleObject(mutex, 10000)
+        if result == 0x102:
+            raise TimeoutError("The node registry is busy.")
+        if result not in (0, 0x80):  # WAIT_OBJECT_0 or WAIT_ABANDONED; publication is atomic.
+            raise ctypes.WinError(ctypes.get_last_error())
+        acquired = True
+        yield
+    finally:
+        try:
+            if acquired and not kernel.ReleaseMutex(mutex):
+                raise ctypes.WinError(ctypes.get_last_error())
+        finally:
+            kernel.CloseHandle(mutex)
+
+
+def synchronized(operation):
+    @wraps(operation)
+    def guarded(*args, **kwargs):
+        with registry_guard():
+            return operation(*args, **kwargs)
+    return guarded
 
 
 @dataclass(frozen=True)
@@ -190,6 +295,7 @@ def from_document(config, legacy, empty_config):
     return registry
 
 
+@synchronized
 def load(path, legacy, empty_config):
     if path is None:
         return legacy

@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+import threading
 import unittest
 from unittest.mock import patch
 from uuid import uuid4
@@ -38,10 +39,117 @@ class NodeEditingTests(unittest.TestCase):
         environment['VINCULA_NODE_REGISTRY'] = str(self.path)
         return environment
 
-    def cli(self, request, *arguments):
+    def cli(self, request, *arguments, environment=None):
         return subprocess.run([sys.executable, '-S', str(Path(nodes.__file__).resolve()), *arguments],
                               input=json.dumps(request), capture_output=True, text=True,
-                              env=self.cli_environment(), timeout=20)
+                              env=self.cli_environment() if environment is None else environment, timeout=20)
+
+    def test_nested_registry_guard_preserves_reads_and_mutations(self):
+        attempting, entered = threading.Event(), threading.Event()
+        results = []
+
+        def read_from_another_thread():
+            attempting.set()
+            with node_registry.registry_guard():
+                entered.set()
+                loaded = node_registry.load(self.path, nodes.validation_legacy(),
+                                            'NUL' if sys.platform == 'win32' else '/dev/null')
+                results.append(loaded.get(self.local).label)
+
+        reader = threading.Thread(target=read_from_another_thread)
+        try:
+            with node_registry.registry_guard(), node_registry.registry_guard():
+                nodes.execute({'action': 'update', 'node_id': self.local, 'changes': {'label': 'Nested'}}, self.path)
+                reader.start()
+                self.assertTrue(attempting.wait(5))
+                if sys.platform == 'win32':
+                    self.assertFalse(entered.wait(.1))
+        finally:
+            if reader.ident is not None:
+                reader.join(timeout=5)
+        self.assertFalse(reader.is_alive())
+        self.assertEqual(results, ['Nested'])
+
+    def test_registry_override_bootstraps_an_absent_nested_path(self):
+        missing = self.path.parent.parent / 'new registry Ω' / 'nested' / 'nodes.json'
+        environment = dict(self.cli_environment(), VINCULA_NODE_REGISTRY=str(missing))
+        with patch.dict(os.environ, environment, clear=True):
+            self.assertEqual(nodes.registry_path(), missing.resolve())
+        result = self.cli({'action': 'add', 'node': self.local_node, 'local': True}, environment=environment)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(nodes.snapshot(missing)['registry']['local'], self.local)
+
+    def test_registry_override_preserves_a_file_symlink(self):
+        alias = self.path.parent / 'registry-alias.json'
+        try:
+            alias.symlink_to(self.path)
+        except OSError as error:
+            if sys.platform == 'win32' and getattr(error, 'winerror', None) == 1314:
+                self.skipTest('The Windows account cannot create symlinks.')
+            raise
+        environment = dict(self.cli_environment(), VINCULA_NODE_REGISTRY=str(alias))
+        with patch.dict(os.environ, environment, clear=True):
+            self.assertEqual(nodes.registry_path(), self.path)
+        result = self.cli({'action': 'update', 'node_id': self.local, 'changes': {'label': 'Via alias'}},
+                          environment=environment)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(alias.is_symlink())
+        self.assertEqual(nodes.snapshot(self.path)['registry']['nodes'][0]['label'], 'Via alias')
+
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows short-name aliases')
+    def test_windows_registry_override_resolves_short_name_alias(self):
+        import ctypes
+
+        function = ctypes.WinDLL('kernel32', use_last_error=True).GetShortPathNameW
+        function.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
+        function.restype = ctypes.c_uint32
+        buffer = ctypes.create_unicode_buffer(32768)
+        if not function(str(self.path), buffer, len(buffer)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        environment = dict(self.cli_environment(), VINCULA_NODE_REGISTRY=buffer.value)
+        with patch.dict(os.environ, environment, clear=True):
+            self.assertEqual(nodes.registry_path(), self.path)
+        result = self.cli({'action': 'list'}, environment=environment)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout), nodes.snapshot(self.path))
+
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows abandoned mutex ownership')
+    def test_windows_registry_guard_recovers_an_abandoned_owner(self):
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.OpenMutexW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+        kernel.OpenMutexW.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        code = ('import os,sys\n'
+                f'sys.path.insert(0, {str(Path(nodes.__file__).resolve().parent)!r})\n'
+                'import node_registry\n'
+                'with node_registry.registry_guard():\n'
+                '    print("LOCKED", flush=True)\n'
+                '    sys.stdin.buffer.read(1)\n'
+                '    os._exit(0)\n')
+        child = subprocess.Popen([sys.executable, '-S', '-u', '-c', code], stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.cli_environment())
+        keep_alive = None
+        try:
+            self.assertEqual(child.stdout.readline().rstrip(b'\r\n'), b'LOCKED')
+            name = 'Global\\Vincula.NodeRegistry.v1.' + node_registry._windows_registry_identity()
+            keep_alive = kernel.OpenMutexW(0x00100000, False, name)
+            if not keep_alive:
+                raise ctypes.WinError(ctypes.get_last_error())
+            _, errors = child.communicate(input=b'x', timeout=5)
+            self.assertEqual(child.returncode, 0, errors)
+            with node_registry.registry_guard():
+                self.assertEqual(nodes.snapshot(self.path)['registry']['local'], self.local)
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
+            for stream in (child.stdin, child.stdout, child.stderr):
+                stream.close()
+            if keep_alive:
+                kernel.CloseHandle(keep_alive)
 
     def test_crud_keeps_stable_identity_and_guards_desktop_references(self):
         initial = nodes.execute({'action': 'list'}, self.path)
@@ -116,17 +224,29 @@ class NodeEditingTests(unittest.TestCase):
                                             'family': 'linux', 'aliases': [f'peer{i}']}) for i in range(5)]
         command = [sys.executable, '-S', str(Path(nodes.__file__).resolve())]
         running = []
-        for request in requests:
-            process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                       stderr=subprocess.PIPE, text=True, env=self.cli_environment())
-            process.stdin.write(json.dumps(request))
-            process.stdin.close()
-            running.append(process)
-        for process in running:
-            self.assertEqual(process.wait(timeout=20), 0)
-            self.assertTrue(json.loads(process.stdout.read())['ok'])
-            process.stdout.close()
-            process.stderr.close()
+        results = []
+        try:
+            for request in requests:
+                process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                           stderr=subprocess.PIPE, text=True, env=self.cli_environment())
+                running.append(process)
+                process.stdin.write(json.dumps(request))
+                process.stdin.close()
+                process.stdin = None
+            for process in running:
+                output, errors = process.communicate(timeout=20)
+                results.append({'returncode': process.returncode, 'stdout': output, 'stderr': errors})
+        finally:
+            for process in running:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=5)
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    if stream is not None:
+                        stream.close()
+        for result in results:
+            self.assertEqual(result['returncode'], 0, results)
+            self.assertTrue(json.loads(result['stdout'])['ok'], results)
         saved = nodes.snapshot(self.path)['registry']['nodes']
         self.assertEqual({node['id'] for node in saved}, {self.local, *(r['node']['id'] for r in requests)})
 
