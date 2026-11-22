@@ -13,7 +13,9 @@ script ed espongono il desktop remoto e la condivisione di mouse e tastiera.
 ## Vincula Agent Infrastructure
 
 Il [server MCP di Vincula](docs/agent-mcp.md) permette a un agente di scoprire
-i due nodi configurati e consultarne lo stato, partendo da Windows o da Ubuntu.
+i nodi configurati e consultarne lo stato da Windows o Linux. Il [registro
+dei nodi](docs/registro-nodi.md) consente di aggiungere altre macchine
+raggiungibili via SSH.
 
 Sul nodo di destinazione puoi scegliere **Richiedi approvazione** oppure
 **Accesso completo ai programmi autorizzati**. I lavori continuano anche

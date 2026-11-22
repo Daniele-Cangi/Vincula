@@ -24,8 +24,14 @@ def load(run_id, request=None):
     return json.loads(row["plan"])
 
 
-def make_plan(run_id, request, providers, origin):
+def make_plan(run_id, request, providers, origin, resolve=None):
     parts = request["parts"]
+    if resolve is not None:
+        parts = [
+            dict(part, node_id=resolve(part["node_id"]).node_id,
+                 files=[dict(item, node_id=resolve(item["node_id"]).node_id) for item in part["files"]])
+            for part in parts
+        ]
     nodes = {part["node_id"] for part in parts}
     if len(nodes) != len(parts):
         raise ValueError("Specify at most one capability part per node.")

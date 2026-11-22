@@ -21,6 +21,7 @@ ID = re.compile(r"[a-z][a-z0-9_-]{0,23}\.[a-z][a-z0-9_-]{0,23}")
 TOKEN = re.compile(r"[a-z][a-z0-9_-]{0,47}")
 EXTENSION = re.compile(r"\.[a-z0-9]{1,12}")
 DIGEST = re.compile(r"[0-9a-f]{64}")
+MAX_PARTS = 16
 MAX_FILES = 4
 MAX_PATH_BYTES = 240
 MAX_PARAMETER_BYTES = 512
@@ -202,7 +203,7 @@ def queue(db, files, mode, job_id, capability_id, revision, inputs, parameters):
     contract = definition["contract"]
     if not isinstance(inputs, list) or not all(
         isinstance(item, dict) and {"index", "root", "path"} <= item.keys() <= {"index", "root", "path", "sha256"}
-        and type(item["index"]) is int and 0 <= item["index"] < 2 * MAX_FILES
+        and type(item["index"]) is int and 0 <= item["index"] < MAX_PARTS * MAX_FILES
         and isinstance(item["root"], str) and TOKEN.fullmatch(item["root"])
         and ("sha256" not in item or (isinstance(item["sha256"], str) and DIGEST.fullmatch(item["sha256"])))
         for item in inputs
