@@ -46,7 +46,7 @@ try {
         @{ name = $_.Name; vram_total_bytes = $null; vram_available_bytes = $null }
     })
 } catch {}
-$nvidia = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue
+$nvidia = Get-Command nvidia-smi.exe -CommandType Application -ErrorAction SilentlyContinue
 if ($nvidia) {
     try {
         $info = New-Object Diagnostics.ProcessStartInfo
