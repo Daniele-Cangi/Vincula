@@ -84,3 +84,11 @@ chiave nell'agente OpenSSH della sessione e avvia Windows Dock con lo stesso
 socket.
     export SSH_AUTH_SOCK="$XDG_RUNTIME_DIR/openssh_agent"
     ssh-add ~/.ssh/id_ed25519_windows_dock
+
+Catalogo dei nodi
+Mantieni node_catalog.py accanto a windows-dock.py e apri la scheda Nodi.
+Il runtime comune si individua tramite VINCULA_RUNTIME, nella checkout oppure
+in ~/.local/share/vincula/runtime. Per la distribuzione consulta docs/catalogo-gui.md.
+Il runtime minimo include agent/nodes.py, node_registry.py e desktop_layout.py.
+Layout desktop e prerequisiti prepara l'anteprima dal catalogo; non attiva
+ancora la condivisione multinodo. Le altre schede usano il profilo a due PC.

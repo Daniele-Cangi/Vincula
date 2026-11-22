@@ -112,7 +112,7 @@ $dest = Join-Path $env:LOCALAPPDATA 'Linux Dock'
 [void][IO.Directory]::CreateDirectory($dest)
 $source = [IO.File]::ReadAllText((Resolve-Path 'outputs/Linux Dock/LinuxDock.cs').Path)
 Add-Type -TypeDefinition $source -OutputType WindowsApplication `
-  -ReferencedAssemblies 'System.dll','System.Core.dll','System.Drawing.dll','System.Windows.Forms.dll' `
+  -ReferencedAssemblies 'System.dll','System.Core.dll','System.Drawing.dll','System.Windows.Forms.dll','System.Web.Extensions.dll' `
   -OutputAssembly (Join-Path $dest 'Linux Dock.exe')
 Copy-Item 'outputs/Linux Dock/linux-dock.ico' $dest
 Copy-Item 'outputs/Linux Dock/linux-dock-icon.png' $dest

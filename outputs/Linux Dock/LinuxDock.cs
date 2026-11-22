@@ -3,6 +3,8 @@
 
 using System;
 using System.Diagnostics;
+using System.Collections.Generic;
+using System.Web.Script.Serialization;
 using System.Drawing;
 using System.IO;
 using System.Linq;
@@ -629,6 +631,110 @@ df -h -x tmpfs -x devtmpfs -x squashfs --output=target,used,avail,pcent"));
     }
 }
 
+internal static class NodeCatalog
+{
+    private static string RuntimeScript()
+    {
+        string configured = Environment.GetEnvironmentVariable("VINCULA_RUNTIME");
+        string app = AppDomain.CurrentDomain.BaseDirectory;
+        string standard = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Vincula", "runtime");
+        string[] roots = String.IsNullOrWhiteSpace(configured)
+            ? new[] { app, Path.GetFullPath(Path.Combine(app, "..", "..")), standard }
+            : new[] { configured };
+        foreach (string root in roots)
+        {
+            string candidate = Path.Combine(root, "agent", "nodes.py");
+            if (File.Exists(candidate) && File.Exists(Path.Combine(root, "agent", "node_registry.py"))
+                && File.Exists(Path.Combine(root, "agent", "desktop_layout.py")))
+                return candidate;
+        }
+        throw new IOException("Runtime dei nodi incompleto. Installa nodes.py, node_registry.py e desktop_layout.py "
+            + "nella cartella agent dell’app oppure imposta VINCULA_RUNTIME alla radice di Vincula.");
+    }
+
+    internal static Dictionary<string, object> Map(object value)
+    {
+        var map = value as Dictionary<string, object>;
+        if (map == null)
+            throw new IOException("Risposta del runtime non valida.");
+        return map;
+    }
+
+    internal static string Text(Dictionary<string, object> map, string key, string fallback = "")
+    {
+        object value;
+        return map.TryGetValue(key, out value) && value != null ? Convert.ToString(value) : fallback;
+    }
+
+    internal static object[] Items(object value)
+    {
+        var items = value as object[];
+        if (items == null)
+            throw new IOException("Elenco dei nodi non valido.");
+        return items;
+    }
+
+    internal static bool HasLegacyProfile()
+    {
+        string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Linux Dock", "ssh_config");
+        try
+        {
+            return File.Exists(path) && File.ReadAllLines(path).Any(line =>
+                Regex.IsMatch(line, @"^\s*Host\s+", RegexOptions.IgnoreCase)
+                && Regex.Split(line.Trim(), @"\s+").Skip(1).Any(host =>
+                    String.Equals(host, "linux-dock", StringComparison.OrdinalIgnoreCase)));
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+    }
+
+    internal static Dictionary<string, object> Request(Dictionary<string, object> request)
+    {
+        var json = new JavaScriptSerializer();
+        string interpreter = Environment.GetEnvironmentVariable("VINCULA_PYTHON");
+        bool launcher = String.IsNullOrWhiteSpace(interpreter);
+        var info = new ProcessStartInfo(launcher ? "py.exe" : interpreter,
+            (launcher ? "-3 " : "") + "\"" + RuntimeScript() + "\"") {
+            UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+            StandardOutputEncoding = new UTF8Encoding(false), StandardErrorEncoding = new UTF8Encoding(false)
+        };
+        using (Process process = Process.Start(info))
+        {
+            Task<string> stdout = process.StandardOutput.ReadToEndAsync();
+            Task<string> stderr = process.StandardError.ReadToEndAsync();
+            string payload = Regex.Replace(json.Serialize(request), @"[^\x00-\x7F]",
+                match => "\\u" + ((int)match.Value[0]).ToString("x4"));
+            process.StandardInput.Write(payload);
+            process.StandardInput.Close();
+            if (!process.WaitForExit(15000))
+            {
+                process.Kill();
+                throw new IOException("Il catalogo non ha risposto entro 15 secondi. Aggiorna l’elenco per verificarne lo stato.");
+            }
+            if (!Task.WaitAll(new Task[] { stdout, stderr }, 1000))
+                throw new IOException("Risposta del runtime incompleta.");
+            Dictionary<string, object> reply;
+            try { reply = Map(json.DeserializeObject(stdout.Result)); }
+            catch (ArgumentException) { throw new IOException("Risposta del runtime non valida. Verifica Python e l’installazione di Vincula."); }
+            object ok;
+            if (!reply.TryGetValue("ok", out ok) || !(ok is bool) || !(bool)ok)
+            {
+                object error;
+                var detail = reply.TryGetValue("error", out error) ? Map(error) : new Dictionary<string, object>();
+                if (Text(detail, "code") == "conflict")
+                    throw new IOException("Il catalogo è cambiato. Aggiorna l’elenco e riapri il modulo prima di salvare.");
+                throw new IOException("Catalogo non aggiornato. " + Text(detail, "message", "Errore del runtime."));
+            }
+            if (process.ExitCode != 0 || !reply.ContainsKey("registry") || !reply.ContainsKey("revision"))
+                throw new IOException("Risposta del runtime incompleta.");
+            return reply;
+        }
+    }
+}
+
 internal sealed class DockWindow : Form
 {
     private const string InputSettings = @"HKEY_CURRENT_USER\Software\Vincula\Linux Dock";
@@ -657,6 +763,15 @@ internal sealed class DockWindow : Form
     private readonly Label cpuMetric = MetricValue();
     private readonly Label ramMetric = MetricValue();
     private bool busy;
+    private bool nodesBusy;
+    private bool nodesLoaded;
+    private Dictionary<string, object> nodesSnapshot;
+    private readonly ListView nodeList = new ListView();
+    private readonly Label nodesStatus = new Label();
+    private Button nodeAdd, nodeEdit, nodeRemove, nodeRefresh, nodeDesktop;
+    private readonly TabPage nodesPage;
+    private NodeEditor nodeEditor;
+    private DesktopEditor desktopEditor;
     private readonly Button desktopButton;
     private readonly Button inputHeaderButton;
     private readonly ComboBox inputSide = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList };
@@ -824,7 +939,7 @@ internal sealed class DockWindow : Form
                 StopInput();
             if (desktopSession != null)
                 desktopSession.Cancel();
-            if (busy || desktopSession != null || inputSession != null)
+            if (busy || nodesBusy || desktopSession != null || inputSession != null)
             {
                 closePending = true;
                 args.Cancel = true;
@@ -889,6 +1004,12 @@ internal sealed class DockWindow : Form
         tabs.TabPages.Add(BuildScripts());
         inputPage = BuildInput();
         tabs.TabPages.Add(inputPage);
+        nodesPage = BuildNodes();
+        tabs.TabPages.Add(nodesPage);
+        tabs.SelectedIndexChanged += delegate {
+            if (tabs.SelectedTab == nodesPage && !nodesLoaded && !nodesBusy)
+                StartCatalog(new Dictionary<string, object> { { "action", "list" } });
+        };
         layout.Controls.Add(tabs, 0, 1);
 
         footer.Dock = DockStyle.Fill;
@@ -954,8 +1075,556 @@ internal sealed class DockWindow : Form
 
     private void TryAutomaticInput()
     {
-        if (automaticInputWanted && !closePending && !busy && inputSession == null && desktopSession == null)
+        if (automaticInputWanted && !closePending && !busy && !nodesBusy && inputSession == null && desktopSession == null)
             StartInput(true);
+    }
+
+    private TabPage BuildNodes()
+    {
+        var page = Page("Nodi");
+        var content = PageLayout(page, 4);
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
+        content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 43));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 78));
+        nodesStatus.Text = "Aggiorna il catalogo per leggere i computer registrati.";
+        nodesStatus.Dock = DockStyle.Fill;
+        nodesStatus.AutoEllipsis = true;
+        nodesStatus.ForeColor = Muted;
+        nodesStatus.TextAlign = ContentAlignment.MiddleLeft;
+        content.Controls.Add(nodesStatus, 0, 0);
+        nodeList.View = View.Details;
+        nodeList.FullRowSelect = true;
+        nodeList.MultiSelect = false;
+        nodeList.HideSelection = false;
+        nodeList.Dock = DockStyle.Fill;
+        nodeList.BackColor = Inset;
+        nodeList.ForeColor = Ink;
+        nodeList.Columns.Add("Computer", 190);
+        nodeList.Columns.Add("Sistema", 85);
+        nodeList.Columns.Add("UUID", 250);
+        nodeList.Columns.Add("Collegamento", 145);
+        nodeList.SelectedIndexChanged += delegate { SetCatalogButtons(); };
+        content.Controls.Add(nodeList, 0, 1);
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+        nodeAdd = ActionButton("Aggiungi", () => EditNode(null));
+        nodeEdit = ActionButton("Modifica", () => EditNode(SelectedNode()), false);
+        nodeRemove = ActionButton("Rimuovi", RemoveNode, false);
+        nodeRefresh = ActionButton("Aggiorna", () => StartCatalog(new Dictionary<string, object> { { "action", "list" } }), false);
+        actions.Controls.AddRange(new Control[] { nodeAdd, nodeEdit, nodeRemove, nodeRefresh });
+        content.Controls.Add(actions, 0, 2);
+        var desktopActions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
+        desktopActions.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        desktopActions.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        nodeDesktop = ActionButton("Layout desktop e prerequisiti", EditDesktop, false);
+        nodeDesktop.Anchor = AnchorStyles.Left;
+        desktopActions.Controls.Add(nodeDesktop, 0, 0);
+        desktopActions.Controls.Add(new Label { Text = "Catalogo e layout: le altre schede usano ancora il profilo a due PC.", Dock = DockStyle.Fill,
+            ForeColor = Muted, TextAlign = ContentAlignment.MiddleLeft }, 0, 1);
+        content.Controls.Add(desktopActions, 0, 3);
+        SetCatalogButtons();
+        return page;
+    }
+
+    private Dictionary<string, object> SelectedNode()
+    {
+        return nodeList.SelectedItems.Count == 0 ? null
+            : (Dictionary<string, object>)nodeList.SelectedItems[0].Tag;
+    }
+
+    private void SetCatalogButtons()
+    {
+        if (nodeAdd == null)
+            return;
+        var selected = SelectedNode();
+        bool available = nodesSnapshot != null && !nodesBusy;
+        var registry = nodesSnapshot != null && nodesSnapshot["registry"] != null
+            ? NodeCatalog.Map(nodesSnapshot["registry"]) : null;
+        nodeAdd.Enabled = available;
+        nodeAdd.Text = available && registry == null ? "Registra questo PC" : "Aggiungi";
+        nodeEdit.Enabled = available && selected != null;
+        nodeRemove.Enabled = available && selected != null && registry != null
+            && NodeCatalog.Text(selected, "id") != NodeCatalog.Text(registry, "local");
+        nodeRefresh.Enabled = !nodesBusy;
+        nodeList.Enabled = !nodesBusy;
+        if (nodeDesktop != null)
+            nodeDesktop.Enabled = available && registry != null;
+    }
+
+    private void ShowCatalog(Dictionary<string, object> reply)
+    {
+        var previous = SelectedNode();
+        nodesSnapshot = reply;
+        nodesLoaded = true;
+        nodeList.Items.Clear();
+        if (reply["registry"] == null)
+        {
+            nodesStatus.Text = "Profilo a due PC. Registra questo computer per creare il catalogo.";
+            return;
+        }
+        var registry = NodeCatalog.Map(reply["registry"]);
+        foreach (object entry in NodeCatalog.Items(registry["nodes"]))
+        {
+            var node = NodeCatalog.Map(entry);
+            bool local = NodeCatalog.Text(node, "id") == NodeCatalog.Text(registry, "local");
+            string network = local ? "Locale" : "Da configurare";
+            if (!local && node.ContainsKey("ssh"))
+                network = NodeCatalog.Text(NodeCatalog.Map(node["ssh"]), "network", "SSH");
+            else if (!local && node.ContainsKey("legacy_route"))
+                network = "Profilo SSH esistente";
+            var item = new ListViewItem(NodeCatalog.Text(node, "label"));
+            item.SubItems.Add(NodeCatalog.Text(node, "family") == "windows" ? "Windows" : "Linux");
+            item.SubItems.Add(NodeCatalog.Text(node, "id"));
+            item.SubItems.Add(network);
+            item.Tag = node;
+            nodeList.Items.Add(item);
+            if (previous != null && NodeCatalog.Text(previous, "id") == NodeCatalog.Text(node, "id"))
+                item.Selected = true;
+        }
+        nodesStatus.Text = nodeList.Items.Count + " computer nel catalogo.";
+    }
+
+    private async void StartCatalog(Dictionary<string, object> request, Action saved = null, Action<string> failed = null)
+    {
+        if (nodesBusy)
+            return;
+        nodesBusy = true;
+        nodesStatus.Text = "Aggiornamento del catalogo…";
+        nodesStatus.ForeColor = Muted;
+        SetCatalogButtons();
+        try
+        {
+            var reply = await Task.Run(() => NodeCatalog.Request(request));
+            ShowCatalog(reply);
+            if (saved != null)
+                saved();
+        }
+        catch (Exception error)
+        {
+            nodesStatus.Text = error.Message;
+            nodesStatus.ForeColor = Danger;
+            if (failed != null)
+                failed(error.Message);
+        }
+        finally
+        {
+            nodesBusy = false;
+            SetCatalogButtons();
+            FinishClose();
+        }
+    }
+
+    private void EditNode(Dictionary<string, object> node)
+    {
+        if (nodesSnapshot == null || nodesBusy)
+            return;
+        if (nodeEditor != null)
+        {
+            nodeEditor.Activate();
+            return;
+        }
+        nodeEditor = new NodeEditor(this, node);
+        nodeEditor.FormClosed += delegate { nodeEditor = null; };
+        nodeEditor.Show(this);
+    }
+
+    private void RemoveNode()
+    {
+        var node = SelectedNode();
+        if (node == null || nodesSnapshot == null)
+            return;
+        StartCatalog(new Dictionary<string, object> {
+            { "action", "remove" }, { "node_id", node["id"] },
+            { "expected_revision", nodesSnapshot["revision"] }
+        });
+    }
+
+    private void EditDesktop()
+    {
+        if (nodesBusy || nodesSnapshot == null || nodesSnapshot["registry"] == null)
+            return;
+        if (desktopEditor != null)
+        {
+            desktopEditor.Activate();
+            return;
+        }
+        desktopEditor = new DesktopEditor(this);
+        desktopEditor.FormClosed += delegate { desktopEditor = null; };
+        desktopEditor.Show(this);
+    }
+
+    private sealed class DesktopEditor : Form
+    {
+        private sealed class Choice
+        {
+            internal string Id, Label;
+            public override string ToString() { return Label + " · " + Id.Substring(0, 8); }
+        }
+        private sealed class Member
+        {
+            internal string Id;
+            internal CheckBox Selected;
+            internal TextBox X, Y;
+        }
+        private readonly DockWindow owner;
+        private readonly object revision;
+        private readonly ComboBox primary = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
+        private readonly CheckBox clipboard = new DockCheckBox { Text = "Condividi gli appunti tra i membri", AutoSize = true };
+        private readonly List<Member> members = new List<Member>();
+        private readonly List<Button> buttons = new List<Button>();
+        private readonly TextBox preview = ConsoleBox();
+        private readonly Label message = new Label { Dock = DockStyle.Fill, AutoEllipsis = true };
+        private bool saving;
+
+        internal DesktopEditor(DockWindow parent)
+        {
+            owner = parent;
+            revision = parent.nodesSnapshot["revision"];
+            Text = "Layout desktop — anteprima";
+            BackColor = Canvas;
+            ForeColor = Ink;
+            Font = parent.Font;
+            MinimumSize = new Size(650, 580);
+            ClientSize = new Size(810, 720);
+            StartPosition = FormStartPosition.CenterParent;
+            var registry = NodeCatalog.Map(parent.nodesSnapshot["registry"]);
+            var profile = registry.ContainsKey("desktop") ? NodeCatalog.Map(registry["desktop"]) : null;
+            string primaryId = profile == null ? NodeCatalog.Text(registry, "local") : NodeCatalog.Text(profile, "primary");
+            clipboard.Checked = profile == null || (bool)profile["clipboard"];
+            var positions = new Dictionary<string, Dictionary<string, object>>();
+            if (profile != null)
+                foreach (object item in NodeCatalog.Items(profile["members"]))
+                {
+                    var entry = NodeCatalog.Map(item);
+                    positions[NodeCatalog.Text(entry, "node_id")] = entry;
+                }
+            var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 7, Padding = new Padding(16) };
+            foreach (float height in new float[] { 57, 38, 33 })
+                body.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
+            body.RowStyles.Add(new RowStyle(SizeType.Percent, 40));
+            body.RowStyles.Add(new RowStyle(SizeType.Percent, 60));
+            body.RowStyles.Add(new RowStyle(SizeType.Absolute, 45));
+            body.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+            Controls.Add(body);
+            body.Controls.Add(new Label { Text = "Principale: PC con mouse e tastiera. Celle adiacenti: X verso destra, Y verso il basso.\nOgni PC rappresenta il suo desktop logico. Il salvataggio non avvia la condivisione.", Dock = DockStyle.Fill, ForeColor = Muted }, 0, 0);
+            primary.BackColor = Inset;
+            primary.ForeColor = Ink;
+            primary.FlatStyle = FlatStyle.Flat;
+            body.Controls.Add(primary, 0, 1);
+            body.Controls.Add(clipboard, 0, 2);
+            var viewport = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+            var grid = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, RowCount = 1 };
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70));
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70));
+            grid.Controls.Add(new Label { Text = "Membro", AutoSize = true }, 0, 0);
+            grid.Controls.Add(new Label { Text = "X", AutoSize = true }, 1, 0);
+            grid.Controls.Add(new Label { Text = "Y", AutoSize = true }, 2, 0);
+            viewport.Controls.Add(grid);
+            body.Controls.Add(viewport, 0, 3);
+            foreach (object item in NodeCatalog.Items(registry["nodes"]))
+            {
+                var node = NodeCatalog.Map(item);
+                string id = NodeCatalog.Text(node, "id");
+                var choice = new Choice { Id = id, Label = NodeCatalog.Text(node, "label") };
+                primary.Items.Add(choice);
+                if (id == primaryId)
+                    primary.SelectedItem = choice;
+                Dictionary<string, object> position;
+                positions.TryGetValue(id, out position);
+                bool selected = position != null || profile == null && id == primaryId;
+                var member = new Member { Id = id,
+                    Selected = new DockCheckBox { Text = choice.ToString(), Checked = selected, AutoSize = true },
+                    X = new TextBox { Text = position == null ? "0" : NodeCatalog.Text(position, "x"), Dock = DockStyle.Fill, BackColor = Inset, ForeColor = Ink },
+                    Y = new TextBox { Text = position == null ? "0" : NodeCatalog.Text(position, "y"), Dock = DockStyle.Fill, BackColor = Inset, ForeColor = Ink } };
+                int row = grid.RowCount++;
+                grid.Controls.Add(member.Selected, 0, row);
+                grid.Controls.Add(member.X, 1, row);
+                grid.Controls.Add(member.Y, 2, row);
+                members.Add(member);
+            }
+            body.Controls.Add(preview, 0, 4);
+            message.Text = "Anteprima e controlli locali; accesso remoto e TLS restano da verificare.";
+            message.ForeColor = Muted;
+            body.Controls.Add(message, 0, 5);
+            var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+            buttons.Add(ActionButton("Anteprima", () => Submit("desktop_preview")));
+            buttons.Add(ActionButton("Salva layout", () => Submit("desktop"), false));
+            buttons.Add(ActionButton("Rimuovi layout", () => Submit("desktop", true), false));
+            buttons.Add(ActionButton("Chiudi", Close, false));
+            foreach (var button in buttons)
+                actions.Controls.Add(button);
+            body.Controls.Add(actions, 0, 6);
+            FormClosing += delegate(object sender, FormClosingEventArgs args) { args.Cancel = saving; };
+        }
+
+        private Dictionary<string, object> Profile()
+        {
+            var selected = new List<object>();
+            foreach (var member in members)
+                if (member.Selected.Checked)
+                {
+                    int x, y;
+                    if (!Int32.TryParse(member.X.Text, out x) || !Int32.TryParse(member.Y.Text, out y))
+                        throw new ArgumentException("Le coordinate X e Y devono essere numeri interi a 32 bit.");
+                    selected.Add(new Dictionary<string, object> { { "node_id", member.Id }, { "x", x }, { "y", y } });
+                }
+            var choice = primary.SelectedItem as Choice;
+            return new Dictionary<string, object> { { "primary", choice == null ? null : choice.Id },
+                { "members", selected }, { "clipboard", clipboard.Checked } };
+        }
+
+        private void Finish(string error = null)
+        {
+            saving = false;
+            foreach (var button in buttons)
+                button.Enabled = true;
+            if (error != null)
+            {
+                message.Text = error;
+                return;
+            }
+            var snapshot = owner.nodesSnapshot;
+            if (!snapshot.ContainsKey("desktop_preview"))
+            {
+                Close();
+                return;
+            }
+            var result = NodeCatalog.Map(snapshot["desktop_preview"]);
+            var report = NodeCatalog.Map(result["preflight"]);
+            var names = new Dictionary<string, string>();
+            foreach (object item in NodeCatalog.Items(NodeCatalog.Map(snapshot["registry"])["nodes"]))
+            {
+                var node = NodeCatalog.Map(item);
+                names[NodeCatalog.Text(node, "id")] = NodeCatalog.Text(node, "label");
+            }
+            var lines = new StringBuilder(NodeCatalog.Text(report, "summary") + "\r\n\r\n");
+            foreach (object item in NodeCatalog.Items(report["checks"]))
+            {
+                var check = NodeCatalog.Map(item);
+                string name;
+                if (!names.TryGetValue(NodeCatalog.Text(check, "node_id"), out name))
+                    name = "Vincula";
+                lines.AppendLine("[" + NodeCatalog.Text(check, "status") + "] " + name + ": " + NodeCatalog.Text(check, "message"));
+            }
+            lines.AppendLine("\r\nLAYOUT DESKFLOW\r\n" + NodeCatalog.Text(result, "layout"));
+            lines.AppendLine("OPZIONI PREVISTE (non avviabili)\r\n" + new JavaScriptSerializer().Serialize(result["server_options"]));
+            preview.Text = lines.ToString();
+            message.Text = "Layout valido. Condivisione multinodo non attiva: consulta i prerequisiti sopra.";
+        }
+
+        private void Submit(string action, bool clear = false)
+        {
+            if (saving || owner.nodesBusy)
+                return;
+            object profile;
+            try { profile = clear ? null : Profile(); }
+            catch (ArgumentException error) { message.Text = error.Message; return; }
+            saving = true;
+            foreach (var button in buttons)
+                button.Enabled = false;
+            owner.StartCatalog(new Dictionary<string, object> { { "action", action }, { "desktop", profile },
+                { "expected_revision", revision } }, () => Finish(), error => Finish(error));
+        }
+    }
+
+    private sealed class NodeEditor : Form
+    {
+        private readonly DockWindow owner;
+        private readonly Dictionary<string, object> node;
+        private readonly Dictionary<string, TextBox> fields = new Dictionary<string, TextBox>();
+        private readonly ComboBox family = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList };
+        private readonly ComboBox route = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList };
+        private readonly TableLayoutPanel form = new TableLayoutPanel();
+        private readonly Label message = new Label();
+        private readonly object revision;
+        private readonly bool local;
+        private readonly Button save;
+        private bool saving;
+
+        internal NodeEditor(DockWindow parent, Dictionary<string, object> existing)
+        {
+            owner = parent;
+            node = existing;
+            revision = parent.nodesSnapshot["revision"];
+            var registry = parent.nodesSnapshot["registry"] == null ? null : NodeCatalog.Map(parent.nodesSnapshot["registry"]);
+            local = registry == null || existing != null
+                && NodeCatalog.Text(existing, "id") == NodeCatalog.Text(registry, "local");
+            var current = existing ?? new Dictionary<string, object>();
+            var ssh = current.ContainsKey("ssh") ? NodeCatalog.Map(current["ssh"]) : new Dictionary<string, object>();
+            Text = existing == null ? "Aggiungi nodo" : "Modifica nodo";
+            BackColor = Canvas;
+            ForeColor = Ink;
+            Font = parent.Font;
+            MinimumSize = new Size(500, 520);
+            ClientSize = new Size(580, 680);
+            StartPosition = FormStartPosition.CenterParent;
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(16) };
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 66));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+            Controls.Add(layout);
+            var viewport = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+            form.Dock = DockStyle.Top;
+            form.ColumnCount = 1;
+            form.AutoSize = true;
+            form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            viewport.Controls.Add(form);
+            layout.Controls.Add(viewport, 0, 0);
+            string suggestedId = "";
+            if (local)
+                suggestedId = Guid.NewGuid().ToString();
+            AddField("id", "UUID del computer", NodeCatalog.Text(current, "id", suggestedId), existing == null);
+            AddField("label", "Nome", NodeCatalog.Text(current, "label"));
+            family.Items.AddRange(new object[] { "Linux", "Windows" });
+            family.SelectedIndex = NodeCatalog.Text(current, "family", "windows") == "windows" ? 1 : 0;
+            family.Enabled = !local;
+            AddChoice("Sistema", family);
+            if (local)
+                route.Items.Add("Questo computer");
+            else
+            {
+                route.Items.AddRange(new object[] { "Da configurare", "SSH esplicito" });
+                if (current.ContainsKey("legacy_route"))
+                    route.Items.Add("Profilo SSH esistente");
+            }
+            route.SelectedIndex = 0;
+            if (!local && current.ContainsKey("ssh"))
+                route.SelectedIndex = 1;
+            if (!local && current.ContainsKey("legacy_route"))
+                route.SelectedIndex = 2;
+            AddChoice("Collegamento", route);
+            AddField("host", "Indirizzo SSH", NodeCatalog.Text(ssh, "host"));
+            AddField("port", "Porta SSH", NodeCatalog.Text(ssh, "port", "22"));
+            AddField("user", "Utente SSH", NodeCatalog.Text(ssh, "user"));
+            AddField("identity_file", "Chiave SSH su questo PC", NodeCatalog.Text(ssh, "identity_file"));
+            AddField("known_hosts_file", "known_hosts su questo PC", NodeCatalog.Text(ssh, "known_hosts_file"));
+            AddField("network", "Rete", NodeCatalog.Text(ssh, "network"));
+            route.SelectedIndexChanged += delegate { SetRouteFields(); };
+            SetRouteFields();
+            message.Text = local ? "Registra l’identità di questo computer."
+                : "Usa l’UUID verificato del computer remoto. Il salvataggio configura il percorso, senza collaudare SSH.";
+            message.ForeColor = Muted;
+            message.Dock = DockStyle.Fill;
+            layout.Controls.Add(message, 0, 1);
+            var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+            actions.Controls.Add(ActionButton("Chiudi", Close, false));
+            save = ActionButton("Salva nodo", Save);
+            actions.Controls.Add(save);
+            layout.Controls.Add(actions, 0, 2);
+            FormClosing += delegate(object sender, FormClosingEventArgs args) { args.Cancel = saving; };
+        }
+
+        private void AddField(string key, string caption, string value, bool editable = true)
+        {
+            var entry = new TextBox { Text = value, ReadOnly = !editable };
+            fields[key] = entry;
+            AddControl(Field(caption, entry));
+        }
+
+        private void AddChoice(string caption, ComboBox selector)
+        {
+            var box = new TableLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
+            box.Controls.Add(new Label { Text = caption, AutoSize = true }, 0, 0);
+            selector.Dock = DockStyle.Top;
+            selector.FlatStyle = FlatStyle.Flat;
+            selector.BackColor = Inset;
+            selector.ForeColor = Ink;
+            selector.AccessibleName = caption;
+            box.Controls.Add(selector, 0, 1);
+            AddControl(box);
+        }
+
+        private void AddControl(Control control)
+        {
+            int row = form.RowCount++;
+            form.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            control.Margin = new Padding(0, 0, 0, 8);
+            form.Controls.Add(control, 0, row);
+        }
+
+        private void SetRouteFields()
+        {
+            bool explicitRoute = !local && route.SelectedIndex == 1;
+            foreach (string key in new[] { "host", "port", "user", "identity_file", "known_hosts_file", "network" })
+                fields[key].Enabled = explicitRoute;
+        }
+
+        private Dictionary<string, object> SshFields()
+        {
+            int port;
+            if (!Int32.TryParse(fields["port"].Text, out port))
+                throw new FormatException("La porta SSH deve essere un numero intero.");
+            var ssh = node != null && node.ContainsKey("ssh")
+                ? new Dictionary<string, object>(NodeCatalog.Map(node["ssh"])) : new Dictionary<string, object>();
+            foreach (string key in new[] { "host", "user", "identity_file", "known_hosts_file" })
+                ssh[key] = fields[key].Text.Trim();
+            ssh["port"] = port;
+            if (String.IsNullOrWhiteSpace(fields["network"].Text))
+                ssh.Remove("network");
+            else
+                ssh["network"] = fields["network"].Text.Trim();
+            return ssh;
+        }
+
+        private Dictionary<string, object> RequestPayload()
+        {
+            var changes = new Dictionary<string, object> {
+                { "label", fields["label"].Text.Trim() }, { "family", family.SelectedIndex == 1 ? "windows" : "linux" }
+            };
+            if (!local && route.SelectedIndex == 1)
+            {
+                changes["ssh"] = SshFields();
+                changes["legacy_route"] = null;
+            }
+            else if (!local && route.SelectedIndex == 0)
+            {
+                changes["ssh"] = null;
+                changes["legacy_route"] = null;
+            }
+            var request = new Dictionary<string, object> { { "expected_revision", revision } };
+            if (node == null)
+            {
+                var created = changes.Where(pair => pair.Value != null).ToDictionary(pair => pair.Key, pair => pair.Value);
+                created["id"] = fields["id"].Text.Trim();
+                bool legacy = local && NodeCatalog.HasLegacyProfile();
+                created["aliases"] = legacy ? new[] { "windows" } : new string[0];
+                request["action"] = "add";
+                request["node"] = created;
+                request["local"] = local;
+            }
+            else
+            {
+                request["action"] = "update";
+                request["node_id"] = node["id"];
+                request["changes"] = changes;
+            }
+            return request;
+        }
+
+        private void Save()
+        {
+            if (owner.nodesBusy)
+            {
+                message.Text = "Attendi il completamento dell’operazione sul catalogo.";
+                return;
+            }
+            Dictionary<string, object> request;
+            try { request = RequestPayload(); }
+            catch (FormatException error) { message.Text = error.Message; return; }
+            saving = true;
+            form.Enabled = false;
+            save.Enabled = false;
+            message.Text = "Salvataggio del catalogo…";
+            owner.StartCatalog(request, () => { saving = false; Close(); }, error => {
+                saving = false;
+                form.Enabled = true;
+                save.Enabled = true;
+                message.Text = error;
+                message.ForeColor = Danger;
+            });
+        }
+
     }
 
     private TabPage BuildStatus()
@@ -1230,7 +1899,7 @@ internal sealed class DockWindow : Form
 
     private void FinishClose()
     {
-        if (closePending && !busy && inputSession == null && desktopSession == null)
+        if (closePending && !busy && !nodesBusy && inputSession == null && desktopSession == null)
             Close();
     }
 
@@ -1391,7 +2060,7 @@ internal sealed class DockWindow : Form
     private void SetJobPagesEnabled(bool enabled)
     {
         foreach (TabPage page in tabs.TabPages)
-            if (page != inputPage)
+            if (page != inputPage && page != nodesPage)
                 SetJobControlsEnabled(page, enabled);
     }
 

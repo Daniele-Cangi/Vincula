@@ -22,6 +22,16 @@ prima di avviare il runtime quando usa un percorso diverso da quello standard.
 Questa scelta del file non costituisce un isolamento per un account che
 dispone già dell’accesso completo alla shell e ai file.
 
+Su Windows le letture e le modifiche di Vincula condividono anche un mutex
+kernel per SID dell’account, comune alle sessioni SSH e desktop. Il mutex
+protegge la risoluzione degli alias e le letture prima della sostituzione
+atomica: un lettore Windows può altrimenti impedire la sostituzione del file.
+Il controllo accetta i token elevati e non elevati dello stesso account,
+senza richiedere un’elevazione. L’attesa massima è dieci secondi; un errore
+di accesso o un timeout produce un errore esplicito e conserva il registro.
+Rimangono revisione attesa e lock di modifica. I lettori esterni a Vincula
+non partecipano a questo coordinamento.
+
 ## Esempio da ASUS TUF
 
 Genera un UUID per ciascun computer e riusalo nelle configurazioni degli

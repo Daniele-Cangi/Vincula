@@ -74,3 +74,11 @@ Per la connessione automatica, abilita l'avvio automatico del profilo
 Ethernet dedicato alla porta configurata.
 
 LinuxDock.cs contiene il sorgente dell'app installata.
+
+Catalogo dei nodi
+Apri la scheda Nodi per gestire il registro comune di Vincula.
+Per la distribuzione e le dipendenze del runtime consulta docs/catalogo-gui.md.
+La build WinForms richiede System.Web.Extensions.dll oltre ai riferimenti già usati.
+Il runtime minimo include agent/nodes.py, node_registry.py e desktop_layout.py.
+Layout desktop e prerequisiti prepara l'anteprima dal catalogo; non attiva
+ancora la condivisione multinodo. Le altre schede usano il profilo a due PC.

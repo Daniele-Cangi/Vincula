@@ -5,9 +5,11 @@
 """GTK desktop console for the Windows Dock Ethernet link."""
 
 from datetime import datetime
+import json
 from pathlib import Path, PureWindowsPath
 import sys
 from threading import Event, Thread
+from uuid import uuid4
 
 import gi
 
@@ -17,6 +19,7 @@ gi.require_version("GdkPixbuf", "2.0")
 gi.require_version("GdkX11", "3.0")
 from gi.repository import Gdk, GdkPixbuf, GdkX11, Gio, GLib, Gtk, Pango
 
+import node_catalog
 import windows_ssh as windows
 from remote_desktop import share_input, show_windows
 
@@ -103,6 +106,8 @@ window.dock, .dock viewport, .dock scrolledwindow { background-color: #0a111a; c
     border-top: 1px solid #26394a;
 }
 .dock .footer.failed { color: #ffc3c8; }
+.dock treeview { background-color: #0b1520; color: #e8f2f8; }
+.dock treeview:selected { background-color: #203446; color: #e8f2f8; }
 .dock .console text { background: #0b1520; color: #e8f2f8; }
 .dock .console text selection, .dock entry selection { background: #56e0df; color: #07222a; }
 .dock progressbar trough { background: #243648; border-color: #243648; }
@@ -151,6 +156,272 @@ def uptime(seconds):
     return (f"{days} g " if days else "") + f"{hours} h {minutes} min"
 
 
+class NodeEditor(Gtk.Window):
+    def __init__(self, owner, node=None):
+        super().__init__(title="Modifica nodo" if node else "Aggiungi nodo")
+        self.owner = owner
+        self.node = node
+        snapshot = owner.nodes_snapshot
+        registry = snapshot["registry"]
+        self.local = registry is None or bool(node and node["id"] == registry["local"])
+        self.revision = snapshot["revision"]
+        self.saving = False
+        self.fields = {}
+        self.get_style_context().add_class("dock")
+        self.set_transient_for(owner)
+        self.set_destroy_with_parent(True)
+        self.set_default_size(590, 650)
+        self.connect("delete-event", lambda *_args: self.saving)
+        self.connect("destroy", lambda *_args: setattr(owner, "node_editor", None))
+        body = vertical(12)
+        body.set_border_width(18)
+        self.add(body)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.form = Gtk.Grid(column_spacing=14, row_spacing=9)
+        scroll.add(self.form)
+        add(body, scroll, True)
+
+        def field(key, title, value="", editable=True):
+            row = len(self.fields)
+            self.form.attach(label(title), 0, row, 1, 1)
+            entry = Gtk.Entry(text=str(value))
+            entry.set_hexpand(True)
+            entry.set_editable(editable)
+            self.form.attach(entry, 1, row, 1, 1)
+            self.fields[key] = entry
+            return entry
+
+        current = node or {}
+        suggested_id = str(uuid4()) if self.local else ""
+        field("id", "UUID del computer", current.get("id", suggested_id), node is None)
+        field("label", "Nome", current.get("label", ""))
+        row = len(self.fields)
+        self.form.attach(label("Sistema"), 0, row, 1, 1)
+        self.family = Gtk.ComboBoxText()
+        self.family.append("linux", "Linux")
+        self.family.append("windows", "Windows")
+        self.family.set_active_id(current.get("family", "linux"))
+        self.family.set_sensitive(not self.local)
+        self.form.attach(self.family, 1, row, 1, 1)
+        # Keep subsequent form rows after the two selector rows.
+        self.fields["family"] = self.family
+        row += 1
+        self.form.attach(label("Collegamento"), 0, row, 1, 1)
+        self.route = Gtk.ComboBoxText()
+        if self.local:
+            self.route.append("local", "Questo computer")
+            mode = "local"
+        else:
+            self.route.append("none", "Da configurare")
+            self.route.append("ssh", "SSH esplicito")
+            if current.get("legacy_route"):
+                self.route.append("legacy", "Profilo SSH esistente")
+            mode = "none"
+            if current.get("legacy_route"):
+                mode = "legacy"
+            if "ssh" in current:
+                mode = "ssh"
+        self.route.set_active_id(mode)
+        self.form.attach(self.route, 1, row, 1, 1)
+        self.fields["route"] = self.route
+        ssh = current.get("ssh", {})
+        field("host", "Indirizzo SSH", ssh.get("host", ""))
+        field("port", "Porta SSH", ssh.get("port", 22))
+        field("user", "Utente SSH", ssh.get("user", ""))
+        field("identity_file", "Chiave SSH su questo PC", ssh.get("identity_file", ""))
+        field("known_hosts_file", "known_hosts su questo PC", ssh.get("known_hosts_file", ""))
+        field("network", "Rete", ssh.get("network", ""))
+        self.fields["id"].set_tooltip_text("Per un computer remoto usa il suo UUID Vincula verificato.")
+        if not self.local and node is None:
+            self.fields["id"].set_placeholder_text("UUID verificato del computer remoto")
+        self.fields["identity_file"].set_tooltip_text("Percorso assoluto della chiave presente su questo PC.")
+        self.fields["known_hosts_file"].set_tooltip_text("Percorso assoluto del file con la chiave host verificata.")
+        self.route.connect("changed", lambda *_args: self.update_route())
+        self.update_route()
+        self.status = label("Salva identità e percorso SSH; accesso e capacità restano da verificare.", "muted")
+        self.status.set_line_wrap(True)
+        add(body, self.status)
+        actions = Gtk.Box(spacing=9)
+        add(actions, action_button("Chiudi", lambda *_args: self.close()))
+        self.save_button = action_button("Salva nodo", self.save, True)
+        add(actions, self.save_button)
+        add(body, actions)
+
+    def update_route(self):
+        explicit = self.route.get_active_id() == "ssh"
+        for key in ("host", "port", "user", "identity_file", "known_hosts_file", "network"):
+            self.fields[key].set_sensitive(explicit)
+
+    def ssh_fields(self):
+        ssh = dict(self.node.get("ssh", {})) if self.node else {}
+        ssh.update({key: self.fields[key].get_text().strip()
+                    for key in ("host", "user", "identity_file", "known_hosts_file")})
+        ssh["port"] = int(self.fields["port"].get_text())
+        network = self.fields["network"].get_text().strip()
+        if network:
+            ssh["network"] = network
+        else:
+            ssh.pop("network", None)
+        return ssh
+
+    def request_payload(self):
+        changes = {"label": self.fields["label"].get_text().strip(), "family": self.family.get_active_id()}
+        mode = self.route.get_active_id()
+        if mode == "ssh":
+            changes.update(ssh=self.ssh_fields(), legacy_route=None)
+        elif mode == "none":
+            changes.update(ssh=None, legacy_route=None)
+        if self.node:
+            payload = {"action": "update", "node_id": self.node["id"], "changes": changes}
+        else:
+            legacy = self.local and windows.IDENTITY.is_file() and windows.HOST_KEY.is_file()
+            node = {"id": self.fields["id"].get_text().strip(), "aliases": ["ubuntu"] if legacy else [], **changes}
+            node = {key: value for key, value in node.items() if value is not None}
+            payload = {"action": "add", "node": node, "local": self.local}
+        payload["expected_revision"] = self.revision
+        return payload
+
+    def save(self, *_args):
+        if self.owner.nodes_busy:
+            self.status.set_text("Attendi il completamento dell’operazione sul catalogo.")
+            return
+        try:
+            payload = self.request_payload()
+        except ValueError:
+            self.status.set_text("La porta SSH deve essere un numero intero.")
+            return
+        self.saving = True
+        self.form.set_sensitive(False)
+        self.save_button.set_sensitive(False)
+        self.status.set_text("Salvataggio del catalogo…")
+        self.owner.catalog_request(payload, self.saved, self.failed)
+
+    def saved(self, _reply):
+        self.saving = False
+        self.close()
+
+    def failed(self, message):
+        self.saving = False
+        self.form.set_sensitive(True)
+        self.save_button.set_sensitive(True)
+        self.status.set_text(message)
+
+
+class DesktopEditor(Gtk.Window):
+    def __init__(self, owner):
+        super().__init__(title="Layout desktop — anteprima")
+        self.owner = owner
+        registry = owner.nodes_snapshot["registry"]
+        self.revision = owner.nodes_snapshot["revision"]
+        self.saving = False
+        self.members = []
+        self.get_style_context().add_class("dock")
+        self.set_transient_for(owner)
+        self.set_destroy_with_parent(True)
+        self.set_default_size(760, 680)
+        self.connect("delete-event", lambda *_args: self.saving)
+        self.connect("destroy", lambda *_args: setattr(owner, "desktop_editor", None))
+        body = vertical(10)
+        body.set_border_width(18)
+        self.add(body)
+        guide = label("Scegli il PC con mouse e tastiera. Celle adiacenti: X verso destra, Y verso il basso.\n"
+                      "Ogni PC rappresenta il suo desktop logico. Il salvataggio non avvia la condivisione.", "muted")
+        guide.set_line_wrap(True)
+        add(body, guide)
+        profile = registry.get("desktop") or {"primary": registry["local"], "clipboard": True,
+                                             "members": [{"node_id": registry["local"], "x": 0, "y": 0}]}
+        positions = {member["node_id"]: member for member in profile["members"]}
+        self.primary = Gtk.ComboBoxText()
+        for node in registry["nodes"]:
+            self.primary.append(node["id"], node["label"] + " · " + node["id"][:8])
+        self.primary.set_active_id(profile["primary"])
+        add(body, label("Principale (mouse e tastiera collegati qui)"))
+        add(body, self.primary)
+        self.clipboard = Gtk.CheckButton(label="Condividi gli appunti tra i membri")
+        self.clipboard.set_active(profile["clipboard"])
+        add(body, self.clipboard)
+        grid = Gtk.Grid(column_spacing=10, row_spacing=8)
+        for column, caption in enumerate(("Membro", "X", "Y")):
+            grid.attach(label(caption, "muted"), column, 0, 1, 1)
+        for row, node in enumerate(registry["nodes"], 1):
+            position = positions.get(node["id"])
+            selected = Gtk.CheckButton(label=node["label"] + " · " + node["id"][:8])
+            selected.set_active(position is not None)
+            grid.attach(selected, 0, row, 1, 1)
+            coordinates = []
+            for column, axis in enumerate(("x", "y"), 1):
+                entry = Gtk.Entry(text=str(position[axis] if position else 0), width_chars=6)
+                entry.set_hexpand(False)
+                grid.attach(entry, column, row, 1, 1)
+                coordinates.append(entry)
+            self.members.append((node["id"], selected, *coordinates))
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_min_content_height(130)
+        scroll.add(grid)
+        add(body, scroll, True)
+        self.preview = Gtk.TextView(editable=False, cursor_visible=False, monospace=True)
+        self.preview.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        result_scroll = Gtk.ScrolledWindow()
+        result_scroll.set_min_content_height(180)
+        result_scroll.add(self.preview)
+        add(body, result_scroll, True)
+        self.message = label("Anteprima e controlli locali; accesso remoto e TLS restano da verificare.", "muted")
+        self.message.set_line_wrap(True)
+        add(body, self.message)
+        actions = Gtk.Box(spacing=8)
+        self.buttons = [action_button("Anteprima", lambda *_: self.submit("desktop_preview"), True),
+                        action_button("Salva layout", lambda *_: self.submit("desktop")),
+                        action_button("Rimuovi layout", lambda *_: self.submit("desktop", clear=True)),
+                        action_button("Chiudi", lambda *_: self.destroy())]
+        for button in self.buttons:
+            add(actions, button)
+        add(body, actions)
+
+    def profile(self):
+        members = []
+        for node_id, selected, x, y in self.members:
+            if selected.get_active():
+                try:
+                    members.append({"node_id": node_id, "x": int(x.get_text()), "y": int(y.get_text())})
+                except ValueError:
+                    raise ValueError("Le coordinate X e Y devono essere numeri interi.") from None
+        return {"primary": self.primary.get_active_id(), "members": members, "clipboard": self.clipboard.get_active()}
+
+    def finished(self, reply=None, error=None):
+        self.saving = False
+        for button in self.buttons:
+            button.set_sensitive(True)
+        if error:
+            self.message.set_text(error)
+        elif reply and "desktop_preview" in reply:
+            result = reply["desktop_preview"]
+            lines = [result["preflight"]["summary"], ""]
+            nodes = {node["id"]: node["label"] for node in reply["registry"]["nodes"]}
+            for check in result["preflight"]["checks"]:
+                lines.append(f'[{check["status"]}] {nodes.get(check["node_id"], "Vincula")}: {check["message"]}')
+            lines.extend(("", "LAYOUT DESKFLOW", result["layout"], "OPZIONI PREVISTE (non avviabili)",
+                          json.dumps(result["server_options"], ensure_ascii=False, indent=2)))
+            self.preview.get_buffer().set_text("\n".join(lines))
+            self.message.set_text("Layout valido. Condivisione multinodo non attiva: consulta i prerequisiti sopra.")
+        else:
+            self.destroy()
+
+    def submit(self, action, clear=False):
+        if self.saving or self.owner.nodes_busy:
+            return
+        try:
+            profile = None if clear else self.profile()
+        except ValueError as error:
+            self.message.set_text(str(error))
+            return
+        self.saving = True
+        for button in self.buttons:
+            button.set_sensitive(False)
+        self.owner.catalog_request({"action": action, "desktop": profile, "expected_revision": self.revision},
+                                   success=lambda reply: self.finished(reply=reply), failure=lambda error: self.finished(error=error))
+
+
 class DockWindow(Gtk.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="Windows Dock")
@@ -162,6 +433,11 @@ class DockWindow(Gtk.ApplicationWindow):
         self.close_pending = False
         self.remote_stop = None
         self.remote_mode = None
+        self.nodes_busy = False
+        self.nodes_loaded = False
+        self.nodes_snapshot = None
+        self.node_editor = None
+        self.desktop_editor = None
         try:
             self.set_icon_from_file(str(Path(__file__).with_name("windows-dock-icon.png")))
         except GLib.Error:
@@ -185,12 +461,152 @@ class DockWindow(Gtk.ApplicationWindow):
         self.content.add_titled(self.transfer_page(), "files", "Trasferimenti")
         self.content.add_titled(self.script_page(), "scripts", "PowerShell")
         self.content.add_titled(self.input_page(), "input", "Mouse e tastiera")
+        self.content.add_titled(self.nodes_page(), "nodes", "Nodi")
+        self.content.connect("notify::visible-child-name", self.catalog_tab_changed)
         add(root, self.content, True)
 
         self.footer = label("Pronto", "footer")
         self.footer.set_selectable(True)
         self.footer.set_line_wrap(True)
         add(root, self.footer)
+
+    def nodes_page(self):
+        page = self.page("Catalogo dei computer")
+        self.nodes_status = label("Aggiorna il catalogo per leggere i computer registrati.", "muted")
+        self.nodes_status.set_line_wrap(True)
+        add(page, self.nodes_status)
+        self.node_store = Gtk.ListStore(str, str, str, str, object)
+        self.node_list = Gtk.TreeView(model=self.node_store)
+        self.node_list.set_headers_visible(True)
+        self.node_list.set_tooltip_column(2)
+        for index, title in enumerate(("Computer", "Sistema", "UUID", "Collegamento")):
+            renderer = Gtk.CellRendererText(ellipsize=Pango.EllipsizeMode.END)
+            column = Gtk.TreeViewColumn(title, renderer, text=index)
+            column.set_resizable(True)
+            column.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
+            column.set_fixed_width((170, 80, 180, 145)[index])
+            column.set_min_width((100, 70, 120, 135)[index])
+            column.set_expand(index in (0, 2))
+            self.node_list.append_column(column)
+        self.node_list.get_selection().connect("changed", lambda *_args: self.catalog_buttons())
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_min_content_height(170)
+        scroll.add(self.node_list)
+        add(page, scroll, True)
+        actions = Gtk.Box(spacing=8)
+        self.node_add = action_button("Aggiungi", lambda *_args: self.edit_node(), True)
+        self.node_edit = action_button("Modifica", lambda *_args: self.edit_node(self.selected_node()))
+        self.node_remove = action_button("Rimuovi", self.remove_node)
+        self.node_refresh = action_button("Aggiorna", lambda *_args: self.catalog_request({"action": "list"}))
+        for button in (self.node_add, self.node_edit, self.node_remove, self.node_refresh):
+            add(actions, button)
+        add(page, actions)
+        self.node_desktop = action_button("Layout desktop e prerequisiti", lambda *_: self.edit_desktop())
+        add(page, self.node_desktop)
+        guide = label("Catalogo e layout: le altre schede usano ancora il profilo a due PC.", "muted")
+        guide.set_line_wrap(True)
+        add(page, guide)
+        self.catalog_buttons()
+        return page
+
+    def catalog_tab_changed(self, *_args):
+        if self.content.get_visible_child_name() == "nodes" and not self.nodes_loaded and not self.nodes_busy:
+            self.catalog_request({"action": "list"})
+
+    def selected_node(self):
+        model, iterator = self.node_list.get_selection().get_selected()
+        return model[iterator][4] if iterator is not None else None
+
+    def catalog_buttons(self):
+        selected = self.selected_node()
+        available = self.nodes_snapshot is not None and not self.nodes_busy
+        self.node_add.set_sensitive(available)
+        self.node_edit.set_sensitive(available and selected is not None)
+        registry = self.nodes_snapshot["registry"] if self.nodes_snapshot else None
+        self.node_remove.set_sensitive(available and selected is not None and registry is not None
+                                       and selected["id"] != registry["local"])
+        self.node_refresh.set_sensitive(not self.nodes_busy)
+        self.node_list.set_sensitive(not self.nodes_busy)
+        self.node_desktop.set_sensitive(available and registry is not None)
+        self.node_add.set_label("Registra questo PC" if available and registry is None else "Aggiungi")
+
+    def show_catalog(self, reply):
+        previous = self.selected_node()
+        self.nodes_snapshot = reply
+        self.nodes_loaded = True
+        self.node_store.clear()
+        registry = reply["registry"]
+        if registry is None:
+            self.nodes_status.set_text("Profilo a due PC. Registra questo computer per creare il catalogo.")
+            return
+        for node in registry["nodes"]:
+            local = node["id"] == registry["local"]
+            network = "Locale" if local else node.get("ssh", {}).get("network", "")
+            if not network:
+                network = "Profilo SSH esistente" if node.get("legacy_route") else "SSH" if node.get("ssh") else "Da configurare"
+            iterator = self.node_store.append([node["label"],
+                                               "Windows" if node["family"] == "windows" else "Linux",
+                                               node["id"], network, node])
+            if previous and previous["id"] == node["id"]:
+                self.node_list.get_selection().select_iter(iterator)
+        self.nodes_status.set_text(f"{len(registry['nodes'])} computer nel catalogo.")
+
+    def catalog_request(self, payload, success=None, failure=None):
+        if self.nodes_busy:
+            return
+        self.nodes_busy = True
+        self.nodes_status.set_text("Aggiornamento del catalogo…")
+        self.catalog_buttons()
+
+        def work():
+            reply, error = None, None
+            try:
+                reply = node_catalog.request(payload)
+            except Exception as problem:
+                error = str(problem)
+            GLib.idle_add(self.catalog_finished, reply, error, success, failure)
+
+        Thread(target=work).start()
+
+    def catalog_finished(self, reply, error, success, failure):
+        self.nodes_busy = False
+        if error:
+            self.nodes_status.set_text(error)
+            if failure:
+                failure(error)
+        else:
+            self.show_catalog(reply)
+            if success:
+                success(reply)
+        self.catalog_buttons()
+        self.finish_close()
+        return False
+
+    def edit_node(self, node=None):
+        if self.nodes_snapshot is None or self.nodes_busy:
+            return
+        if self.node_editor is not None:
+            self.node_editor.present()
+            return
+        self.node_editor = NodeEditor(self, node)
+        self.node_editor.show_all()
+
+    def edit_desktop(self):
+        if self.nodes_busy or self.nodes_snapshot is None or self.nodes_snapshot["registry"] is None:
+            return
+        if self.desktop_editor is not None:
+            self.desktop_editor.present()
+            return
+        self.desktop_editor = DesktopEditor(self)
+        self.desktop_editor.show_all()
+
+    def remove_node(self, *_args):
+        node = self.selected_node()
+        if node is not None and self.nodes_snapshot is not None:
+            self.catalog_request({"action": "remove", "node_id": node["id"],
+                                  "expected_revision": self.nodes_snapshot["revision"]})
+
 
     def build_header(self):
         header = Gtk.Box(spacing=14)
@@ -585,14 +1001,14 @@ class DockWindow(Gtk.ApplicationWindow):
     def on_close(self, *_args):
         if self.remote_stop is not None:
             self.stop_remote()
-        if self.busy or self.remote_stop is not None:
+        if self.busy or self.nodes_busy or self.remote_stop is not None:
             self.close_pending = True
         if self.busy:
             self.message("Attendi il termine dell’operazione prima di chiudere.")
         return self.close_pending
 
     def finish_close(self):
-        if self.close_pending and not self.busy and self.remote_stop is None:
+        if self.close_pending and not self.busy and not self.nodes_busy and self.remote_stop is None:
             self.close_pending = False
             self.close()
 
