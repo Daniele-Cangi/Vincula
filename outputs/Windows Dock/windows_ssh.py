@@ -282,9 +282,17 @@ def local_status(*, timeout=35, command=STATUS_COMMAND):
     """Use the same status probe on Windows without an SSH connection."""
     system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
     powershell = system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    environment = os.environ.copy()
+    if not any(name.casefold() == "psmodulepath" for name in environment):
+        # PowerShell adds user/all-user locations again at startup. Restrict its
+        # script as well, before any built-in status cmdlet triggers discovery.
+        module_path = str(powershell.parent / "Modules")
+        environment["PSModulePath"] = module_path
+        command = "$env:PSModulePath = " + _ps_string(module_path) + "\n" + command
     return _read_status(subprocess.run(
         [powershell, *_powershell_arguments(command)], stdin=subprocess.DEVNULL,
         capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=timeout,
+        env=environment,
     ))
 
 

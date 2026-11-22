@@ -1,0 +1,1344 @@
+{
+  "runtime_revision": "b470517f9c8b1c4e8cd3ddfff5879a44290c36ab",
+  "started_utc": "2026-11-22T16:02:03.279954+00:00",
+  "finished_utc": "2026-11-22T16:08:32.013941+00:00",
+  "policy": "ask",
+  "human_approval_time_measured": false,
+  "dataset": {
+    "parts": 3,
+    "bytes_per_part": 262144,
+    "passes": 2,
+    "bounds": [
+      [
+        2,
+        1000000
+      ],
+      [
+        1000000,
+        2000000
+      ],
+      [
+        2000000,
+        3000000
+      ]
+    ]
+  },
+  "reference_parts": [
+    {
+      "index": 0,
+      "start": 2,
+      "end": 1000000,
+      "passes": 2,
+      "primes": 78498
+    },
+    {
+      "index": 1,
+      "start": 1000000,
+      "end": 2000000,
+      "passes": 2,
+      "primes": 70435
+    },
+    {
+      "index": 2,
+      "start": 2000000,
+      "end": 3000000,
+      "passes": 2,
+      "primes": 67883
+    }
+  ],
+  "reference_sha256": "70d528230c461d8beafa417a8390755735c142a8f9fccd662b4e43478c7f75f7",
+  "reference_preparation_s": 0.03163416900133598,
+  "session_start_s": 1.037285286000042,
+  "input_sha256": {
+    "0": "2b9958ceac22d5844cb4f17cbb1c09e28d2d5d869ea6271e9fabacb83dde4a49",
+    "1": "ab21faa5944728b2b5ef6a093011ae6ab2db59938faf2e20b8b3dfc34c051ed7",
+    "2": "45abf0b8f1dc3f0fc577b5ba3c4a954ee3b86347ebb4c957f9e790d8482885c9"
+  },
+  "workload_sha256": "70af7897784dde6c4799de380e8485c912c73677864e1796c722e7d701e04924",
+  "preparation_s": 18.164592363000338,
+  "medians": {
+    "ubuntu": {
+      "total_s": 20.490507540002,
+      "input_transfer_s": 4.679000994656235e-06,
+      "critical_compute_s": 19.97399469699667,
+      "mcp_execution_s": 20.488671415998397,
+      "automatic_cli_job_approvals_s": 0.11969622900141985,
+      "non_compute_execution_envelope_s": 0.6926697550006793
+    },
+    "windows": {
+      "total_s": 28.19095597699925,
+      "input_transfer_s": 14.048356128998421,
+      "critical_compute_s": 11.143971200013766,
+      "mcp_execution_s": 14.132219574001283,
+      "automatic_cli_job_approvals_s": 0.5916124270006549,
+      "non_compute_execution_envelope_s": 3.004058074026034
+    },
+    "kali": {
+      "total_s": 41.489942070000325,
+      "input_transfer_s": 18.544681171000775,
+      "critical_compute_s": 20.426956135997898,
+      "mcp_execution_s": 22.937939331000962,
+      "automatic_cli_job_approvals_s": 0.47741518299881136,
+      "non_compute_execution_envelope_s": 2.427032481999049
+    },
+    "distributed": {
+      "total_s": 24.636913416001335,
+      "input_transfer_s": 12.105925997999293,
+      "critical_compute_s": 8.798923435999313,
+      "mcp_execution_s": 12.404573354000604,
+      "automatic_cli_job_approvals_s": 0.6078316960010852,
+      "non_compute_execution_envelope_s": 3.523601308999787
+    }
+  },
+  "fastest_serial_total": "ubuntu",
+  "distributed_total_speedup_vs_fastest_serial": 0.8316994582078492,
+  "distributed_compute_speedup_vs_each_serial": {
+    "ubuntu": 2.270049835332858,
+    "windows": 1.2665153050906302,
+    "kali": 2.321529023928592
+  },
+  "complete": true,
+  "cleanup_complete": true,
+  "fastest_serial_execution": "windows",
+  "fastest_serial_compute": "windows",
+  "distributed_execution_speedup_vs_fastest_serial": 1.1392749408381302,
+  "distributed_compute_speedup_vs_fastest_serial": 1.2665153050906302,
+  "case_total_ranges": {
+    "ubuntu": {
+      "min_s": 19.743019937999634,
+      "max_s": 20.72918884899991
+    },
+    "windows": {
+      "min_s": 28.1267206550001,
+      "max_s": 28.245450870999775
+    },
+    "kali": {
+      "min_s": 38.15845331300079,
+      "max_s": 46.228825171998324
+    },
+    "distributed": {
+      "min_s": 22.234930712002097,
+      "max_s": 26.50915239400092
+    }
+  },
+  "benchmark_wall_s": 388.733987,
+  "cases": [
+    {
+      "repeat": 0,
+      "layout": "ubuntu",
+      "local_input_preparation_s": 0.0016974879999906989,
+      "input_transfer_s": 5.308000254444778e-06,
+      "batch_submit_s": 0.04883009900004254,
+      "automatic_cli_job_approvals_s": 0.1130724510003347,
+      "completion_observation_s": 19.556263386000865,
+      "poll_api_s": 0.7086084679976921,
+      "poll_count": 95,
+      "result_retrieval_s": 0.022879176000060397,
+      "mcp_execution_s": 19.741089459999785,
+      "result_sha256": "70d528230c461d8beafa417a8390755735c142a8f9fccd662b4e43478c7f75f7",
+      "critical_compute_s": 19.048419704999105,
+      "sum_cpu_s": 19.044366097999998,
+      "non_compute_execution_envelope_s": 0.6926697550006793,
+      "total_s": 19.743019937999634,
+      "input_transfers": [],
+      "workers": [
+        {
+          "node": "ubuntu",
+          "state": "completed",
+          "exit_code": 0,
+          "worker": {
+            "parts": [
+              {
+                "index": 0,
+                "start": 2,
+                "end": 1000000,
+                "passes": 2,
+                "primes": 78498
+              },
+              {
+                "index": 1,
+                "start": 1000000,
+                "end": 2000000,
+                "passes": 2,
+                "primes": 70435
+              },
+              {
+                "index": 2,
+                "start": 2000000,
+                "end": 3000000,
+                "passes": 2,
+                "primes": 67883
+              }
+            ],
+            "inputs": [
+              {
+                "index": 0,
+                "bytes": 262144,
+                "sha256": "2b9958ceac22d5844cb4f17cbb1c09e28d2d5d869ea6271e9fabacb83dde4a49"
+              },
+              {
+                "index": 1,
+                "bytes": 262144,
+                "sha256": "ab21faa5944728b2b5ef6a093011ae6ab2db59938faf2e20b8b3dfc34c051ed7"
+              },
+              {
+                "index": 2,
+                "bytes": 262144,
+                "sha256": "45abf0b8f1dc3f0fc577b5ba3c4a954ee3b86347ebb4c957f9e790d8482885c9"
+              }
+            ],
+            "read_s": 0.002558209002017975,
+            "compute_s": 19.048419704999105,
+            "cpu_s": 19.044366097999998,
+            "worker_wall_s": 19.0515527760017,
+            "python": "3.14.4",
+            "platform": "Linux-7.0.0-44-generic-x86_64-with-glibc2.43"
+          }
+        }
+      ]
+    },
+    {
+      "repeat": 0,
+      "layout": "windows",
+      "local_input_preparation_s": 1.2571999832289293e-05,
+      "input_transfer_s": 14.113001031999374,
+      "batch_submit_s": 0.6325615130008373,
+      "automatic_cli_job_approvals_s": 0.5918534379998164,
+      "completion_observation_s": 12.234314289000395,
+      "poll_api_s": 9.426471248994858,
+      "poll_count": 15,
+      "result_retrieval_s": 0.6734458440005255,
+      "mcp_execution_s": 14.132219574001283,
+      "result_sha256": "70d528230c461d8beafa417a8390755735c142a8f9fccd662b4e43478c7f75f7",
+      "critical_compute_s": 11.12816149997525,
+      "sum_cpu_s": 10.78125,
+      "non_compute_execution_envelope_s": 3.004058074026034,
+      "total_s": 28.245450870999775,
+      "input_transfers": [
+        {
+          "node": "windows",
+          "index": 0,
+          "initial_request_s": 0.7000325770004565,
+          "automatic_cli_approvals_s": 0.5954162670004735,
+          "approved_transfer_api_s": 3.4786086460007937,
+          "total_s": 4.774113293000482,
+          "bytes": 262144
+        },
+        {
+          "node": "windows",
+          "index": 1,
+          "initial_request_s": 0.6385703300002206,
+          "automatic_cli_approvals_s": 0.5873721940006362,
+          "approved_transfer_api_s": 3.41675724200104,
+          "total_s": 4.6427319630001875,
+          "bytes": 262144
+        },
+        {
+          "node": "windows",
+          "index": 2,
+          "initial_request_s": 0.6302649810004368,
+          "automatic_cli_approvals_s": 0.5893010109994066,
+          "approved_transfer_api_s": 3.4763697150010557,
+          "total_s": 4.695998493998559,
+          "bytes": 262144
+        }
+      ],
+      "workers": [
+        {
+          "node": "windows",
+          "state": "completed",
+          "exit_code": 0,
+          "worker": {
+            "parts": [
+              {
+                "index": 0,
+                "start": 2,
+                "end": 1000000,
+                "passes": 2,
+                "primes": 78498
+              },
+              {
+                "index": 1,
+                "start": 1000000,
+                "end": 2000000,
+                "passes": 2,
+                "primes": 70435
+              },
+              {
+                "index": 2,
+                "start": 2000000,
+                "end": 3000000,
+                "passes": 2,
+                "primes": 67883
+              }
+            ],
+            "inputs": [
+              {
+                "index": 0,
+                "bytes": 262144,
+                "sha256": "2b9958ceac22d5844cb4f17cbb1c09e28d2d5d869ea6271e9fabacb83dde4a49"
+              },
+              {
+                "index": 1,
+                "bytes": 262144,
+                "sha256": "ab21faa5944728b2b5ef6a093011ae6ab2db59938faf2e20b8b3dfc34c051ed7"
+              },
+              {
+                "index": 2,
+                "bytes": 262144,
+                "sha256": "45abf0b8f1dc3f0fc577b5ba3c4a954ee3b86347ebb4c957f9e790d8482885c9"
+              }
+            ],
+            "read_s": 0.0687387999787461,
+            "compute_s": 11.12816149997525,
+            "cpu_s": 10.78125,
+            "worker_wall_s": 11.19722480000928,
+            "python": "3.14.7",
+            "platform": "Windows-11-10.0.26300-SP0"
+          }
+        }
+      ]
+    },
+    {
+      "repeat": 0,
+      "layout": "kali",
+      "local_input_preparation_s": 8.58999919728376e-06,
+      "input_transfer_s": 18.544681171000775,
+      "batch_submit_s": 0.6312931640004535,
+      "automatic_cli_job_approvals_s": 0.5430709830015985,
+      "completion_observation_s": 21.247884009999325,
+      "poll_api_s": 15.432244747989898,
+      "poll_count": 30,
+      "result_retrieval_s": 0.5227428050002345,
+      "mcp_execution_s": 22.945032658000855,
+      "result_sha256": "70d528230c461d8beafa417a8390755735c142a8f9fccd662b4e43478c7f75f7",
+      "critical_compute_s": 20.5408226499967,
+      "sum_cpu_s": 20.535637928000003,
+      "non_compute_execution_envelope_s": 2.4042100080041564,
+      "total_s": 41.489942070000325,
+      "input_transfers": [
+        {
+          "node": "kali",
+          "index": 0,
+          "initial_request_s": 1.4850076640013867,
+          "automatic_cli_approvals_s": 0.5084214320013416,
+          "approved_transfer_api_s": 4.6820038959995145,
+          "total_s": 6.675486770000134,
+          "bytes": 262144
+        },
+        {
+          "node": "kali",
+          "index": 1,
+          "initial_request_s": 0.5830320099994424,
+          "automatic_cli_approvals_s": 0.5196486160002678,
+          "approved_transfer_api_s": 4.421637612998893,
+          "total_s": 5.524366009000005,
+          "bytes": 262144
+        },
+        {
+          "node": "kali",
+          "index": 2,
+          "initial_request_s": 0.5819452979994821,
+          "automatic_cli_approvals_s": 0.5824382379996678,
+          "approved_transfer_api_s": 5.180249790000744,
+          "total_s": 6.34467530099937,
+          "bytes": 262144
+        }
+      ],
+      "workers": [
+        {
+          "node": "kali",
+          "state": "completed",
+          "exit_code": 0,
+          "worker": {
+            "parts": [
+              {
+                "index": 0,
+                "start": 2,
+                "end": 1000000,
+                "passes": 2,
+                "primes": 78498
+              },
+              {
+                "index": 1,
+                "start": 1000000,
+                "end": 2000000,
+                "passes": 2,
+                "primes": 70435
+              },
+              {
+                "index": 2,
+                "start": 2000000,
+                "end": 3000000,
+                "passes": 2,
+                "primes": 67883
+              }
+            ],
+            "inputs": [
+              {
+                "index": 0,
+                "bytes": 262144,
+                "sha256": "2b9958ceac22d5844cb4f17cbb1c09e28d2d5d869ea6271e9fabacb83dde4a49"
+              },
+              {
+                "index": 1,
+                "bytes": 262144,
+                "sha256": "ab21faa5944728b2b5ef6a093011ae6ab2db59938faf2e20b8b3dfc34c051ed7"
+              },
+              {
+                "index": 2,
+                "bytes": 262144,
+                "sha256": "45abf0b8f1dc3f0fc577b5ba3c4a954ee3b86347ebb4c957f9e790d8482885c9"
+              }
+            ],
+            "read_s": 0.0031923189999361057,
+            "compute_s": 20.5408226499967,
+            "cpu_s": 20.535637928000003,
+            "worker_wall_s": 20.546146701999533,
+            "python": "3.14.10",
+            "platform": "Linux-7.2.15+kali-amd64-x86_64-with-glibc2.43"
+          }
+        }
+      ]
+    },
+    {
+      "repeat": 0,
+      "layout": "distributed",
+      "local_input_preparation_s": 0.0007805440000083763,
+      "input_transfer_s": 14.103531423999812,
+      "batch_submit_s": 0.6316280259998166,
+      "automatic_cli_job_approvals_s": 0.5868729930007248,
+      "completion_observation_s": 9.985408818001815,
+      "poll_api_s": 7.778898936001497,
+      "poll_count": 12,
+      "result_retrieval_s": 1.2005878790005227,
+      "mcp_execution_s": 12.404573354000604,
+      "result_sha256": "70d528230c461d8beafa417a8390755735c142a8f9fccd662b4e43478c7f75f7",
+      "critical_compute_s": 8.880972045000817,
+      "sum_cpu_s": 16.423983268,
+      "non_compute_execution_envelope_s": 3.523601308999787,
+      "total_s": 26.50915239400092,
+      "input_transfers": [
+        {
+          "node": "windows",
+          "index": 1,
+          "initial_request_s": 0.6829327849991387,
+          "automatic_cli_approvals_s": 0.5886409129998356,
+          "approved_transfer_api_s": 3.4769392799989873,
+          "total_s": 4.748558306000632,
+          "bytes": 262144
+        },
+        {
+          "node": "kali",
+          "index": 2,
+          "initial_request_s": 2.845448777999991,
+          "automatic_cli_approvals_s": 1.2272746339986043,
+          "approved_transfer_api_s": 5.282096196000566,
+          "total_s": 9.354866820000098,
+          "bytes": 262144
+        }
+      ],
+      "workers": [
+        {
+          "node": "ubuntu",
+          "state": "completed",
+          "exit_code": 0,
+          "worker": {
+            "parts": [
+              {
+                "index": 0,
+                "start": 2,
+                "end": 1000000,
+                "passes": 2,
+                "primes": 78498
+              }
+            ],
+            "inputs": [
+              {
+                "index": 0,
+                "bytes": 262144,
+                "sha256": "2b9958ceac22d5844cb4f17cbb1c09e28d2d5d869ea6271e9fabacb83dde4a49"
+              }
+            ],
+            "read_s": 0.0009271409999200841,
+            "compute_s": 4.007027336001556,
+            "cpu_s": 4.006156525000001,
+            "worker_wall_s": 4.008183067999198,
+            "python": "3.14.4",
+            "platform": "Linux-7.0.0-44-generic-x86_64-with-glibc2.43"
+          }
+        },
+        {
+          "node": "windows",
+          "state": "completed",
+          "exit_code": 0,
+          "worker": {
+            "parts": [
+              {
+                "index": 1,
+                "start": 1000000,
+                "end": 2000000,
+                "passes": 2,
+                "primes": 70435
+              }
+            ],
+            "inputs": [
+              {
+                "index": 1,
+                "bytes": 262144,
+                "sha256": "ab21faa5944728b2b5ef6a093011ae6ab2db59938faf2e20b8b3dfc34c051ed7"
+              }
+            ],
+            "read_s": 0.02556660000118427,
+            "compute_s": 3.649477200000547,
+            "cpu_s": 3.546875,
+            "worker_wall_s": 3.6751895000052173,
+            "python": "3.14.7",
+            "platform": "Windows-11-10.0.26300-SP0"
+          }
+        },
+        {
+          "node": "kali",
+          "state": "completed",
+          "exit_code": 0,
+          "worker": {
+            "parts": [
+              {
+                "index": 2,
+                "start": 2000000,
+                "end": 3000000,
+                "passes": 2,
+                "primes": 67883
+              }
+            ],
+            "inputs": [
+              {
+                "index": 2,
+                "bytes": 262144,
+                "sha256": "45abf0b8f1dc3f0fc577b5ba3c4a954ee3b86347ebb4c957f9e790d8482885c9"
+              }
+            ],
+            "read_s": 0.0011362019977241289,
+            "compute_s": 8.880972045000817,
+            "cpu_s": 8.870951743000001,
+            "worker_wall_s": 8.882903837999038,
+            "python": "3.14.10",
+            "platform": "Linux-7.2.15+kali-amd64-x86_64-with-glibc2.43"
+          }
+        }
+      ]
+    },
+    {
+      "repeat": 1,
+      "layout": "windows",
+      "local_input_preparation_s": 8.59099964145571e-06,
+      "input_transfer_s": 14.048356128998421,
+      "batch_submit_s": 0.6803290259995265,
+      "automatic_cli_job_approvals_s": 0.5827081569987058,
+      "completion_observation_s": 12.19158413000332,
+      "poll_api_s": 9.383388633999857,
+      "poll_count": 15,
+      "result_retrieval_s": 0.6234597980001126,
+      "mcp_execution_s": 14.078118126002664,
+      "result_sha256": "70d528230c461d8beafa417a8390755735c142a8f9fccd662b4e43478c7f75f7",
+      "critical_compute_s": 11.172813500015764,
+      "sum_cpu_s": 10.84375,
+      "non_compute_execution_envelope_s": 2.9053046259869006,
+      "total_s": 28.1267206550001,
+      "input_transfers": [
+        {
+          "node": "windows",
+          "index": 0,
+          "initial_request_s": 0.6843042010004865,
+          "automatic_cli_approvals_s": 0.570528664997255,
+          "approved_transfer_api_s": 3.423997262001649,
+          "total_s": 4.678868400998908,
+          "bytes": 262144
+        },
+        {
+          "node": "windows",
+          "index": 1,
+          "initial_request_s": 0.629899507999653,
+          "automatic_cli_approvals_s": 0.5709517039977072,
+          "approved_transfer_api_s": 3.479287698002736,
+          "total_s": 4.680183537999255,
+          "bytes": 262144
+        },
+        {
+          "node": "windows",
+          "index": 2,
+          "initial_request_s": 0.6325703149996116,
+          "automatic_cli_approvals_s": 0.5817641020003066,
+          "approved_transfer_api_s": 3.4747951700010162,
+          "total_s": 4.689183643000433,
+          "bytes": 262144
+        }
+      ],
+      "workers": [
+        {
+          "node": "windows",
+          "state": "completed",
+          "exit_code": 0,
+          "worker": {
+            "parts": [
+              {
+                "index": 0,
+                "start": 2,
+                "end": 1000000,
+                "passes": 2,
+                "primes": 78498
+              },
+              {
+                "index": 1,
+                "start": 1000000,
+                "end": 2000000,
+                "passes": 2,
+                "primes": 70435
+              },
+              {
+                "index": 2,
+                "start": 2000000,
+                "end": 3000000,
+                "passes": 2,
+                "primes": 67883
+              }
+            ],
+            "inputs": [
+              {
+                "index": 0,
+                "bytes": 262144,
+                "sha256": "2b9958ceac22d5844cb4f17cbb1c09e28d2d5d869ea6271e9fabacb83dde4a49"
+              },
+              {
+                "index": 1,
+                "bytes": 262144,
+                "sha256": "ab21faa5944728b2b5ef6a093011ae6ab2db59938faf2e20b8b3dfc34c051ed7"
+              },
+              {
+                "index": 2,
+                "bytes": 262144,
+                "sha256": "45abf0b8f1dc3f0fc577b5ba3c4a954ee3b86347ebb4c957f9e790d8482885c9"
+              }
+            ],
+            "read_s": 0.0708069000102114,
+            "compute_s": 11.172813500015764,
+            "cpu_s": 10.84375,
+            "worker_wall_s": 11.243962799984729,
+            "python": "3.14.7",
+            "platform": "Windows-11-10.0.26300-SP0"
+          }
+        }
+      ]
+    },
+    {
+      "repeat": 1,
+      "layout": "kali",
+      "local_input_preparation_s": 1.0824998753378168e-05,
+      "input_transfer_s": 23.392693165998935,
+      "batch_submit_s": 0.5813233670014597,
+      "automatic_cli_job_approvals_s": 0.4655210159980925,
+      "completion_observation_s": 21.266120792999573,
+      "poll_api_s": 15.25047475199608,
+      "poll_count": 31,
+      "result_retrieval_s": 0.5229281130013987,
+      "mcp_execution_s": 22.835929815999407,
+      "result_sha256": "70d528230c461d8beafa417a8390755735c142a8f9fccd662b4e43478c7f75f7",
+      "critical_compute_s": 20.408897334000358,
+      "sum_cpu_s": 20.389219898,
+      "non_compute_execution_envelope_s": 2.427032481999049,
+      "total_s": 46.228825171998324,
+      "input_transfers": [
+        {
+          "node": "kali",
+          "index": 0,
+          "initial_request_s": 3.493010772999696,
+          "automatic_cli_approvals_s": 2.2966787410005054,
+          "approved_transfer_api_s": 6.330422441002156,
+          "total_s": 12.120157420999021,
+          "bytes": 262144
+        },
+        {
+          "node": "kali",
+          "index": 1,
+          "initial_request_s": 0.5326528619989404,
+          "automatic_cli_approvals_s": 0.5096138760018221,
+          "approved_transfer_api_s": 4.527907667001273,
+          "total_s": 5.570219592002104,
+          "bytes": 262144
+        },
+        {
+          "node": "kali",
+          "index": 2,
+          "initial_request_s": 0.5353557270027522,
+          "automatic_cli_approvals_s": 0.48933676600063336,
+          "approved_transfer_api_s": 4.677407851002499,
+          "total_s": 5.702146717998403,
+          "bytes": 262144
+        }
+      ],
+      "workers": [
+        {
+          "node": "kali",
+          "state": "completed",
+          "exit_code": 0,
+          "worker": {
+            "parts": [
+              {
+                "index": 0,
+                "start": 2,
+                "end": 1000000,
+                "passes": 2,
+                "primes": 78498
+              },
+              {
+                "index": 1,
+                "start": 1000000,
+                "end": 2000000,
+                "passes": 2,
+                "primes": 70435
+              },
+              {
+                "index": 2,
+                "start": 2000000,
+                "end": 3000000,
+                "passes": 2,
+                "primes": 67883
+              }
+            ],
+            "inputs": [
+              {
+                "index": 0,
+                "bytes": 262144,
+                "sha256": "2b9958ceac22d5844cb4f17cbb1c09e28d2d5d869ea6271e9fabacb83dde4a49"
+              },
+              {
+                "index": 1,
+                "bytes": 262144,
+                "sha256": "ab21faa5944728b2b5ef6a093011ae6ab2db59938faf2e20b8b3dfc34c051ed7"
+              },
+              {
+                "index": 2,
+                "bytes": 262144,
+                "sha256": "45abf0b8f1dc3f0fc577b5ba3c4a954ee3b86347ebb4c957f9e790d8482885c9"
+              }
+            ],
+            "read_s": 0.00313187799838488,
+            "compute_s": 20.408897334000358,
+            "cpu_s": 20.389219898,
+            "worker_wall_s": 20.414133177997428,
+            "python": "3.14.10",
+            "platform": "Linux-7.2.15+kali-amd64-x86_64-with-glibc2.43"
+          }
+        }
+      ]
+    },
+    {
+      "repeat": 1,
+      "layout": "distributed",
+      "local_input_preparation_s": 0.0006997379969106987,
+      "input_transfer_s": 12.105925997999293,
+      "batch_submit_s": 0.6860442599972885,
+      "automatic_cli_job_approvals_s": 0.6136977610003669,
+      "completion_observation_s": 9.72803638899859,
+      "poll_api_s": 7.521831987996848,
+      "poll_count": 12,
+      "result_retrieval_s": 1.502249249999295,
+      "mcp_execution_s": 12.53006656100115,
+      "result_sha256": "70d528230c461d8beafa417a8390755735c142a8f9fccd662b4e43478c7f75f7",
+      "critical_compute_s": 8.765677696999774,
+      "sum_cpu_s": 16.333935398,
+      "non_compute_execution_envelope_s": 3.7643888640013756,
+      "total_s": 24.636913416001335,
+      "input_transfers": [
+        {
+          "node": "windows",
+          "index": 1,
+          "initial_request_s": 0.6792388360008772,
+          "automatic_cli_approvals_s": 0.5846556150027027,
+          "approved_transfer_api_s": 3.4198571689994424,
+          "total_s": 4.683797576002689,
+          "bytes": 262144
+        },
+        {
+          "node": "kali",
+          "index": 2,
+          "initial_request_s": 2.0887232269997185,
+          "automatic_cli_approvals_s": 1.3526592439993692,
+          "approved_transfer_api_s": 3.9805955150004593,
+          "total_s": 7.422016188000271,
+          "bytes": 262144
+        }
+      ],
+      "workers": [
+        {
+          "node": "ubuntu",
+          "state": "completed",
+          "exit_code": 0,
+          "worker": {
+            "parts": [
+              {
+                "index": 0,
+                "start": 2,
+                "end": 1000000,
+                "passes": 2,
+                "primes": 78498
+              }
+            ],
+            "inputs": [
+              {
+                "index": 0,
+                "bytes": 262144,
+                "sha256": "2b9958ceac22d5844cb4f17cbb1c09e28d2d5d869ea6271e9fabacb83dde4a49"
+              }
+            ],
+            "read_s": 0.000965903000178514,
+            "compute_s": 3.989289417000691,
+            "cpu_s": 3.9900221540000005,
+            "worker_wall_s": 3.990478952000558,
+            "python": "3.14.4",
+            "platform": "Linux-7.0.0-44-generic-x86_64-with-glibc2.43"
+          }
+        },
+        {
+          "node": "windows",
+          "state": "completed",
+          "exit_code": 0,
+          "worker": {
+            "parts": [
+              {
+                "index": 1,
+                "start": 1000000,
+                "end": 2000000,
+                "passes": 2,
+                "primes": 70435
+              }
+            ],
+            "inputs": [
+              {
+                "index": 1,
+                "bytes": 262144,
+                "sha256": "ab21faa5944728b2b5ef6a093011ae6ab2db59938faf2e20b8b3dfc34c051ed7"
+              }
+            ],
+            "read_s": 0.027551000006496906,
+            "compute_s": 3.6410029999969993,
+            "cpu_s": 3.578125,
+            "worker_wall_s": 3.6686991000024136,
+            "python": "3.14.7",
+            "platform": "Windows-11-10.0.26300-SP0"
+          }
+        },
+        {
+          "node": "kali",
+          "state": "completed",
+          "exit_code": 0,
+          "worker": {
+            "parts": [
+              {
+                "index": 2,
+                "start": 2000000,
+                "end": 3000000,
+                "passes": 2,
+                "primes": 67883
+              }
+            ],
+            "inputs": [
+              {
+                "index": 2,
+                "bytes": 262144,
+                "sha256": "45abf0b8f1dc3f0fc577b5ba3c4a954ee3b86347ebb4c957f9e790d8482885c9"
+              }
+            ],
+            "read_s": 0.0011641570017673075,
+            "compute_s": 8.765677696999774,
+            "cpu_s": 8.765788244,
+            "worker_wall_s": 8.767624319996685,
+            "python": "3.14.10",
+            "platform": "Linux-7.2.15+kali-amd64-x86_64-with-glibc2.43"
+          }
+        }
+      ]
+    },
+    {
+      "repeat": 1,
+      "layout": "ubuntu",
+      "local_input_preparation_s": 0.0016429440001957119,
+      "input_transfer_s": 4.679000994656235e-06,
+      "batch_submit_s": 0.016152306001458783,
+      "automatic_cli_job_approvals_s": 0.11969622900141985,
+      "completion_observation_s": 20.34481831499943,
+      "poll_api_s": 0.6951457419818325,
+      "poll_count": 99,
+      "result_retrieval_s": 0.007968527999764774,
+      "mcp_execution_s": 20.488671415998397,
+      "result_sha256": "70d528230c461d8beafa417a8390755735c142a8f9fccd662b4e43478c7f75f7",
+      "critical_compute_s": 19.97399469699667,
+      "sum_cpu_s": 19.973947331,
+      "non_compute_execution_envelope_s": 0.5146767190017272,
+      "total_s": 20.490507540002,
+      "input_transfers": [],
+      "workers": [
+        {
+          "node": "ubuntu",
+          "state": "completed",
+          "exit_code": 0,
+          "worker": {
+            "parts": [
+              {
+                "index": 0,
+                "start": 2,
+                "end": 1000000,
+                "passes": 2,
+                "primes": 78498
+              },
+              {
+                "index": 1,
+                "start": 1000000,
+                "end": 2000000,
+                "passes": 2,
+                "primes": 70435
+              },
+              {
+                "index": 2,
+                "start": 2000000,
+                "end": 3000000,
+                "passes": 2,
+                "primes": 67883
+              }
+            ],
+            "inputs": [
+              {
+                "index": 0,
+                "bytes": 262144,
+                "sha256": "2b9958ceac22d5844cb4f17cbb1c09e28d2d5d869ea6271e9fabacb83dde4a49"
+              },
+              {
+                "index": 1,
+                "bytes": 262144,
+                "sha256": "ab21faa5944728b2b5ef6a093011ae6ab2db59938faf2e20b8b3dfc34c051ed7"
+              },
+              {
+                "index": 2,
+                "bytes": 262144,
+                "sha256": "45abf0b8f1dc3f0fc577b5ba3c4a954ee3b86347ebb4c957f9e790d8482885c9"
+              }
+            ],
+            "read_s": 0.0029886429983889684,
+            "compute_s": 19.97399469699667,
+            "cpu_s": 19.973947331,
+            "worker_wall_s": 19.977600875998178,
+            "python": "3.14.4",
+            "platform": "Linux-7.0.0-44-generic-x86_64-with-glibc2.43"
+          }
+        }
+      ]
+    },
+    {
+      "repeat": 2,
+      "layout": "kali",
+      "local_input_preparation_s": 8.101000275928527e-06,
+      "input_transfer_s": 15.220317727998918,
+      "batch_submit_s": 0.5271564849972492,
+      "automatic_cli_job_approvals_s": 0.47741518299881136,
+      "completion_observation_s": 21.461970798001857,
+      "poll_api_s": 15.446679094999126,
+      "poll_count": 31,
+      "result_retrieval_s": 0.47136830000090413,
+      "mcp_execution_s": 22.937939331000962,
+      "result_sha256": "70d528230c461d8beafa417a8390755735c142a8f9fccd662b4e43478c7f75f7",
+      "critical_compute_s": 20.426956135997898,
+      "sum_cpu_s": 20.407696366,
+      "non_compute_execution_envelope_s": 2.510983195003064,
+      "total_s": 38.15845331300079,
+      "input_transfers": [
+        {
+          "node": "kali",
+          "index": 0,
+          "initial_request_s": 0.5812272789989947,
+          "automatic_cli_approvals_s": 0.5151131160018849,
+          "approved_transfer_api_s": 4.030017853998288,
+          "total_s": 5.126408183998137,
+          "bytes": 262144
+        },
+        {
+          "node": "kali",
+          "index": 1,
+          "initial_request_s": 0.5320651120018738,
+          "automatic_cli_approvals_s": 0.4866191159999289,
+          "approved_transfer_api_s": 4.024512415999197,
+          "total_s": 5.043236312998488,
+          "bytes": 262144
+        },
+        {
+          "node": "kali",
+          "index": 2,
+          "initial_request_s": 0.5308577780015185,
+          "automatic_cli_approvals_s": 0.49582041899702745,
+          "approved_transfer_api_s": 4.023813028001314,
+          "total_s": 5.050536690996523,
+          "bytes": 262144
+        }
+      ],
+      "workers": [
+        {
+          "node": "kali",
+          "state": "completed",
+          "exit_code": 0,
+          "worker": {
+            "parts": [
+              {
+                "index": 0,
+                "start": 2,
+                "end": 1000000,
+                "passes": 2,
+                "primes": 78498
+              },
+              {
+                "index": 1,
+                "start": 1000000,
+                "end": 2000000,
+                "passes": 2,
+                "primes": 70435
+              },
+              {
+                "index": 2,
+                "start": 2000000,
+                "end": 3000000,
+                "passes": 2,
+                "primes": 67883
+              }
+            ],
+            "inputs": [
+              {
+                "index": 0,
+                "bytes": 262144,
+                "sha256": "2b9958ceac22d5844cb4f17cbb1c09e28d2d5d869ea6271e9fabacb83dde4a49"
+              },
+              {
+                "index": 1,
+                "bytes": 262144,
+                "sha256": "ab21faa5944728b2b5ef6a093011ae6ab2db59938faf2e20b8b3dfc34c051ed7"
+              },
+              {
+                "index": 2,
+                "bytes": 262144,
+                "sha256": "45abf0b8f1dc3f0fc577b5ba3c4a954ee3b86347ebb4c957f9e790d8482885c9"
+              }
+            ],
+            "read_s": 0.0040410219990008045,
+            "compute_s": 20.426956135997898,
+            "cpu_s": 20.407696366,
+            "worker_wall_s": 20.433404209998116,
+            "python": "3.14.10",
+            "platform": "Linux-7.2.15+kali-amd64-x86_64-with-glibc2.43"
+          }
+        }
+      ]
+    },
+    {
+      "repeat": 2,
+      "layout": "distributed",
+      "local_input_preparation_s": 0.0007578469994768966,
+      "input_transfer_s": 10.098107786998298,
+      "batch_submit_s": 0.635022962000221,
+      "automatic_cli_job_approvals_s": 0.6078316960010852,
+      "completion_observation_s": 9.738738265001302,
+      "poll_api_s": 7.53326614999969,
+      "poll_count": 12,
+      "result_retrieval_s": 1.1542198179995466,
+      "mcp_execution_s": 12.135849897000298,
+      "result_sha256": "70d528230c461d8beafa417a8390755735c142a8f9fccd662b4e43478c7f75f7",
+      "critical_compute_s": 8.798923435999313,
+      "sum_cpu_s": 16.50531679,
+      "non_compute_execution_envelope_s": 3.336926461000985,
+      "total_s": 22.234930712002097,
+      "input_transfers": [
+        {
+          "node": "windows",
+          "index": 1,
+          "initial_request_s": 0.6818044470019231,
+          "automatic_cli_approvals_s": 0.5688294990031864,
+          "approved_transfer_api_s": 3.4745824599995103,
+          "total_s": 4.725251187002868,
+          "bytes": 262144
+        },
+        {
+          "node": "kali",
+          "index": 2,
+          "initial_request_s": 0.7351740129997779,
+          "automatic_cli_approvals_s": 0.5150182079996739,
+          "approved_transfer_api_s": 4.12251952799852,
+          "total_s": 5.3727498820007895,
+          "bytes": 262144
+        }
+      ],
+      "workers": [
+        {
+          "node": "ubuntu",
+          "state": "completed",
+          "exit_code": 0,
+          "worker": {
+            "parts": [
+              {
+                "index": 0,
+                "start": 2,
+                "end": 1000000,
+                "passes": 2,
+                "primes": 78498
+              }
+            ],
+            "inputs": [
+              {
+                "index": 0,
+                "bytes": 262144,
+                "sha256": "2b9958ceac22d5844cb4f17cbb1c09e28d2d5d869ea6271e9fabacb83dde4a49"
+              }
+            ],
+            "read_s": 0.0010749260000011418,
+            "compute_s": 4.130137313000887,
+            "cpu_s": 4.128679936,
+            "worker_wall_s": 4.13148056800128,
+            "python": "3.14.4",
+            "platform": "Linux-7.0.0-44-generic-x86_64-with-glibc2.43"
+          }
+        },
+        {
+          "node": "windows",
+          "state": "completed",
+          "exit_code": 0,
+          "worker": {
+            "parts": [
+              {
+                "index": 1,
+                "start": 1000000,
+                "end": 2000000,
+                "passes": 2,
+                "primes": 70435
+              }
+            ],
+            "inputs": [
+              {
+                "index": 1,
+                "bytes": 262144,
+                "sha256": "ab21faa5944728b2b5ef6a093011ae6ab2db59938faf2e20b8b3dfc34c051ed7"
+              }
+            ],
+            "read_s": 0.028061999997589737,
+            "compute_s": 3.649696100008441,
+            "cpu_s": 3.578125,
+            "worker_wall_s": 3.6779086000169627,
+            "python": "3.14.7",
+            "platform": "Windows-11-10.0.26300-SP0"
+          }
+        },
+        {
+          "node": "kali",
+          "state": "completed",
+          "exit_code": 0,
+          "worker": {
+            "parts": [
+              {
+                "index": 2,
+                "start": 2000000,
+                "end": 3000000,
+                "passes": 2,
+                "primes": 67883
+              }
+            ],
+            "inputs": [
+              {
+                "index": 2,
+                "bytes": 262144,
+                "sha256": "45abf0b8f1dc3f0fc577b5ba3c4a954ee3b86347ebb4c957f9e790d8482885c9"
+              }
+            ],
+            "read_s": 0.0010505280006327666,
+            "compute_s": 8.798923435999313,
+            "cpu_s": 8.798511854,
+            "worker_wall_s": 8.800739965001412,
+            "python": "3.14.10",
+            "platform": "Linux-7.2.15+kali-amd64-x86_64-with-glibc2.43"
+          }
+        }
+      ]
+    },
+    {
+      "repeat": 2,
+      "layout": "ubuntu",
+      "local_input_preparation_s": 0.0018696480001381133,
+      "input_transfer_s": 4.260000423528254e-06,
+      "batch_submit_s": 0.01664517899916973,
+      "automatic_cli_job_approvals_s": 0.1328017509986239,
+      "completion_observation_s": 20.571441991996835,
+      "poll_api_s": 0.7205515690002358,
+      "poll_count": 100,
+      "result_retrieval_s": 0.006214329001522856,
+      "mcp_execution_s": 20.72713418999774,
+      "result_sha256": "70d528230c461d8beafa417a8390755735c142a8f9fccd662b4e43478c7f75f7",
+      "critical_compute_s": 20.033471474002,
+      "sum_cpu_s": 20.03158561,
+      "non_compute_execution_envelope_s": 0.6936627159957425,
+      "total_s": 20.72918884899991,
+      "input_transfers": [],
+      "workers": [
+        {
+          "node": "ubuntu",
+          "state": "completed",
+          "exit_code": 0,
+          "worker": {
+            "parts": [
+              {
+                "index": 0,
+                "start": 2,
+                "end": 1000000,
+                "passes": 2,
+                "primes": 78498
+              },
+              {
+                "index": 1,
+                "start": 1000000,
+                "end": 2000000,
+                "passes": 2,
+                "primes": 70435
+              },
+              {
+                "index": 2,
+                "start": 2000000,
+                "end": 3000000,
+                "passes": 2,
+                "primes": 67883
+              }
+            ],
+            "inputs": [
+              {
+                "index": 0,
+                "bytes": 262144,
+                "sha256": "2b9958ceac22d5844cb4f17cbb1c09e28d2d5d869ea6271e9fabacb83dde4a49"
+              },
+              {
+                "index": 1,
+                "bytes": 262144,
+                "sha256": "ab21faa5944728b2b5ef6a093011ae6ab2db59938faf2e20b8b3dfc34c051ed7"
+              },
+              {
+                "index": 2,
+                "bytes": 262144,
+                "sha256": "45abf0b8f1dc3f0fc577b5ba3c4a954ee3b86347ebb4c957f9e790d8482885c9"
+              }
+            ],
+            "read_s": 0.003159404994221404,
+            "compute_s": 20.033471474002,
+            "cpu_s": 20.03158561,
+            "worker_wall_s": 20.037271323002642,
+            "python": "3.14.4",
+            "platform": "Linux-7.0.0-44-generic-x86_64-with-glibc2.43"
+          }
+        }
+      ]
+    },
+    {
+      "repeat": 2,
+      "layout": "windows",
+      "local_input_preparation_s": 9.49800232774578e-06,
+      "input_transfer_s": 14.01376318599796,
+      "batch_submit_s": 0.6805909390022862,
+      "automatic_cli_job_approvals_s": 0.5916124270006549,
+      "completion_observation_s": 12.231142184002238,
+      "poll_api_s": 9.423542848999205,
+      "poll_count": 15,
+      "result_retrieval_s": 0.6736137609987054,
+      "mcp_execution_s": 14.176999609997438,
+      "result_sha256": "70d528230c461d8beafa417a8390755735c142a8f9fccd662b4e43478c7f75f7",
+      "critical_compute_s": 11.143971200013766,
+      "sum_cpu_s": 10.890625,
+      "non_compute_execution_envelope_s": 3.0330284099836717,
+      "total_s": 28.19095597699925,
+      "input_transfers": [
+        {
+          "node": "windows",
+          "index": 0,
+          "initial_request_s": 0.6827426480012946,
+          "automatic_cli_approvals_s": 0.5805525600007968,
+          "approved_transfer_api_s": 3.4195716840004025,
+          "total_s": 4.682902651999029,
+          "bytes": 262144
+        },
+        {
+          "node": "windows",
+          "index": 1,
+          "initial_request_s": 0.6801824879985361,
+          "automatic_cli_approvals_s": 0.5806094899999152,
+          "approved_transfer_api_s": 3.4763568800008215,
+          "total_s": 4.737189576000674,
+          "bytes": 262144
+        },
+        {
+          "node": "windows",
+          "index": 2,
+          "initial_request_s": 0.6317965230009577,
+          "automatic_cli_approvals_s": 0.592331154999556,
+          "approved_transfer_api_s": 3.369376849001128,
+          "total_s": 4.593545941999764,
+          "bytes": 262144
+        }
+      ],
+      "workers": [
+        {
+          "node": "windows",
+          "state": "completed",
+          "exit_code": 0,
+          "worker": {
+            "parts": [
+              {
+                "index": 0,
+                "start": 2,
+                "end": 1000000,
+                "passes": 2,
+                "primes": 78498
+              },
+              {
+                "index": 1,
+                "start": 1000000,
+                "end": 2000000,
+                "passes": 2,
+                "primes": 70435
+              },
+              {
+                "index": 2,
+                "start": 2000000,
+                "end": 3000000,
+                "passes": 2,
+                "primes": 67883
+              }
+            ],
+            "inputs": [
+              {
+                "index": 0,
+                "bytes": 262144,
+                "sha256": "2b9958ceac22d5844cb4f17cbb1c09e28d2d5d869ea6271e9fabacb83dde4a49"
+              },
+              {
+                "index": 1,
+                "bytes": 262144,
+                "sha256": "ab21faa5944728b2b5ef6a093011ae6ab2db59938faf2e20b8b3dfc34c051ed7"
+              },
+              {
+                "index": 2,
+                "bytes": 262144,
+                "sha256": "45abf0b8f1dc3f0fc577b5ba3c4a954ee3b86347ebb4c957f9e790d8482885c9"
+              }
+            ],
+            "read_s": 0.07457530000829138,
+            "compute_s": 11.143971200013766,
+            "cpu_s": 10.890625,
+            "worker_wall_s": 11.218885499984026,
+            "python": "3.14.7",
+            "platform": "Windows-11-10.0.26300-SP0"
+          }
+        }
+      ]
+    }
+  ],
+  "excluded_attempt": "Worker Ubuntu inactive before CPU execution. Queued job cancelled and fixtures cleaned. Cause of prior TERM not established.",
+  "evidence_scope": "Timing and result records from the valid run. Node UUIDs, paths, IP addresses and routing configuration omitted."
+}
