@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: 2026 Daniele Cangi
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: Functional tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  functional:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.10', '3.14']
+    env:
+      PYTHONWARNINGS: error::DeprecationWarning
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: agent/requirements.txt
+      - name: Install dependencies
+        run: python -m pip install -r agent/requirements.txt
+      - name: Test runtime, permissions, registry and files
+        run: python -m unittest discover -s agent -p "test_*.py" -v
+      - name: Test isolated MCP sessions
+        run: python .github/scripts/mcp_smoke.py
+      - name: Compile Python desktop entry points
+        if: runner.os == 'Linux'
+        run: >-
+          python -m py_compile
+          "outputs/Windows Dock/windows-dock.py"
+          "outputs/Windows Dock/node_catalog.py"
+          "outputs/Windows Dock/remote_desktop.py"
+          "outputs/Windows Dock/wayland_input.py"
+          "outputs/Windows Dock/windows_ssh.py"
+      - name: Build Windows desktop application
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $build = Join-Path $env:RUNNER_TEMP ('Vincula-GUI-' + [Guid]::NewGuid().ToString('N'))
+          [void][IO.Directory]::CreateDirectory($build)
+          try {
+            $source = [IO.File]::ReadAllText((Resolve-Path 'outputs/Linux Dock/LinuxDock.cs').Path)
+            $output = Join-Path $build 'Linux Dock.exe'
+            Add-Type -TypeDefinition $source -OutputType WindowsApplication `
+              -ReferencedAssemblies 'System.dll','System.Core.dll','System.Drawing.dll','System.Windows.Forms.dll','System.Web.Extensions.dll' `
+              -OutputAssembly $output
+            [void][Reflection.AssemblyName]::GetAssemblyName($output)
+            Write-Output 'Windows desktop application compiled successfully.'
+          } finally {
+            Remove-Item -LiteralPath $build -Recurse -Force
+          }
