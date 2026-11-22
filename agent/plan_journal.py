@@ -19,6 +19,7 @@ SELECTOR = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 PROGRAM = re.compile(r"[a-z][a-z0-9_-]{0,47}")
 CAPABILITY = re.compile(r"[a-z][a-z0-9_-]{0,23}\.[a-z][a-z0-9_-]{0,23}")
 DIGEST = re.compile(r"[0-9a-f]{64}")
+REVISION = re.compile(r"[0-9a-f]{32}")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS plan_journal(
     kind TEXT NOT NULL, id TEXT NOT NULL, manifest TEXT NOT NULL,
@@ -101,7 +102,7 @@ def validate_capability_part(part, requested, next_index):
     if (not isinstance(part, dict)
             or part.keys() != {"node_id", "job_id", "revision", "inbox", "parameters", "inputs"}):
         raise ValueError("Invalid capability manifest part.")
-    if not selector(part["node_id"]) or not isinstance(part["revision"], str) or not DIGEST.fullmatch(part["revision"]):
+    if not selector(part["node_id"]) or not isinstance(part["revision"], str) or not REVISION.fullmatch(part["revision"]):
         raise ValueError("Invalid capability manifest assignment or revision.")
     canonical_uuid(part["job_id"])
     if part["inbox"] is not None and (not isinstance(part["inbox"], str) or not PROGRAM.fullmatch(part["inbox"])):

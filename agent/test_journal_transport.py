@@ -32,7 +32,7 @@ def large_capability_manifest():
         parameters = {"message": "journal-content-" + "y" * 440}
         requested.append({"node_id": node, "files": files, "parameters": parameters})
         parts.append({"node_id": node, "job_id": str(uuid5(run, f"capability:{origin}:{node}")),
-                      "revision": "a" * 64, "inbox": "inbox", "parameters": parameters,
+                      "revision": "a" * 32, "inbox": "inbox", "parameters": parameters,
                       "inputs": [{"index": position * 4 + index, "source": source}
                                  for index, source in enumerate(files)]})
     return {"version": 1, "kind": "capability", "id": str(run), "origin": origin,

@@ -6,6 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 from contextlib import closing
 import sqlite3
+import sys
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -21,7 +22,7 @@ from test_plan_recovery import WorkerNetwork
 class CapabilityNetwork(WorkerNetwork):
     def __init__(self, root, nodes):
         super().__init__(root, nodes)
-        provider = {"id": "example.text", "version": "1", "revision": "a" * 64, "inbox": "inbox",
+        provider = {"id": "example.text", "version": "1", "revision": "a" * 32, "inbox": "inbox",
                     "contract": {"max_files": 1, "max_input_bytes": 32, "extensions": [".txt"],
                                  "parameters": {"count": {"type": "integer", "required": True}}}}
         self.providers = {node: deepcopy(provider) for node in nodes}
@@ -124,11 +125,31 @@ class CapabilityRecoveryTests(unittest.TestCase):
         self.assertTrue(all(request["operation"] in allowed[request["action"]]
                             for _, request in self.network.calls))
 
+    def test_journal_accepts_revisions_from_a_real_registered_provider(self):
+        adapter = self.root / "registered_adapter.py"
+        adapter.write_text("def run(inputs, parameters, workspace):\n    return 42\n", encoding="utf-8")
+        with jobs.transaction() as db:
+            jobs.capabilities.register(db, jobs.files, {
+                "id": "example.real", "version": "1", "python": sys.executable,
+                "adapter": str(adapter), "max_files": 0,
+            })
+        provider = jobs.dispatch("capability", operation="describe", capability_id="example.real")
+        self.assertEqual(len(provider["revision"]), 32)
+        request = {"capability_id": "example.real", "parts": [
+            {"node_id": self.first, "files": [], "parameters": {}}
+        ]}
+        capability_workflow.make_plan(self.key, request, {self.first: provider}, self.origin)
+        body = capability_workflow.manifest(self.key, self.origin)
+        receipt = jobs.dispatch("plan", operation="store", manifest=body)
+        self.assertEqual(receipt["state"], "stored")
+        saved = jobs.dispatch("plan", operation="get", kind="capability", plan_id=str(self.key))
+        self.assertEqual(saved["manifest"]["plan"]["parts"][0]["revision"], provider["revision"])
+
     def test_pending_input_approvals_and_original_transfer_ids_survive_origin_loss(self):
         initial = self.submit()
         self.assertTrue(all(part.waiting_transfers for part in initial.parts))
         body = capability_workflow.manifest(self.key, self.origin)
-        self.assertEqual(body["plan"]["parts"][0]["revision"], "a" * 64)
+        self.assertEqual(body["plan"]["parts"][0]["revision"], "a" * 32)
         self.assertEqual([part["inputs"][0]["index"] for part in body["plan"]["parts"]], [0, 1])
         self.network.offline.add(self.origin)
         before = deepcopy(self.network.mutations)
