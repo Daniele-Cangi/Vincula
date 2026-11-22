@@ -17,6 +17,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import desktop_supervisor as desktop
+import desktop_process
 import desktop_security
 
 
@@ -226,12 +227,11 @@ class DesktopSupervisorTests(unittest.TestCase):
 
     def test_missing_guardian_heartbeats_fail_closed_even_while_control_pipe_is_open(self):
         plan = self.plan()
-        spec = self.directory / "guardian.json"
-        spec.write_text(json.dumps({"argv": plan["commands"][0]["argv"], "lease_seconds": 0.5,
-                                    "heartbeat_token": "b" * 64, "log": str(self.directory / "input.log")}))
-        guardian = subprocess.Popen([sys.executable, "-S", str(Path(desktop.__file__).with_name("desktop_process.py")), str(spec)],
-                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                    text=True, encoding="utf-8")
+        frame = desktop_process.spec_frame({"argv": plan["commands"][0]["argv"], "cwd": None,
+                                           "lease_seconds": 0.5, "heartbeat_token": "b" * 64})
+        guardian, writer = desktop.start_guardian(self.directory, subprocess.PIPE)
+        with os.fdopen(writer, "wb", buffering=0) as channel:
+            desktop.send_specification(channel.fileno(), frame)
         try:
             self.assertEqual(json.loads(guardian.stdout.readline())["event"], "started")
             children = self.children()
@@ -343,14 +343,15 @@ class DesktopSupervisorTests(unittest.TestCase):
                     supervisor.prepare(plan)
                     if delayed == "staging":
                         supervisor.state = "starting"
-                        original = desktop.atomic_json
+                        original = desktop.desktop_security.private_directory
 
-                        def slow_stage(path, value):
-                            original(path, value)
-                            if path.name == "input.json":
+                        def slow_stage(path):
+                            result = original(path)
+                            if path.name == "input":
                                 clock.return_value = 100.6
+                            return result
 
-                        with patch.object(desktop, "atomic_json", side_effect=slow_stage), patch.object(desktop.subprocess, "Popen") as spawn:
+                        with patch.object(desktop.desktop_security, "private_directory", side_effect=slow_stage), patch.object(desktop.subprocess, "Popen") as spawn:
                             supervisor.launch()
                             spawn.assert_not_called()
                     else:
@@ -393,6 +394,182 @@ class DesktopSupervisorTests(unittest.TestCase):
                     daemon.wait(timeout=4)
                     self.assertEqual(daemon.returncode, 0)
                     self.assertFalse((self.directory / "endpoint.json").exists())
+
+    def test_private_spec_parser_rejects_selectors_without_filesystem_queries(self):
+        valid = {"argv": [str(Path(sys.executable).resolve()), "-c", "pass"], "cwd": None,
+                 "lease_seconds": 0.5, "heartbeat_token": "b" * 64}
+        invalid = [dict(valid, log=str(self.directory.parent / "outside.log")),
+                   dict(valid, cwd="../outside"), dict(valid, argv=["../program"]),
+                   dict(valid, heartbeat_token="invalid"), dict(valid, lease_seconds=True),
+                   dict(valid, __class__="untrusted")]
+        with patch.object(Path, "is_file", side_effect=AssertionError("No path query belongs in the wire parser.")):
+            for specification in invalid:
+                with self.subTest(specification=specification), self.assertRaises(ValueError):
+                    desktop_process.spec_frame(specification)
+            syntactic = dict(valid, argv=[str(self.directory / "not-installed-program")])
+            self.assertEqual(desktop_process.validate_spec(syntactic)["argv"], syntactic["argv"])
+
+    def test_guardian_rejects_public_spec_filenames_and_regular_file_capabilities(self):
+        outside = self.directory.parent / "outside.log"
+        specification = self.directory.parent / "crafted-public.json"
+        specification.write_text(json.dumps({"argv": [sys.executable, "-c", "print('untrusted')"],
+            "cwd": str(self.directory.parent), "log": str(outside), "lease_seconds": 0.5, "heartbeat_token": "b" * 64}))
+        result = subprocess.run([sys.executable, "-S", desktop_process.__file__, str(specification)],
+                                cwd=self.directory, capture_output=True, text=True, timeout=3)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stdout)["event"], "error")
+        self.assertFalse(outside.exists())
+        with patch.object(sys, "argv", [desktop_process.__file__, "--internal-spec-fd", "99999999999999999999"]), self.assertRaises(ValueError):
+            desktop_process.inherited_spec_pipe()
+        descriptor = os.open(specification, os.O_RDONLY)
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+                selector, capability = "--internal-spec-handle", msvcrt.get_osfhandle(descriptor)
+            else:
+                selector, capability = "--internal-spec-fd", descriptor
+            with patch.object(sys, "argv", [desktop_process.__file__, selector, str(capability)]), self.assertRaises(ValueError):
+                desktop_process.inherited_spec_pipe()
+        finally:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+    def close_guardian(self, process):
+        if not process.stdin.closed:
+            process.stdin.close()
+        if process.poll() is None:
+            process.wait(timeout=5)
+        process.stdout.close()
+        process.stderr.close()
+
+    def test_private_pipe_rejects_traversal_extra_fields_bad_frames_and_output_links(self):
+        valid = {"argv": [str(Path(sys.executable).resolve()), "-c", "print('untrusted')"], "cwd": None,
+                 "lease_seconds": 0.5, "heartbeat_token": "b" * 64}
+        outside = self.directory.parent / "outside.log"
+        outside.write_text("unchanged")
+        encoded = json.dumps(valid).encode()
+        frames = {
+            "output-path": json.dumps(dict(valid, log=str(outside))).encode(),
+            "relative-cwd": json.dumps(dict(valid, cwd="../outside")).encode(),
+            "attribute": json.dumps(dict(valid, __dict__={"log": str(outside)})).encode()}
+        cases = {name: len(frame).to_bytes(4, "big") + frame for name, frame in frames.items()}
+        cases.update({"oversized": (desktop_process.MAX_SPEC_BYTES + 1).to_bytes(4, "big"),
+                      "truncated": (20).to_bytes(4, "big") + b"{}",
+                      "trailing": len(encoded).to_bytes(4, "big") + encoded + b"x",
+                      "linked-output": desktop_process.spec_frame(valid)})
+        for name, frame in cases.items():
+            with self.subTest(name=name):
+                directory = desktop_security.private_directory(self.directory / name)
+                if name == "linked-output":
+                    os.link(outside, directory / "stdout.log")
+                process, writer = desktop.start_guardian(directory, subprocess.PIPE)
+                try:
+                    with os.fdopen(writer, "wb", buffering=0) as channel:
+                        desktop.send_specification(channel.fileno(), frame)
+                    process.wait(timeout=5)
+                    self.assertNotEqual(process.returncode, 0)
+                    self.assertEqual(json.loads(process.stdout.read())["event"], "error")
+                    if name != "linked-output":
+                        self.assertFalse((directory / "stdout.log").exists())
+                    self.assertEqual(outside.read_text(), "unchanged")
+                finally:
+                    self.close_guardian(process)
+
+    def test_control_eof_stops_guardian_while_specification_pipe_is_stalled(self):
+        process, writer = desktop.start_guardian(self.directory, subprocess.PIPE)
+        try:
+            process.stdin.close()
+            # Keep the separate specification writer open and silent deliberately.
+            process.wait(timeout=3)
+            self.assertNotEqual(process.returncode, 0)
+            self.assertEqual(json.loads(process.stdout.read())["event"], "error")
+            self.assertFalse((self.directory / "stdout.log").exists())
+        finally:
+            os.close(writer)
+            self.close_guardian(process)
+
+    def test_control_eof_observed_during_log_preparation_prevents_program_spawn(self):
+        wrapper = self.directory / "guardian_barrier.py"
+        wrapper.write_text(
+            "import sys,time\nfrom pathlib import Path\n"
+            f"sys.path.insert(0,{str(Path(desktop_process.__file__).resolve().parent)!r})\n"
+            "import desktop_process as guardian\n"
+            "original_event=guardian.Event\nfirst=[]\n"
+            "def event():\n"
+            "    value=original_event()\n"
+            "    if not first:\n"
+            "        first.append(value)\n        original_set=value.set\n"
+            "        def observed_set():\n"
+            "            original_set()\n            Path('eof-observed').touch()\n"
+            "        value.set=observed_set\n"
+            "    return value\n"
+            "guardian.Event=event\n"
+            "original_protect=guardian.desktop_security.protect_new_file\n"
+            "def delayed_protect(path):\n"
+            "    Path('log-preparation-entered').touch()\n"
+            "    deadline=time.monotonic()+5\n"
+            "    while not Path('release-log-preparation').exists():\n"
+            "        if time.monotonic()>=deadline: raise RuntimeError('test barrier timed out')\n"
+            "        time.sleep(.005)\n"
+            "    return original_protect(path)\n"
+            "guardian.desktop_security.protect_new_file=delayed_protect\n"
+            "original_spawn=guardian.subprocess.Popen\n"
+            "def observed_spawn(*args,**kwargs):\n"
+            "    Path('program-spawn-attempt').touch()\n"
+            "    return original_spawn(*args,**kwargs)\n"
+            "guardian.subprocess.Popen=observed_spawn\n"
+            "raise SystemExit(guardian.main())\n",
+            encoding="utf-8",
+        )
+        original_spawn = subprocess.Popen
+
+        def launch_wrapper(argv, **options):
+            arguments = list(argv)
+            arguments[1] = str(wrapper)
+            return original_spawn(arguments, **options)
+
+        # Use the real private pipe, inherited handle/FD and control EOF on both
+        # platforms; only the child's last filesystem operation is delayed.
+        with patch.object(desktop.subprocess, "Popen", side_effect=launch_wrapper):
+            process, writer = desktop.start_guardian(self.directory, subprocess.PIPE)
+        frame = desktop_process.spec_frame({
+            "argv": [str(Path(sys.executable).resolve()), "-c",
+                     "from pathlib import Path;Path('program-effect').touch()"],
+            "cwd": None, "lease_seconds": 0.5, "heartbeat_token": "b" * 64,
+        })
+        try:
+            with os.fdopen(writer, "wb", buffering=0) as channel:
+                desktop.send_specification(channel.fileno(), frame)
+            wait_until(lambda: (self.directory / "log-preparation-entered").exists())
+            process.stdin.close()
+            wait_until(lambda: (self.directory / "eof-observed").exists())
+            (self.directory / "release-log-preparation").touch()
+            process.wait(timeout=5)
+            self.assertNotEqual(process.returncode, 0, process.stderr.read())
+            reply = json.loads(process.stdout.read())
+            self.assertEqual(reply["event"], "error")
+            self.assertIn("stopped before program startup", reply["message"])
+            self.assertFalse((self.directory / "program-spawn-attempt").exists())
+            self.assertFalse((self.directory / "program-effect").exists())
+        finally:
+            (self.directory / "release-log-preparation").touch()
+            self.close_guardian(process)
+
+    def test_authorized_working_directory_is_preserved_with_confined_log(self):
+        self.start()
+        working = desktop_security.private_directory(self.directory / "approved-work")
+        plan = self.plan()
+        command = plan["commands"][0]
+        command["cwd"] = str(working)
+        command["argv"][2] = "import os;print('cwd='+os.getcwd(),flush=True);" + command["argv"][2]
+        self.run_plan(plan)
+        log = Path(self.state()["components"][0]["log"])
+        self.assertEqual(log, self.directory / plan["session_id"] / "input" / "stdout.log")
+        self.assertIn("cwd=" + str(working), log.read_text())
+        self.call("stop")
+        wait_until(lambda: self.state()["state"] == "stopped")
 
     def broaden_windows_acl(self, path):
         """Test-only fixture mutation, using fixed SID identifiers in temporary storage."""
