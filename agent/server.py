@@ -38,6 +38,19 @@ Availability = Literal["available", "unavailable", "not_configured"]
 mcp = MCPServer("vincula", instructions="Inspect Vincula nodes and manage their locally authorized programs.")
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 
+WINDOWS_NVIDIA_LOCATOR = r"""
+$nvidia = $null
+foreach ($entry in ($env:PATH -split ';')) {
+    $directory = ([string]$entry).Trim().Trim('"')
+    if ($directory -notmatch '^(?:[A-Za-z]:[\\/]|\\\\[^\\]+\\[^\\]+(?:[\\/]|$))') { continue }
+    try {
+        $candidate = [IO.Path]::GetFullPath([IO.Path]::Combine($directory, 'nvidia-smi.exe'))
+        if ([IO.File]::Exists($candidate)) { $nvidia = $candidate; break }
+    } catch [ArgumentException] { continue }
+      catch [NotSupportedException] { continue }
+      catch [IO.IOException] { continue }
+}
+"""
 WINDOWS_RESOURCES = r"""
 $gpus = $null
 try {
@@ -45,11 +58,11 @@ try {
         @{ name = $_.Name; vram_total_bytes = $null; vram_available_bytes = $null }
     })
 } catch {}
-$nvidia = Get-Command nvidia-smi.exe -CommandType Application -ErrorAction SilentlyContinue
+""" + WINDOWS_NVIDIA_LOCATOR + r"""
 if ($nvidia) {
     try {
         $info = New-Object Diagnostics.ProcessStartInfo
-        $info.FileName = $nvidia.Source
+        $info.FileName = $nvidia
         $info.Arguments = '--query-gpu=name,memory.total,memory.free --format=csv,noheader,nounits'
         $info.UseShellExecute = $false
         $info.CreateNoWindow = $true

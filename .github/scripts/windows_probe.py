@@ -26,7 +26,7 @@ function Measure-CI([string]$name, [scriptblock]$body) {
 """
 
 
-def cold_command(base, resources):
+def cold_command(base, resources, locator):
     for label, expression in (
         ("OS", "Get-CimInstance Win32_OperatingSystem"),
         ("CPU", 'Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name=\'_Total\'"'),
@@ -35,14 +35,13 @@ def cold_command(base, resources):
         base = base.replace(expression, f"(Measure-CI '{label}' {{ {expression} }})", 1)
     expression = "Get-CimInstance Win32_VideoController"
     resources = resources.replace(expression, f"(Measure-CI 'GPU' {{ {expression} }})", 1)
-    expression = "Get-Command nvidia-smi.exe -CommandType Application -ErrorAction SilentlyContinue"
-    resources = resources.replace(expression, f"(Measure-CI 'NVIDIA' {{ {expression} }})", 1)
+    resources = resources.replace(locator, "$nvidia = Measure-CI 'NVIDIA' {\n" + locator + "\n$nvidia\n}\n", 1)
     return MEASURE_STAGE + "$status = & {\n" + base + "\n} | ConvertFrom-Json\n" + resources
 
 
 def cold_probe():
     sys.path.insert(0, str(AGENT))
-    from server import WINDOWS_RESOURCES, windows_ssh
+    from server import WINDOWS_NVIDIA_LOCATOR, WINDOWS_RESOURCES, windows_ssh
 
     process_run = subprocess.run
 
@@ -59,7 +58,9 @@ def cold_probe():
     try:
         # This is the first and only status call in this fresh runner process.
         with patch.object(windows_ssh.subprocess, "run", show_stderr):
-            windows_ssh.local_status(timeout=60, command=cold_command(windows_ssh.STATUS_COMMAND, WINDOWS_RESOURCES))
+            windows_ssh.local_status(timeout=60, command=cold_command(
+                windows_ssh.STATUS_COMMAND, WINDOWS_RESOURCES, WINDOWS_NVIDIA_LOCATOR,
+            ))
     except (subprocess.SubprocessError, windows_ssh.LinkError, OSError, ValueError) as error:
         raise SystemExit(f"Cold Windows status: {type(error).__name__} after {monotonic() - started:.2f}s.") from None
     print(f"Cold Windows status: completed in {monotonic() - started:.2f}s.", flush=True)
