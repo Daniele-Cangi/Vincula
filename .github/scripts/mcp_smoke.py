@@ -15,6 +15,7 @@ from uuid import uuid4
 
 
 AGENT = Path(__file__).resolve().parents[2] / "agent"
+WINDOWS_ENVIRONMENT = ("PSModulePath", "ProgramData", "WINDIR", "COMSPEC")
 
 
 def windows_query(label, command, timeout):
@@ -31,14 +32,27 @@ def windows_query(label, command, timeout):
     return result
 
 
-def diagnose_windows_components():
-    from server import WINDOWS_RESOURCES, windows_ssh
+def diagnose_windows_environment():
+    from server import windows_ssh
 
-    print("Diagnosing the failed probe with separate real queries.", flush=True)
-    windows_query("PowerShell startup", "@{ci='started'} | ConvertTo-Json", 20)
-    status = windows_query("base status", windows_ssh.STATUS_COMMAND, 60)
-    command = "$status = " + windows_ssh._ps_string(json.dumps(status)) + " | ConvertFrom-Json\n" + WINDOWS_RESOURCES
-    windows_query("hardware inventory", command, 60)
+    values = json.loads(os.environ.pop("VINCULA_CI_WINDOWS_ENV", "{}"))
+    # This query uses only .NET methods, so it cannot trigger cmdlet autoloading.
+    try:
+        windows_query(".NET-only startup", "[Console]::WriteLine('{\"ci\":\"started\"}')", 20)
+    except subprocess.TimeoutExpired:
+        pass
+    for name, value in values.items():
+        previous = os.environ.get(name)
+        os.environ[name] = value
+        try:
+            windows_query(f"startup with {name}", "@{ci='started'} | ConvertTo-Json", 12)
+        except (subprocess.SubprocessError, windows_ssh.LinkError, OSError, ValueError) as error:
+            print(f"Environment diagnostic with {name} failed: {type(error).__name__}.", flush=True)
+        finally:
+            if previous is None:
+                del os.environ[name]
+            else:
+                os.environ[name] = previous
 
 
 def windows_probe():
@@ -48,7 +62,7 @@ def windows_probe():
     try:
         result = windows_query("normal MCP", WINDOWS_STATUS, 12)
     except subprocess.TimeoutExpired:
-        diagnose_windows_components()
+        diagnose_windows_environment()
         raise RuntimeError("The normal Windows MCP probe exceeded its 12-second limit.") from None
     print(json.dumps(result, ensure_ascii=True))
 
@@ -64,7 +78,9 @@ def prepare_windows_probe(env):
         print("Windows status providers initialized.")
         result = subprocess.run(
             [sys.executable, str(Path(__file__).resolve()), "--windows-probe"],
-            env=get_default_environment() | env, capture_output=True, text=True, timeout=180,
+            env=get_default_environment() | env | {"VINCULA_CI_WINDOWS_ENV": json.dumps({
+                name: os.environ[name] for name in WINDOWS_ENVIRONMENT if name in os.environ
+            })}, capture_output=True, text=True, timeout=180,
         )
         print(result.stdout + result.stderr)
         if result.returncode:

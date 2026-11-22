@@ -26,7 +26,7 @@ Ogni programma Linux viene avviato da un supervisore separato. Il kernel segnala
 
 Le conferme di avvio e di uscita sono distinte. Un errore confermato prima dell’avvio produce `failed`. Se manca una conferma affidabile dopo un possibile avvio, il lavoro rimane `unconfirmed`. Il riavvio e la ripetizione dello stesso UUID non lo eseguono nuovamente. Codice di uscita e log restano separati dallo stato del supervisore.
 
-Il servizio systemd conserva anche il contenimento del cgroup. Questo è necessario per una garanzia forte quando vengono uccisi insieme worker e supervisore o quando i discendenti assumono privilegi differenti. I controlli `ask` e `full` sul destinatario mantengono il loro comportamento.
+Il servizio systemd conserva anche il contenimento del cgroup. Questo è necessario per una garanzia forte quando il supervisore stesso riceve `SIGKILL`, da solo o insieme al worker, o quando i discendenti assumono privilegi differenti. Il percorso CLI senza cgroup non garantisce la pulizia dopo la terminazione forzata del supervisore. I controlli `ask` e `full` sul destinatario mantengono il loro comportamento.
 
 ## Verifica
 
