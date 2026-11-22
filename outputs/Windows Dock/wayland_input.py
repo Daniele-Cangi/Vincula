@@ -75,6 +75,15 @@ def require_running(process, log, fallback):
         raise windows.LinkError(message or fallback)
 
 
+def confirm_connection(server_connected, ready, recent, expired):
+    if server_connected and STARTED in os.pread(ready.fileno(), 8192, 0):
+        return True
+    if expired:
+        message = windows._text(recent[-8192:])
+        raise windows.LinkError("Deskflow non si è connesso. Controlla il consenso di GNOME.\n" + message)
+    return False
+
+
 def monitor(server, tunnel, server_log, ssh_log, ready, stop, opened):
     deadline = monotonic() + 45
     lost_at = None
@@ -88,15 +97,11 @@ def monitor(server, tunnel, server_log, ssh_log, ready, stop, opened):
         recent = os.pread(server_log.fileno(), 65536, start)
         connected = recent.rfind(CONNECTED)
         disconnected = recent.rfind(DISCONNECTED)
-        if opened is not None:
-            windows_ready = STARTED in os.pread(ready.fileno(), 8192, 0)
-            if connected > disconnected and windows_ready:
-                opened()
-                opened = None
-                connected_once = True
-            elif now >= deadline:
-                message = windows._text(recent[-8192:])
-                raise windows.LinkError("Deskflow non si è connesso. Controlla il consenso di GNOME.\n" + message)
+        if not connected_once and opened is not None and confirm_connection(
+            connected > disconnected, ready, recent, now >= deadline
+        ):
+            opened()
+            connected_once = True
         if connected_once and disconnected > connected:
             lost_at = now if lost_at is None else lost_at
             if now - lost_at >= 5:
@@ -133,17 +138,21 @@ def share_input(stop, edge, opened, managed_process):
                                VINCULA_REMOTE_DESKTOP_CLIPBOARD="1")
                 server = [str(engine_path), "server", "--new-instance", "-s", str(config)]
                 try:
-                    with TemporaryFile() as server_log, TemporaryFile() as ssh_log, TemporaryFile() as ready:
-                        with managed_process(server, env=env, stdout=server_log, stderr=server_log) as engine:
-                            with managed_process(ssh, stdin=subprocess.PIPE, stderr=ssh_log, stdout=ready) as tunnel:
-                                try:
-                                    monitor(engine, tunnel, server_log, ssh_log, ready, stop, opened)
-                                finally:
-                                    tunnel.stdin.close()
-                                    try:
-                                        tunnel.wait(timeout=6)
-                                    except subprocess.TimeoutExpired:
-                                        tunnel.terminate()
+                    with (
+                        TemporaryFile() as server_log,
+                        TemporaryFile() as ssh_log,
+                        TemporaryFile() as ready,
+                        managed_process(server, env=env, stdout=server_log, stderr=server_log) as engine,
+                        managed_process(ssh, stdin=subprocess.PIPE, stderr=ssh_log, stdout=ready) as tunnel,
+                    ):
+                        try:
+                            monitor(engine, tunnel, server_log, ssh_log, ready, stop, opened)
+                        finally:
+                            tunnel.stdin.close()
+                            try:
+                                tunnel.wait(timeout=6)
+                            except subprocess.TimeoutExpired:
+                                tunnel.terminate()
                 finally:
                     # A broken SSH connection may terminate PowerShell before its own finally runs.
                     windows._require_success(windows._powershell(call_client + " -Stop", timeout=10))

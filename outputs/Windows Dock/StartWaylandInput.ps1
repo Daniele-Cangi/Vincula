@@ -39,14 +39,14 @@ if ($Client) {
     $arguments = 'client --new-instance -s "' + $settings + '"'
     $process = Start-Process -FilePath $binary -ArgumentList $arguments -WorkingDirectory $engine -WindowStyle Hidden -PassThru
     try {
-        while (!$process.WaitForExit(500)) {
-            if (!(Test-Path -LiteralPath $lease)) { break }
+        while (-not $process.WaitForExit(500)) {
+            if (-not (Test-Path -LiteralPath $lease)) { break }
             $owner = Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -LocalPort 24802 -ErrorAction SilentlyContinue |
                 Select-Object -ExpandProperty OwningProcess
             if ($TunnelProcessId -notin $owner) { break }
         }
     } finally {
-        if (!$process.HasExited) {
+        if (-not $process.HasExited) {
             Stop-Process -Id $process.Id -ErrorAction SilentlyContinue
             [void]$process.WaitForExit(2000)
         }
@@ -57,11 +57,11 @@ if ($Client) {
 
 $certificate = Join-Path $engine 'settings/tls/dock-windows.pem'
 $trusted = Join-Path $engine 'settings/tls/trusted-clients'
-if (!(Test-Path -LiteralPath $binary) -or !(Test-Path -LiteralPath $certificate)) {
+if (-not (Test-Path -LiteralPath $binary) -or -not (Test-Path -LiteralPath $certificate)) {
     throw 'Deskflow su Windows non disponibile.'
 }
 $knownPeer = @([IO.File]::ReadAllLines($trusted) | Where-Object { $_ -match '^v2:sha256:[0-9a-fA-F]{64}$' })
-if (!$knownPeer.Count) { throw 'Impronta TLS verificata di Ubuntu assente.' }
+if (-not $knownPeer.Count) { throw 'Impronta TLS verificata di Ubuntu assente.' }
 
 $tls = Join-Path $root 'tls'
 [void][IO.Directory]::CreateDirectory($tls)
@@ -84,7 +84,7 @@ certificate="$certPath"
 
 $listener = Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -LocalPort 24802 -ErrorAction SilentlyContinue |
     Select-Object -First 1
-if (!$listener) { throw 'Il tunnel SSH non ascolta su Windows.' }
+if (-not $listener) { throw 'Il tunnel SSH non ascolta su Windows.' }
 $powershell = Join-Path $PSHOME 'powershell.exe'
 $arguments = '-NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "' + $PSCommandPath +
     '" -Client -TunnelProcessId ' + $listener.OwningProcess
