@@ -15,6 +15,10 @@ asincrono a `DesktopCoordinator`. Le mappe delle revisioni e dei pin devono
 contenere esattamente i membri del gruppo desktop. Le revisioni sono quelle del
 catalogo **sul destinatario**, che possono essere diverse da quelle dell’origine.
 `instances`, quando noto, contiene l’UUID dell’istanza supervisor già verificata.
+Stop e status su canali freschi richiedono sempre questo pin, ottenuto dal bind di
+controllo riuscito oppure dal provisioning fidato. Senza istanza nota falliscono
+prima di qualsiasi operazione IPC: questo trasporto non può avere inviato un
+prepare prima di aver ricevuto e conservato il suo bind autenticato.
 
 Il pin è `implementation_digest(directory)` del bundle di rilascio ottenuto e
 verificato da un canale fidato. Comprende bridge, supervisor, guardiano, sicurezza,
@@ -78,8 +82,10 @@ collaudo separato; non viene cambiata la shell di OpenSSH.
 ## Identità, frame e credenziali
 
 Il primo frame vincola protocollo intero `1`, scopo del canale, UUID di sessione e
-nodo, revisione del catalogo, pin del bundle e istanza supervisor quando nota.
-Il destinatario verifica identità locale, pin e catalogo. Il controllo ordinario
+nodo, revisione del catalogo, pin del bundle e istanza supervisor. Il bind di
+controllo può inizialmente apprendere l’istanza dall’endpoint autenticato; i canali
+freschi di stop e status devono già conoscerla. Il controllo ordinario verifica
+identità locale, pin e catalogo e
 richiede il gruppo già configurato; `prepare` deve corrispondervi per principale
 e membri. Prima dei suoi effetti verifica lo stato autenticato del supervisor.
 Ogni risposta viene filtrata per istanza, nodo, revisione e UUID della sessione.
@@ -96,17 +102,22 @@ che il client locale aggiunge; le risposte sono limitate a 65.536 byte.
 Il token del supervisor resta sul destinatario. Solo
 `desktop_supervisor.request()` lo legge e autentica il collegamento loopback.
 Lo stop mantiene il bypass ACL di emergenza di quella API, limitato all’UUID
-valido: la verifica del token lato server resta obbligatoria. Il canale di stop
-può leggere l’identità del catalogo pubblicato atomicamente senza attendere il
-mutex degli editor GUI; una revisione cambiata non deve impedire di fermare la
-vecchia sessione. Richiede comunque catalogo leggibile e identità locale
-corrispondente. Il bridge non ripara permessi, cataloghi o endpoint danneggiati.
-Su Windows le letture bounded dei metadati aprono handle di file disco con
-`FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE`, chiusi sempre a fine
-lettura. Così anche il lettore di emergenza fuori dal mutex consente agli editor
-di pubblicare il catalogo tramite sostituzione atomica. La risoluzione del
-percorso del catalogo resta lessicale su Windows e non apre anticipatamente il
-file senza questa condivisione.
+valido: la verifica del token lato server resta obbligatoria. I canali freschi di
+stop e status non aprono il catalogo mutabile e non ne acquisiscono il mutex.
+L’identità di nodo e revisione è quella della sessione già vincolata, verificata
+nella risposta scoped dell’endpoint autenticato, insieme a UUID e istanza.
+Un catalogo cambiato, illeggibile o temporaneamente bloccato da un editor non
+impedisce quindi di fermare la sessione posseduta. Il bridge non ripara permessi,
+cataloghi o endpoint danneggiati.
+
+Il controllo ordinario legge il catalogo sotto `registry_guard`, compreso il
+precontrollo bounded. Nessun suo handle di lettura Windows rimane aperto durante
+la pubblicazione atomica degli editor. La selezione del percorso del catalogo
+resta lessicale su Windows, senza aprire anticipatamente il file fuori dal mutex.
+Non viene introdotto un nuovo protocollo di rename del registro. Il file endpoint
+dell’istanza e il bundle di codice restano letti localmente; un cambio
+dell’endpoint durante il restart resta soggetto alle verifiche e al limite di
+ciclo di vita descritto qui sotto.
 
 L’istanza viene ricontrollata prima di ogni operazione e nelle risposte. Il
 primo pin di istanza stabilito da un canale resta invariato anche se una risposta
@@ -149,8 +160,11 @@ protocollo, identità, catalogo, token errato, status scoped, stop durante RPC
 bloccata, EOF, istanza cambiata, vecchio UUID contro sessione sostitutiva e lettura
 terminale dopo stop. Su Linux include deriva dei permessi del token; le DACL
 Windows restano coperte anche dalla suite nativa del supervisor. Le fixture
-rimuovono processi e directory. Due fixture concorrenti deterministiche coprono
-il primo pin di istanza e il completamento di uno spawn durante close.
+rimuovono processi e directory. Le fixture concorrenti deterministiche coprono
+il primo pin di istanza, il completamento di uno spawn durante close e la
+cancellazione esterna concorrente. Una prova mantiene il mutex dell’editor e
+rende il catalogo inaccessibile mentre stop e status freschi completano; poi
+pubblica con l’editor standard e verifica l’assenza di errori di sostituzione.
 
 Queste prove locali non certificano ancora SSH fra i tre PC, installazione del
 bundle, desktop, input o appunti. `desktop_ready` resta `false`; adapter Deskflow,

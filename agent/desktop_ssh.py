@@ -9,7 +9,6 @@ The caller must supply trusted release pins and an explicitly authorized group.
 
 import argparse
 import asyncio
-from contextlib import contextmanager
 from copy import deepcopy
 from hashlib import sha256
 import json
@@ -26,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import desktop_supervisor
 import node_ssh
+import node_registry
 import nodes
 import wire_framing
 
@@ -69,62 +69,8 @@ def implementation_digest(directory=None):
     return sha256(json.dumps(files, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-class WindowsMetadataReader:
-    """A disk-file handle that does not prevent atomic registry replacement."""
-
-    def __init__(self, kernel, handle):
-        self.kernel, self.handle = kernel, handle
-
-    def read(self, size):
-        import ctypes
-        from ctypes import wintypes
-
-        result = bytearray()
-        while len(result) < size:
-            buffer = ctypes.create_string_buffer(min(65536, size - len(result)))
-            count = wintypes.DWORD()
-            if not self.kernel.ReadFile(self.handle, buffer, len(buffer), ctypes.byref(count), None):
-                raise ctypes.WinError(ctypes.get_last_error())
-            if not count.value:
-                break
-            result.extend(buffer.raw[:count.value])
-        return bytes(result)
-
-
-@contextmanager
-def metadata_reader(path):
-    if sys.platform != "win32":
-        with Path(path).open("rb") as stream:
-            yield stream
-        return
-    import ctypes
-    from ctypes import wintypes
-
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
-                                  wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
-    kernel.CreateFileW.restype = wintypes.HANDLE
-    kernel.GetFileType.argtypes = [wintypes.HANDLE]
-    kernel.GetFileType.restype = wintypes.DWORD
-    kernel.ReadFile.argtypes = [wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
-                               ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID]
-    kernel.ReadFile.restype = wintypes.BOOL
-    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-    # FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE is required even for
-    # the emergency read outside the registry writer's mutex.
-    handle = kernel.CreateFileW(str(path), 0x80000000, 7, None, 3, 0x80, None)
-    if handle == ctypes.c_void_p(-1).value:
-        raise ctypes.WinError(ctypes.get_last_error())
-    try:
-        if kernel.GetFileType(handle) != 1:  # FILE_TYPE_DISK; never read a named pipe.
-            raise ValueError("Desktop metadata must be a disk file.")
-        yield WindowsMetadataReader(kernel, handle)
-    finally:
-        kernel.CloseHandle(handle)
-
-
 def bounded_file(path, maximum):
-    with metadata_reader(path) as stream:
+    with Path(path).open("rb") as stream:
         raw = stream.read(maximum + 1)
     if len(raw) > maximum:
         raise ValueError("Desktop local metadata exceeds its limit.")
@@ -263,19 +209,12 @@ class Helper:
         self.directory, self.registry_path = Path(directory), Path(registry_path)
         self.mode, self.binding = mode, None
 
-    def catalog(self, binding, require_revision=True):
-        if not require_revision:
-            # Node publication is atomic. Emergency identity reads must not wait
-            # for a control operation or the cross-session registry edit mutex.
-            # nodes.snapshot accepts UTF-8 BOM catalogs (e.g. PowerShell-authored
-            # JSON). Preserve that on emergency reads, without relaxing the wire.
-            raw = bounded_file(self.registry_path, 1024 * 1024)
-            registry = decode(raw.removeprefix(b"\xef\xbb\xbf"))
-            if not isinstance(registry, dict) or canonical_uuid(registry.get("local")) != binding["node_id"]:
-                raise ValueError("The desktop route does not identify this computer.")
-            return registry
-        bounded_file(self.registry_path, 1024 * 1024)
-        snapshot = nodes.snapshot(self.registry_path)
+    def catalog(self, binding):
+        # All Windows readers, including the bounded precheck, participate in
+        # the same cross-session mutex as atomic catalog publication.
+        with node_registry.registry_guard():
+            bounded_file(self.registry_path, 1024 * 1024)
+            snapshot = nodes.snapshot(self.registry_path)
         registry = snapshot["registry"]
         if registry is None or registry["local"] != binding["node_id"]:
             raise ValueError("The desktop route does not identify this computer.")
@@ -287,8 +226,17 @@ class Helper:
         binding = validate_binding(payload, self.mode)
         if binding["helper_sha256"] != implementation_digest():
             raise ValueError("The destination desktop helper is not the pinned release.")
-        registry = self.catalog(binding, require_revision=self.mode == "control")
-        instance = self.endpoint_instance(binding, registry)
+        if self.mode == "control":
+            registry = self.catalog(binding)
+            instance = self.endpoint_instance(binding, registry)
+        else:
+            # An owned prepare cannot have been sent before a successful control
+            # bind pinned the instance. Fresh emergency channels never reopen the
+            # mutable catalog or queue behind its editor, even for status.
+            if binding["instance"] is None:
+                raise ValueError("Emergency control requires the already-pinned supervisor instance.")
+            endpoint = decode(bounded_file(self.directory / "endpoint.json", MAX_REPLY))
+            instance = canonical_uuid(endpoint["instance"])
         if binding["instance"] is not None and binding["instance"] != instance:
             raise ValueError("The destination supervisor instance changed.")
         binding["instance"] = instance
@@ -296,13 +244,8 @@ class Helper:
         return {"ok": True, "binding": deepcopy(binding)}
 
     def endpoint_instance(self, binding, registry):
-        if self.mode == "stop":
-            # Preserve the local owner's scoped stop after control ACL drift.
-            # request(stop_session) still authenticates the private token at the server.
-            endpoint = decode(bounded_file(self.directory / "endpoint.json", MAX_REPLY))
-            return canonical_uuid(endpoint["instance"])
         group = registry.get("desktop")
-        if self.mode == "control" and (group is None or not any(member["node_id"] == binding["node_id"] for member in group["members"])):
+        if group is None or not any(member["node_id"] == binding["node_id"] for member in group["members"]):
             raise ValueError("Configure and authorize the local desktop group first.")
         reply = desktop_supervisor.request(self.directory, {"action": "status"})
         if not isinstance(reply, dict) or reply.get("ok") is not True:

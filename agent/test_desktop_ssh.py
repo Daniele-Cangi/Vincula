@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import asyncio
+from contextlib import contextmanager
 from copy import deepcopy
 from hashlib import sha256
 from io import BytesIO
@@ -11,6 +12,7 @@ from pathlib import Path
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+from threading import Event, Thread
 from time import monotonic
 import unittest
 from unittest.mock import patch
@@ -21,6 +23,34 @@ import desktop_ssh as bridge
 import desktop_supervisor
 import node_registry
 import nodes
+
+
+@contextmanager
+def unavailable_catalog(path):
+    """Make any catalog access fail/block while the independent stop is tested."""
+    if sys.platform != "win32":
+        held = path.with_suffix(".held")
+        path.rename(held)
+        try:
+            yield
+        finally:
+            held.rename(path)
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                  wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.CreateFileW(str(path), 0x80000000, 0, None, 3, 0x80, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        yield
+    finally:
+        kernel.CloseHandle(handle)
 
 
 class ProtocolTests(unittest.TestCase):
@@ -78,22 +108,6 @@ class ProtocolTests(unittest.TestCase):
                 self.assertIn({"control": "stdio", "stop": "stop-stdio", "status": "status-stdio"}[mode], command)
         self.assertTrue(bridge.fixed_remote_command("windows").startswith('py.exe -3 -IB -c "'))
 
-    @unittest.skipUnless(sys.platform == "win32", "Native Windows delete-sharing contract")
-    def test_windows_reader_allows_atomic_catalog_publication_while_held(self):
-        with TemporaryDirectory(prefix="vincula-reader-publication-") as directory:
-            path = Path(directory) / "nodes.json"
-            node = str(uuid4())
-            document = {"local": node, "nodes": [{"id": node, "label": "Before", "family": "windows"}]}
-            original = json.dumps(document).encode()
-            path.write_bytes(original)
-            revision = nodes.snapshot(path)["revision"]
-            request = {"action": "update", "node_id": node, "changes": {"label": "After"},
-                       "expected_revision": revision}
-            with bridge.metadata_reader(path) as reader:
-                updated = nodes.execute(request, path)
-                self.assertEqual(reader.read(len(original) + 1), original)
-                self.assertEqual(updated["registry"]["nodes"][0]["label"], "After")
-            self.assertEqual(json.loads(path.read_bytes())["nodes"][0]["label"], "After")
 
 
 class LocalProcesses(bridge.DesktopSSHTransport):
@@ -459,6 +473,61 @@ class SSHBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reply["session"]["session_id"], self.session_id)
         self.assertEqual(reply["session"]["revision"], self.revisions[node])
         self.assertEqual(reply["session"]["instance"], transport.bindings[node]["instance"])
+
+    async def test_registry_writer_does_not_block_fresh_stop_status_or_atomic_publication(self):
+        node = self.ids[0]
+        transport = self.transport()
+        await transport(node, {"action": "prepare", "plan": self.plan(node)})
+        await transport(node, {"action": "commit", "session_id": self.session_id})
+        await self.wait_state(node, {"running"})
+        entered, release = Event(), Event()
+        errors, publication = [], []
+        path = self.fixtures[node]["registry"]
+        request = {"action": "update", "node_id": node, "changes": {"label": "Published after scoped stop"},
+                   "expected_revision": self.revisions[node]}
+
+        def writer():
+            try:
+                with node_registry.registry_guard():
+                    with unavailable_catalog(path):
+                        entered.set()
+                        if not release.wait(8):
+                            raise AssertionError("Independent stop did not finish while writer held the catalog")
+                    publication.append(nodes.execute(request, path))
+            except BaseException as error:
+                errors.append(error)
+                entered.set()
+
+        thread = Thread(target=writer)
+        thread.start()
+        try:
+            self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+            self.assertFalse(errors)
+            reply = await asyncio.wait_for(transport(node, {"action": "stop_session", "session_id": self.session_id}), 2)
+            self.assertIn(reply["session"]["state"], {"stopping", "stopped"})
+            await self.wait_state(node, {"stopped"})
+            reply = await asyncio.wait_for(transport(node, {"action": "status"}), 2)
+            self.assertEqual(reply["session"]["state"], "stopped")
+            self.assertEqual(reply["session"]["revision"], self.revisions[node])
+            self.assertFalse(publication)  # The writer is still deliberately waiting.
+        finally:
+            release.set()
+            await asyncio.to_thread(thread.join, 5)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(errors)
+        self.assertEqual(publication[0]["registry"]["nodes"][0]["label"], "Published after scoped stop")
+
+    async def test_unknown_instance_emergency_fails_before_local_ipc_or_catalog_access(self):
+        node = self.ids[0]
+        transport = self.transport()
+        for mode in ("stop", "status"):
+            helper = bridge.Helper(self.fixtures[node]["control"], self.root / "nonexistent-catalog.json", mode)
+            binding = transport.bindings[node] | {"mode": mode}
+            with patch.object(desktop_supervisor, "request") as request:
+                with self.assertRaisesRegex(ValueError, "already-pinned"):
+                    helper.bind(binding)
+                request.assert_not_called()
+        self.assertEqual((await self.state(node))["state"], "idle")
 
     async def test_emergency_channel_bypasses_a_blocked_control_rpc_and_no_mutation_retries(self):
         node = self.ids[0]
