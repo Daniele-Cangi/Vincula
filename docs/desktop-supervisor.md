@@ -21,9 +21,12 @@ Il client legge il token dalla cartella e invia una richiesta JSON:
 ```sh
 echo '{"action":"status"}' | python agent/desktop_supervisor.py request --directory /percorso/privato/sessione
 echo '{"action":"stop"}' | python agent/desktop_supervisor.py request --directory /percorso/privato/sessione
+echo '{"action":"stop_session","session_id":"00000000-0000-4000-8000-000000000001"}' | python agent/desktop_supervisor.py request --directory /percorso/privato/sessione
 ```
 
-Le azioni sono `prepare`, `commit`, `heartbeat`, `status`, `stop`, `shutdown`. Ogni risposta contiene `ok` e `session`, oppure un errore. Ogni connessione gestisce una richiesta, con limite di 64 KiB e timeout di lettura. Le richieste incomplete occupano soltanto il proprio handler; il monitor delle lease rimane separato.
+Per `stop_session`, sostituire l’UUID dell’esempio con quello restituito da `prepare` per la sessione da fermare.
+
+Le azioni sono `prepare`, `commit`, `heartbeat`, `status`, `stop_session`, `stop`, `shutdown`. Ogni risposta contiene `ok` e `session`, oppure un errore. Ogni connessione gestisce una richiesta, con limite di 64 KiB e timeout di lettura. Le richieste incomplete occupano soltanto il proprio handler; il monitor delle lease rimane separato.
 
 `prepare` riceve un oggetto `plan` con campi esatti:
 
@@ -39,7 +42,11 @@ L’eseguibile iniziale di ogni `argv` deve essere un file con percorso assoluto
 
 `heartbeat` richiede lo stesso UUID e rinnova soltanto la sessione corrente. La durata predefinita è cinque secondi, configurabile da 0,5 a 60 con `--lease-seconds`. `commit` e `heartbeat` controllano la deadline sotto lock: una sessione scaduta non può essere riattivata anche se il monitor non ha ancora osservato la scadenza. Il controllo viene ripetuto dopo operazioni di I/O preliminari e prima dello spawn, così un disco lento non riattiva un piano scaduto.
 
-`stop` è il comando di emergenza dell’owner locale: non richiede l’UUID della sessione, risponde subito con lo stato di arresto e non attende la fine di altri lavori. Lo stato terminale viene osservato con `status`. `shutdown` esegue lo stesso arresto prima della chiusura del servizio; una volta autenticato e accettato viene completato anche se l’ack si perde o il client chiude il socket. Il client mantiene questi due comandi di emergenza utilizzabili se i permessi della cartella o del token sono stati ampliati mentre la sessione era attiva: continua a inviare il token per l’autenticazione, senza applicare il controllo ACL client che blocca le altre operazioni. L’eccezione permette soltanto l’arresto; `prepare` e `commit` vengono rifiutati dal server quando lo storage del controllo è insicuro.
+`stop_session` arresta esclusivamente la sessione indicata: il payload client deve contenere esattamente `action` e `session_id`, con UUID canonico. Il client aggiunge il token invariato; il server verifica autenticazione e schema esatto, poi chiama direttamente `Supervisor.stop(session_id)`. Il metodo controlla l’identità e applica lo stop sotto lo stesso lock. Non esiste una sequenza separata `status` più stop globale. Un UUID sconosciuto o appartenente a una sessione precedente restituisce errore senza fermare quella nuova. Lo stop dello stesso UUID resta idempotente durante l’arresto e dopo il suo termine, finché non è stata preparata un’altra sessione.
+
+`stop` è il comando globale di emergenza dell’owner locale: non richiede l’UUID della sessione, risponde subito con lo stato di arresto e non attende la fine di altri lavori. Lo stato terminale viene osservato con `status`. `shutdown` esegue lo stesso arresto prima della chiusura del servizio; una volta autenticato e accettato viene completato anche se l’ack si perde o il client chiude il socket.
+
+Il client mantiene utilizzabili questi comandi di emergenza se i permessi della cartella o del token sono stati ampliati mentre la sessione era attiva. Il bypass del controllo ACL client è limitato alle forme esatte `stop`, `shutdown` e `stop_session` con UUID canonico valido; token e verifica server rimangono obbligatori. Campi aggiuntivi, UUID mancanti o malformati e altre azioni non ricevono questa eccezione. Un UUID valido ma diverso può raggiungere il server soltanto per essere rifiutato, senza degradare a stop globale. Il runtime non ripara le ACL esistenti; `prepare` e `commit` restano bloccati quando lo storage del controllo è insicuro.
 
 ## Stati, contenimento e recupero
 
@@ -64,6 +71,6 @@ Il supervisor controlla soltanto guardiani che ha creato e le relative pipe. I P
 
 ## Prove e integrazione successiva
 
-`agent/test_desktop_supervisor.py` avvia soltanto processi sintetici in cartelle temporanee e verifica autenticazione, stop con componenti bloccati e client lenti, estraneità dei processi non posseduti, heartbeat/scadenza, EOF dopo crash, cleanup dei discendenti, restart, esclusività del controllo, rollback e conservazione del codice d’uscita nello storico. Le stesse prove vengono eseguite su Linux e Windows, dove esercitano realmente il Job Object.
+`agent/test_desktop_supervisor.py` avvia soltanto processi sintetici in cartelle temporanee e verifica autenticazione, stop con componenti bloccati e client lenti, estraneità dei processi non posseduti, heartbeat/scadenza, EOF dopo crash, cleanup dei discendenti, restart, esclusività del controllo, rollback e conservazione del codice d’uscita nello storico. `stop_session` è collaudato su vero TCP autenticato tramite `request()`, inclusi schema/token errati, idempotenza, vecchio UUID contro una nuova sessione e deriva dei permessi della cartella e del token. Le stesse prove vengono eseguite su Linux e Windows, dove esercitano realmente il Job Object e le DACL.
 
 Prima dell’uso desktop servono ancora adapter Deskflow e attestazione delle capacità, provisioning delle chiavi desktop e del forwarding limitato, TLS con impronte verificate separatamente da SSH, consenso grafico e coordinamento prepare/commit/heartbeat tra i nodi. I livelli agente `ask`/`full` non sono modificati e non sostituiscono il consenso desktop. Le GUI continueranno a usare il percorso legacy finché questi collegamenti non saranno implementati e collaudati.

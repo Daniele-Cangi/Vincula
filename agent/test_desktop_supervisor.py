@@ -104,6 +104,14 @@ class DesktopSupervisorTests(unittest.TestCase):
     def state(self):
         return self.call("status")
 
+    def wire_request(self, payload, token=None):
+        endpoint = json.loads((self.directory / "endpoint.json").read_text())
+        message = {**payload, "token": endpoint["token"] if token is None else token}
+        with socket.create_connection(("127.0.0.1", endpoint["port"]), timeout=2) as stream:
+            stream.sendall((json.dumps(message) + "\n").encode())
+            with stream.makefile("rb") as reader:
+                return json.loads(reader.readline())
+
     def children(self, marker="children.json"):
         path = self.directory / marker
 
@@ -160,6 +168,95 @@ class DesktopSupervisorTests(unittest.TestCase):
                 stream.close()
             foreign.kill()
             foreign.wait(timeout=3)
+
+    def test_scoped_stop_over_tcp_rejects_invalid_fields_tokens_and_identifiers(self):
+        self.start(lease=15)
+        plan = self.plan()
+        children = self.run_plan(plan)
+        for payload in (
+                {"action": "stop_session"},
+                {"action": "stop_session", "session_id": None},
+                {"action": "stop_session", "session_id": False},
+                {"action": "stop_session", "session_id": []},
+                {"action": "stop_session", "session_id": "not-a-uuid"},
+                {"action": "stop_session", "session_id": "ABCDEFAB-CDEF-4ABC-8ABC-ABCDEFABCDEF"},
+                {"action": "stop_session", "session_id": plan["session_id"], "unexpected": True},
+                {"action": "stop", "session_id": plan["session_id"]}):
+            with self.subTest(payload=payload):
+                self.assertFalse(self.wire_request(payload)["ok"])
+        self.assertFalse(self.wire_request({"action": "stop_session", "session_id": plan["session_id"]}, token="wrong")["ok"])
+        self.assertFalse(desktop.request(self.directory, {"action": "stop_session", "session_id": str(uuid4())})["ok"])
+        self.assertEqual(self.state()["state"], "running")
+        self.assertTrue(all(alive(pid) for pid in children))
+        reply = desktop.request(self.directory, {"action": "stop_session", "session_id": plan["session_id"]})
+        self.assertTrue(reply["ok"])
+        self.assertEqual(reply["session"]["session_id"], plan["session_id"])
+        wait_until(lambda: self.state()["state"] == "stopped")
+        wait_until(lambda: not any(alive(pid) for pid in children))
+
+    def test_scoped_stop_is_idempotent_but_cannot_stop_the_replacement_session(self):
+        self.start(lease=15)
+        first = self.plan()
+        first_children = self.run_plan(first)
+        for _ in range(2):
+            self.assertTrue(desktop.request(self.directory, {"action": "stop_session", "session_id": first["session_id"]})["ok"])
+        wait_until(lambda: self.state()["state"] == "stopped")
+        wait_until(lambda: not any(alive(pid) for pid in first_children))
+        self.assertEqual(self.call("stop_session", session_id=first["session_id"])["state"], "stopped")
+        replacement = self.plan(marker="replacement.json")
+        for field in ("local_id", "primary", "members"):
+            replacement[field] = first[field]
+        self.call("prepare", plan=replacement)
+        self.call("commit", session_id=replacement["session_id"])
+        wait_until(lambda: self.state()["state"] == "running")
+        replacement_children = self.children("replacement.json")
+        old_stop = desktop.request(self.directory, {"action": "stop_session", "session_id": first["session_id"]})
+        self.assertFalse(old_stop["ok"])
+        current = self.state()
+        self.assertEqual(current["session_id"], replacement["session_id"])
+        self.assertEqual(current["state"], "running")
+        self.assertTrue(all(alive(pid) for pid in replacement_children))
+        self.call("stop_session", session_id=replacement["session_id"])
+        wait_until(lambda: self.state()["state"] == "stopped")
+        wait_until(lambda: not any(alive(pid) for pid in replacement_children))
+
+    def test_scoped_emergency_stop_survives_acl_drift_without_widening_other_actions(self):
+        for target in ("directory", "token"):
+            with self.subTest(target=target):
+                self.directory = desktop_security.private_directory(Path(self.temporary.name) / ("scoped-" + target))
+                daemon = self.start(lease=15)
+                plan = self.plan()
+                children = self.run_plan(plan)
+                path = self.directory if target == "directory" else self.directory / "endpoint.json"
+                if sys.platform == "win32":
+                    self.broaden_windows_acl(path)
+                    before = self.windows_acl(path)
+                else:
+                    path.chmod(0o755 if target == "directory" else 0o644)
+                    before = path.stat().st_mode
+                invalid = [
+                    {"action": "status"}, {"action": "commit", "session_id": plan["session_id"]},
+                    {"action": "prepare", "plan": plan},
+                    {"action": "stop_session"},
+                    {"action": "stop_session", "session_id": plan["session_id"], "unexpected": True},
+                    {"action": "stop", "session_id": plan["session_id"]},
+                    {"action": "shutdown", "unexpected": True}]
+                for payload in invalid:
+                    with self.subTest(payload=payload), self.assertRaises(PermissionError):
+                        desktop.request(self.directory, payload)
+                for invalid_id in (None, False, [], "not-a-uuid", "ABCDEFAB-CDEF-4ABC-8ABC-ABCDEFABCDEF"):
+                    with self.subTest(invalid_id=invalid_id), self.assertRaises(ValueError):
+                        desktop.request(self.directory, {"action": "stop_session", "session_id": invalid_id})
+                self.assertFalse(desktop.request(self.directory, {"action": "stop_session", "session_id": str(uuid4())})["ok"])
+                self.assertEqual(self.wire_request({"action": "status"})["session"]["state"], "running")
+                self.assertTrue(all(alive(pid) for pid in children))
+                self.assertTrue(desktop.request(self.directory, {"action": "stop_session", "session_id": plan["session_id"]})["ok"])
+                wait_until(lambda: not any(alive(pid) for pid in children))
+                after = self.windows_acl(path) if sys.platform == "win32" else path.stat().st_mode
+                self.assertEqual(after, before, "Emergency control must not repair the existing ACL.")
+                self.assertTrue(desktop.request(self.directory, {"action": "shutdown"})["ok"])
+                daemon.wait(timeout=4)
+                self.assertEqual(daemon.returncode, 0)
 
     def test_expiry_and_heartbeat_are_tied_to_the_exact_session(self):
         self.start(lease=0.8)
