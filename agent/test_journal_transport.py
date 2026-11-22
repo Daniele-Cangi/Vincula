@@ -56,12 +56,13 @@ class JournalTransportTests(unittest.TestCase):
         args, options = execute.call_args
         raw = options["input_data"]
         self.assertGreater(len(raw), 32767)
-        self.assertEqual(json.loads(raw), request)
+        self.assertEqual(int(raw[:8], 16), len(raw) - 9)
+        self.assertEqual(json.loads(raw[9:]), request)
         self.assertLess(len(args[1]), 8192)
-        command = base64.b64decode(args[1].split()[-1]).decode("utf-16-le")
-        self.assertIn("journal-stdin", command)
+        command = args[1]
+        self.assertIn("journal-framed-stdin", command)
         self.assertNotIn("journal-content-", command)
-        self.assertEqual(options["output_limit"], jobs.plan_journal.MAX_RESPONSE_BYTES)
+        self.assertEqual(options["output_limit"], jobs.direct_execution.MAX_RESPONSE_BYTES)
 
     def test_windows_store_uses_constant_stdin_command_even_for_intermediate_or_small_manifests(self):
         commands = []
@@ -134,6 +135,7 @@ class JournalTransportTests(unittest.TestCase):
 
 
 class JournalStdinTests(unittest.TestCase):
+    command = "journal-stdin"
     def setUp(self):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -146,7 +148,9 @@ class JournalStdinTests(unittest.TestCase):
         self.helper = self.state / "jobs.py"
 
     def invoke(self, raw):
-        result = subprocess.run([sys.executable, "-IB", str(self.helper), "journal-stdin"], input=raw,
+        if self.command == "journal-framed-stdin":
+            raw = f"{len(raw):08x}\n".encode() + raw
+        result = subprocess.run([sys.executable, "-IB", str(self.helper), self.command], input=raw,
                                 capture_output=True, env=self.env, timeout=10, check=True)
         return json.loads(result.stdout)
 
@@ -173,9 +177,8 @@ class JournalStdinTests(unittest.TestCase):
             self.assertEqual(db.execute("SELECT count(*) FROM plan_journal").fetchone()[0], 0)
             self.assertEqual(db.execute("SELECT count(*) FROM jobs").fetchone()[0], 0)
 
-    @unittest.skipUnless(sys.platform == "win32", "Windows PowerShell stdin bridge")
-    def test_windows_powershell_bridge_forwards_large_payload_without_argument_expansion(self):
-        powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    @unittest.skipUnless(sys.platform == "win32", "Windows native framed stdin command")
+    def test_windows_native_command_forwards_large_payload_without_argument_expansion(self):
         node = node_registry.Node(str(uuid4()), "Windows", "windows", route=node_registry.Route("peer", ()))
         large = large_capability_manifest()
         intermediate = deepcopy(large_capability_manifest())
@@ -186,7 +189,7 @@ class JournalStdinTests(unittest.TestCase):
 
         def native(route, command, **options):
             self.assertLess(len(command), 8192)
-            result = subprocess.run([str(powershell), *command.split()[1:]], input=options["input_data"],
+            result = subprocess.run(command, input=options["input_data"],
                                     capture_output=True, env=self.env, timeout=20, check=True)
             return json.loads(result.stdout)
 
@@ -197,6 +200,10 @@ class JournalStdinTests(unittest.TestCase):
                 with patch.object(node_ssh, "json_command", side_effect=native):
                     result = server.remote_request(node, request)
                 self.assertEqual(result, {"result": {"state": "stored", "sha256": expected["sha256"]}})
+
+
+class JournalFramedStdinTests(JournalStdinTests):
+    command = "journal-framed-stdin"
 
 
 if __name__ == "__main__":
