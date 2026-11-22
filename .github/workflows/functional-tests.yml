@@ -74,3 +74,26 @@ jobs:
           } finally {
             Remove-Item -LiteralPath $build -Recurse -Force
           }
+
+  diagnose-cold-windows:
+    name: Diagnose first Windows status query
+    needs: functional
+    if: failure() && needs.functional.result == 'failure'
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: .github/requirements-ci.txt
+      - name: Install dependencies
+        run: >-
+          python -m pip install --require-hashes --only-binary=:all: -r .github/requirements-ci.txt
+      - name: Measure the first real query in a fresh runner
+        run: python .github/scripts/windows_probe.py --cold
