@@ -4,10 +4,12 @@
 import asyncio
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
 from subprocess import TimeoutExpired
 from tempfile import TemporaryDirectory
 import unittest
+import sys
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -16,6 +18,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 import capability_workflow
 import jobs
 import node_registry
+import nodes
 import server
 
 
@@ -123,6 +126,29 @@ class NodeRegistryTests(unittest.TestCase):
         canonical = server.FileEndpoint(node_id=self.local, root="shared", path="destination.bin")
         with self.assertRaisesRegex(ValueError, "different registered nodes"):
             server.execute_transfer(uuid4(), named, canonical)
+
+
+class LiveRegistryTests(unittest.TestCase):
+    def test_saved_node_changes_are_visible_to_the_running_server(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "nodes.json"
+            local, peer = str(uuid4()), str(uuid4())
+            family = "windows" if sys.platform == "win32" else "linux"
+            nodes.execute({"action": "add", "local": True,
+                           "node": {"id": local, "label": "Local", "family": family}}, path)
+            metrics = server.Metrics(os="test", os_version=None, uptime_seconds=1, cpu_percent=None,
+                                     memory_total_bytes=1, memory_available_bytes=1)
+            with patch.dict(os.environ, {"VINCULA_NODE_REGISTRY": str(path)}), \
+                    patch.object(server, "read_metrics", return_value=metrics):
+                self.assertEqual([node.node_id for node in asyncio.run(server.list_nodes()).nodes], [local])
+                nodes.execute({"action": "add", "node": {"id": peer, "label": "Peer", "family": "linux"}}, path)
+                inventory = asyncio.run(server.list_nodes()).nodes
+                self.assertEqual([node.node_id for node in inventory], [local, peer])
+                self.assertEqual(inventory[1].availability, "not_configured")
+                nodes.execute({"action": "update", "node_id": peer, "changes": {"label": "Renamed"}}, path)
+                self.assertEqual(asyncio.run(server.get_node_status(peer)).label, "Renamed")
+                nodes.execute({"action": "remove", "node_id": peer}, path)
+                self.assertEqual([node.node_id for node in asyncio.run(server.list_nodes()).nodes], [local])
 
 
 if __name__ == "__main__":

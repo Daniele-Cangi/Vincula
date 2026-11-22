@@ -40,6 +40,7 @@ def load_adapter(name):
 
 files = load_adapter("vincula_files")
 capabilities = load_adapter("vincula_capabilities")
+plan_journal = load_adapter("plan_journal")
 
 
 def initialize():
@@ -89,11 +90,12 @@ def initialize():
         """)
         db.executescript(files.SCHEMA)
         db.executescript(capabilities.SCHEMA)
+        db.executescript(plan_journal.SCHEMA)
         # Older specialized jobs have no fixed argv or manifest the current worker can launch.
         with db:
             db.execute("UPDATE jobs SET state='cancelled',finished=? WHERE state IN ('pending','queued') "
                        "AND argv='[]' AND id NOT IN (SELECT id FROM capability_jobs)", (time.time(),))
-    for name in ("vincula_files.py", "vincula_capabilities.py", "jobs.py"):
+    for name in ("vincula_files.py", "vincula_capabilities.py", "plan_journal.py", "jobs.py"):
         source = Path(__file__).resolve().with_name(name)
         installed = ROOT / name
         if source == installed:
@@ -298,6 +300,9 @@ def dispatch_capability(operation, capability_id=None, job_id=None, revision=Non
 
 
 def dispatch(action, **payload):
+    if action == "plan":
+        with transaction() as db:
+            return plan_journal.dispatch(db, **payload)
     if action == "capability":
         return dispatch_capability(**payload)
     if action == "files":
@@ -390,15 +395,143 @@ def process_lock(path):
         else:
             import fcntl
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        yield
+        yield lock
 
 
 def exclusive_worker():
     return process_lock(ROOT / "worker.lock")
 
 
+def linux_children():
+    children = Path(f"/proc/self/task/{os.getpid()}/children")
+    return [int(pid) for pid in children.read_text(encoding="ascii").split()]
+
+
+def reap_linux_children(program_pid):
+    for pid in linux_children():
+        if pid != program_pid:
+            with suppress(ChildProcessError):
+                os.waitpid(pid, os.WNOHANG)
+
+
+def stop_linux_program(proc):
+    # Keep the leader's PID reserved until its group has received the signal.
+    with suppress(ProcessLookupError):
+        os.killpg(proc.pid, signal.SIGKILL)
+    proc.wait()
+    # A subreaper adopts orphaned descendants, including programs that call setsid.
+    while True:
+        for pid in linux_children():
+            with suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if pid == 0:
+            time.sleep(0.025)
+
+
+def supervise_linux(parent_pid, ready_fd):
+    import ctypes
+
+    interrupted = False
+
+    def interrupt(signum, frame):
+        nonlocal interrupted
+        interrupted = True
+
+    signal.signal(signal.SIGTERM, interrupt)
+    libc = ctypes.CDLL(None, use_errno=True)
+    # PR_SET_PDEATHSIG closes the gap left by a worker killed before its finally.
+    if libc.prctl(1, signal.SIGTERM, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "Could not supervise the Linux worker")
+    if os.getppid() != parent_pid:
+        raise RuntimeError("The worker exited before supervision was established.")
+    # PR_SET_CHILD_SUBREAPER keeps escaped descendants available for cleanup/reaping.
+    if libc.prctl(36, 1, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "Could not supervise Linux descendants")
+    argv = json.load(sys.stdin)
+    if interrupted or os.getppid() != parent_pid:
+        raise RuntimeError("The worker exited before its program started.")
+    try:
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, start_new_session=True)
+    except Exception as error:
+        os.write(ready_fd, json.dumps({"error": str(error)}).encode() + b"\n")
+        raise
+    try:
+        with suppress(BrokenPipeError):
+            os.write(ready_fd, b'{"started":true}\n')
+        while not interrupted and not exited(proc):
+            reap_linux_children(proc.pid)
+            time.sleep(0.025)
+    finally:
+        stop_linux_program(proc)
+    with suppress(BrokenPipeError):
+        os.write(ready_fd, json.dumps({"exit_code": proc.returncode}).encode() + b"\n")
+    os.close(ready_fd)
+    return 0
+
+
+class UnconfirmedLaunchError(RuntimeError):
+    """The launcher may have run the program before losing its confirmation."""
+
+
+def confirm_linux_launch(proc, ready, payload):
+    try:
+        proc.stdin.write(payload)
+        proc.stdin.close()
+        line = ready.readline(8192)
+        if not line:
+            raise UnconfirmedLaunchError("Linux supervisor exited before confirming program launch.")
+        result = json.loads(line)
+    except (OSError, ValueError) as error:
+        raise UnconfirmedLaunchError("Linux supervisor could not confirm program launch.") from error
+    if isinstance(result, dict):
+        if set(result) == {"started"} and result["started"] is True:
+            return
+        if set(result) == {"error"} and isinstance(result["error"], str):
+            raise RuntimeError(result["error"] or "Linux program could not start.")
+    raise UnconfirmedLaunchError("Linux supervisor returned an invalid launch confirmation.")
+
+
 @contextmanager
-def program_process(argv, stdout, stderr):
+def linux_program_process(argv, stdout, stderr, worker_lock):
+    payload = json.dumps(argv).encode()
+    reader, writer = os.pipe()
+    inherited = (writer,) if worker_lock is None else (writer, worker_lock)
+    with os.fdopen(reader, "rb") as ready:
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, "-I", __file__, "_supervise", str(os.getpid()), str(writer)],
+                stdin=subprocess.PIPE, stdout=stdout, stderr=stderr, cwd=ROOT,
+                start_new_session=True, pass_fds=inherited,
+            )
+        finally:
+            os.close(writer)
+        launched = False
+        try:
+            confirm_linux_launch(proc, ready, payload)
+            launched = True
+            yield proc
+        finally:
+            with suppress(BrokenPipeError):
+                proc.stdin.close()
+            if not exited(proc):
+                proc.terminate()
+            # The supervisor retains the worker lock until its process group is stopped.
+            proc.wait()
+            if launched:
+                line = ready.readline(8192)
+                result = json.loads(line) if line else {}
+                if (proc.returncode != 0 or set(result) != {"exit_code"}
+                        or type(result["exit_code"]) is not int):
+                    raise RuntimeError("Linux supervisor could not confirm the program exit.")
+                proc.returncode = result["exit_code"]
+
+
+@contextmanager
+def program_process(argv, stdout, stderr, worker_lock=None):
     streams = dict(stdout=stdout, stderr=stderr, cwd=ROOT)
     if WINDOWS:
         import win32job
@@ -434,15 +567,8 @@ def program_process(argv, stdout, stderr):
         finally:
             group.Close()
     else:
-        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, start_new_session=True, **streams)
-        try:
+        with linux_program_process(argv, stdout, stderr, worker_lock) as proc:
             yield proc
-        finally:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            proc.wait()
 
 
 def exited(proc):
@@ -452,7 +578,7 @@ def exited(proc):
     return os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
 
 
-def run_one(row):
+def run_one(row, worker_lock=None):
     job_id = row["id"]
     code = None
     state = "unconfirmed"
@@ -466,7 +592,7 @@ def run_one(row):
                     err = stack.enter_context((ROOT / f"{job_id}.err").open("xb"))
                     argv = (capabilities.arguments(db, job_id, ROOT) if capabilities.ID.fullmatch(row["program"])
                             else json.loads(row["argv"]))
-                    proc = stack.enter_context(program_process(argv, out, err))
+                    proc = stack.enter_context(program_process(argv, out, err, worker_lock))
             if stopped_before_launch:
                 state = "cancelled"
                 return
@@ -481,7 +607,7 @@ def run_one(row):
         state = "cancelled" if stopping else "completed"
         code = proc.returncode
     except Exception as error:
-        if proc is None:
+        if proc is None and not isinstance(error, UnconfirmedLaunchError):
             state = "failed"
         with suppress(OSError), (ROOT / f"{job_id}.err").open("ab") as err:
             err.write(str(error).encode("utf-8", "replace"))
@@ -491,7 +617,7 @@ def run_one(row):
 
 
 def work():
-    with exclusive_worker():
+    with exclusive_worker() as ownership:
         shutdown = ROOT / "worker.stop"
         shutdown.unlink(missing_ok=True)
         with transaction() as db:
@@ -505,7 +631,7 @@ def work():
                 if row:
                     db.execute("UPDATE jobs SET state='running' WHERE id=?", (row["id"],))
             if row:
-                run_one(row)
+                run_one(row, ownership.fileno())
             else:
                 time.sleep(0.25)
 
@@ -533,6 +659,7 @@ def main():
     for name in ("files-approve", "files-deny"):
         commands.add_parser(name).add_argument("id")
     commands.add_parser("rpc").add_argument("payload")
+    commands.add_parser("journal-stdin")
     args = parser.parse_args()
     if args.command == "init":
         initialize()
@@ -550,9 +677,17 @@ def main():
                 capabilities.register(db, files, manifest)
         except (OSError, ValueError, TypeError) as error:
             parser.error(str(error))
-    elif args.command == "rpc":
+    elif args.command in {"rpc", "journal-stdin"}:
         try:
-            request = json.loads(base64.b64decode(args.payload, validate=True))
+            if args.command == "journal-stdin":
+                raw = sys.stdin.buffer.read(plan_journal.MAX_REQUEST_BYTES + 1)
+                if len(raw) > plan_journal.MAX_REQUEST_BYTES:
+                    raise ValueError("Plan journal request exceeds its size limit.")
+                request = json.loads(raw)
+                if not isinstance(request, dict) or request.get("action") != "plan":
+                    raise ValueError("The journal stdin protocol accepts only plan operations.")
+            else:
+                request = json.loads(base64.b64decode(args.payload, validate=True))
             result = {"result": dispatch(**request)}
         except (ValueError, KeyError, TypeError, sqlite3.Error, OSError) as error:
             result = {"error": str(error)}
@@ -562,7 +697,9 @@ def main():
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["_launch"] and WINDOWS:
+    if len(sys.argv) == 4 and sys.argv[1] == "_supervise" and not WINDOWS:
+        sys.exit(supervise_linux(int(sys.argv[2]), int(sys.argv[3])))
+    elif sys.argv[1:] == ["_launch"] and WINDOWS:
         import ctypes
         code = subprocess.call(json.load(sys.stdin), stdin=subprocess.DEVNULL)
         ctypes.windll.kernel32.ExitProcess(ctypes.c_uint32(code))

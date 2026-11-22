@@ -37,10 +37,25 @@ class Node:
     route: Route | None = None
 
 
+@dataclass(frozen=True)
+class DesktopMember:
+    node_id: str
+    x: int
+    y: int
+
+
+@dataclass(frozen=True)
+class Desktop:
+    primary: str
+    members: tuple[DesktopMember, ...]
+    clipboard: bool
+
+
 class Registry:
     def __init__(self, local_id, nodes):
         self.local_id = local_id
         self.nodes = tuple(nodes)
+        self.desktop = None
         self.selectors = {}
         for node in self.nodes:
             for selector in (node.node_id, *node.aliases):
@@ -131,16 +146,52 @@ def node_from_config(entry, legacy, empty_config):
     return Node(node_id, label, family, tuple(aliases), route)
 
 
-def load(path, legacy, empty_config):
-    if path is None:
-        return legacy
-    with path.open(encoding="utf-8-sig") as file:
-        config = json.load(file)
-    if not isinstance(config, dict) or set(config) != {"local", "nodes"} or not isinstance(config["nodes"], list):
+def desktop_member(entry, registry):
+    if not isinstance(entry, dict) or set(entry) != {"node_id", "x", "y"}:
+        raise ValueError("Each desktop member needs node_id, x and y.")
+    if type(entry["x"]) is not int or type(entry["y"]) is not int:
+        raise ValueError("Desktop positions must use integer grid coordinates.")
+    node_id = entry["node_id"]
+    if registry.get(node_id).node_id != node_id:
+        raise ValueError("Desktop members must use canonical node IDs.")
+    return DesktopMember(node_id, entry["x"], entry["y"])
+
+
+def desktop_from_config(data, registry):
+    if data is None:
+        return None
+    if not isinstance(data, dict) or set(data) != {"primary", "members", "clipboard"}:
+        raise ValueError("The desktop group needs primary, members and clipboard.")
+    members = data["members"]
+    if not isinstance(members, list) or not 1 <= len(members) <= MAX_NODES:
+        raise ValueError(f"Register between 1 and {MAX_NODES} desktop members.")
+    if type(data["clipboard"]) is not bool:
+        raise ValueError("Desktop clipboard must be a boolean.")
+    layout = tuple(desktop_member(entry, registry) for entry in members)
+    identities = {entry.node_id for entry in layout}
+    positions = {(entry.x, entry.y) for entry in layout}
+    if len(identities) != len(layout) or len(positions) != len(layout):
+        raise ValueError("Desktop members and their positions must be unique.")
+    if not isinstance(data["primary"], str) or data["primary"] not in identities:
+        raise ValueError("The desktop primary must be one of its registered members.")
+    return Desktop(data["primary"], layout, data["clipboard"])
+
+
+def from_document(config, legacy, empty_config):
+    if (not isinstance(config, dict) or not {"local", "nodes"} <= config.keys() <= {"local", "nodes", "desktop"}
+            or not isinstance(config["nodes"], list)):
         raise ValueError("The node registry must contain local and nodes.")
     if not 1 <= len(config["nodes"]) <= MAX_NODES:
         raise ValueError(f"Register between 1 and {MAX_NODES} nodes.")
     registry = Registry(config["local"], (node_from_config(item, legacy, empty_config) for item in config["nodes"]))
     if registry.get(registry.local_id).family != legacy.get(legacy.local_id).family:
         raise ValueError("The local node's OS family must match the running server.")
+    registry.desktop = desktop_from_config(config.get("desktop"), registry)
     return registry
+
+
+def load(path, legacy, empty_config):
+    if path is None:
+        return legacy
+    with path.open(encoding="utf-8-sig") as file:
+        return from_document(json.load(file), legacy, empty_config)
