@@ -44,13 +44,7 @@ jobs:
         run: python .github/scripts/mcp_smoke.py
       - name: Compile Python desktop entry points
         if: runner.os == 'Linux'
-        run: >-
-          python -m py_compile
-          "outputs/Windows Dock/windows-dock.py"
-          "outputs/Windows Dock/node_catalog.py"
-          "outputs/Windows Dock/remote_desktop.py"
-          "outputs/Windows Dock/wayland_input.py"
-          "outputs/Windows Dock/windows_ssh.py"
+        run: python -m compileall -q "outputs/Windows Dock"
       - name: Build Windows desktop application
         if: runner.os == 'Windows'
         shell: powershell

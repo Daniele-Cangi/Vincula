@@ -12,6 +12,16 @@ from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 
+def prepare_windows_probe():
+    if sys.platform == "win32":
+        from server import WINDOWS_STATUS, windows_ssh
+
+        # Hosted Windows images initialize their CIM providers on the first query.
+        # Keep that startup outside the normal, bounded MCP availability probe.
+        windows_ssh.local_status(timeout=60, command=WINDOWS_STATUS)
+        print("Windows status providers initialized.")
+
+
 def main():
     with TemporaryDirectory(prefix="vincula-ci-") as directory:
         # Set the profile before importing the transport and runner, which cache paths.
@@ -25,6 +35,7 @@ def main():
         sys.path.insert(0, str(agent))
         from check import check, legacy_registry, registry
 
+        prepare_windows_probe()
         asyncio.run(check(legacy_registry(), False, env))
         identifiers = {name: str(uuid4()) for name in ("ubuntu", "windows", "kali")}
         local = "windows" if sys.platform == "win32" else "ubuntu"
