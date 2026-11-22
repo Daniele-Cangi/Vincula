@@ -207,10 +207,9 @@ def execute(request, path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--registry", type=Path, default=None)
-    args = parser.parse_args()
+    parser.parse_args()
     try:
-        result = execute(json.load(sys.stdin), args.registry or registry_path())
+        result = execute(json.load(sys.stdin), registry_path())
     except ConflictError as error:
         result = {"ok": False, "error": {"code": "conflict", "message": str(error)}}
     except (ValueError, TypeError, KeyError, UnicodeError) as error:
