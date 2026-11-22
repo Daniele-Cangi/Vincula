@@ -35,7 +35,7 @@ import windows_ssh
 NodeId = Annotated[str, Field(pattern=node_registry.SELECTOR_PATTERN)]
 Availability = Literal["available", "unavailable", "not_configured"]
 
-mcp = MCPServer("vincula", instructions="Inspect Vincula nodes and manage their locally authorized programs.")
+mcp = MCPServer("vincula", instructions="Inspect Vincula nodes and execute work under each node owner's access policy.")
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 
 WINDOWS_NVIDIA_LOCATOR = r"""
@@ -302,21 +302,44 @@ try {
 }
 """
 
+def windows_framed_bootstrap(command):
+    if command not in {"process-stdin", "journal-framed-stdin"}:
+        raise ValueError("Unknown framed destination entrypoint.")
+    # Python inherits the SSH byte stream directly. ConsoleHost's separate stdin
+    # reader is deliberately absent, and no request content enters the command.
+    return ("import os,runpy,sys;"
+            f"sys.argv=['jobs.py','{command}'];"
+            "runpy.run_path(os.path.join(os.environ['LOCALAPPDATA'],'Vincula-Jobs','jobs.py'),"
+            "run_name='__main__')")
+
+
+def windows_framed_command(command):
+    return f'py.exe -3 -IB -c "{windows_framed_bootstrap(command)}"'
+
 
 def remote_request(node, request):
     raw = json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if request.get("action") == "process":
+        if len(raw) > jobs.direct_execution.MAX_TRANSPORT_BYTES:
+            raise ValueError("The process request exceeds its transport size limit.")
+        if node.family == "linux":
+            command = 'python3 -IB "$HOME/.local/share/vincula-jobs/jobs.py" process-stdin'
+        else:
+            command = windows_framed_command("process-stdin")
+        data = jobs.wire_framing.pack(raw, jobs.direct_execution.MAX_TRANSPORT_BYTES)
+        return node_ssh.json_command(node.route, command, input_data=data,
+                                     output_limit=jobs.direct_execution.MAX_RESPONSE_BYTES)
     journal = request.get("action") == "plan"
-    if journal and (len(raw) > 4096 or (node.family == "windows" and request.get("operation") == "store")):
+    if journal and (len(raw) > 4096 or node.family == "windows"):
         if len(raw) > jobs.plan_journal.MAX_REQUEST_BYTES:
             raise ValueError("Plan journal request exceeds its size limit.")
         if node.family == "linux":
-            command = 'python3 -IB "$HOME/.local/share/vincula-jobs/jobs.py" journal-stdin'
+            command = 'python3 -IB "$HOME/.local/share/vincula-jobs/jobs.py" journal-framed-stdin'
         else:
-            command = windows_ssh._powershell_command(WINDOWS_JOURNAL_STDIN.replace(
-                "__JOURNAL_LIMIT__", str(jobs.plan_journal.MAX_REQUEST_BYTES),
-            ))
-        return node_ssh.json_command(node.route, command, input_data=raw,
-                                     output_limit=jobs.plan_journal.MAX_RESPONSE_BYTES)
+            command = windows_framed_command("journal-framed-stdin")
+        return node_ssh.json_command(node.route, command,
+                                     input_data=jobs.wire_framing.pack(raw, jobs.plan_journal.MAX_REQUEST_BYTES),
+                                     output_limit=jobs.direct_execution.MAX_RESPONSE_BYTES)
     payload = base64.b64encode(raw).decode("ascii")
     if node.family == "linux":
         command = f'python3 -IB "$HOME/.local/share/vincula-jobs/jobs.py" rpc {payload}'
@@ -354,6 +377,67 @@ def destination_request(node_id, request):
 async def list_jobs(node_id: NodeId) -> JobCatalog:
     """List permission mode, registered program names and the 50 newest jobs on this node."""
     return await asyncio.to_thread(destination_job, node_id, "list")
+
+
+class ProcessExecutionInfo(BaseModel):
+    node_id: NodeId
+    protocol_version: int
+    enabled: bool
+    mode: Literal["ask", "full"]
+    interactive: Literal[False]
+    max_request_bytes: int
+    max_stdin_bytes: int
+    max_response_bytes: int
+    default_timeout_seconds: int
+    max_timeout_seconds: int
+
+
+class ProcessOutcome(BaseModel):
+    runtime_protocol_version: int
+    state: str
+    program_exit_code: int | None
+    reason: Literal["exit", "stop", "timeout", "launch_error", "unconfirmed"]
+    started: bool | None
+
+
+class ProcessDetails(JobDetails):
+    manifest: dict[str, JsonValue]
+    outcome: ProcessOutcome | None
+
+
+def destination_process(node_id, operation, **fields):
+    return destination_request(node_id, {"action": "process", "operation": operation,
+                                        "protocol_version": jobs.direct_execution.PROTOCOL_VERSION, **fields})
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_process_execution_info(node_id: NodeId) -> ProcessExecutionInfo:
+    """Read native helper protocol and owner opt-in. This does not certify a running worker's version."""
+    node = registered_node(node_id)
+    result = await asyncio.to_thread(destination_process, node.node_id, "info")
+    return ProcessExecutionInfo(node_id=node.node_id, **result)
+
+
+@mcp.tool()
+async def execute_process(node_id: NodeId, job_id: UUID, argv: list[str], cwd: str | None = None,
+                          env: dict[str, str] | None = None, stdin_text: str | None = None,
+                          timeout_seconds: Annotated[int, Field(ge=1, le=3600, strict=True)] = 300) -> ProcessDetails:
+    """Execute native argv without preregistration when the owner enabled it. Ask requires exact approval;
+    full queues immediately with the worker account's OS permissions. No shell expansion or elevation.
+    cwd is absolute or defaults to home. UTF-8 input (64 KiB) ends at EOF. No PTY or streaming stdin.
+    Supply a UUID and reuse the identical request on retry. Timeout includes computation, not queue time.
+    Windows batch scripts need an explicit cmd.exe interpreter. Use read_process and stop_job afterwards.
+    """
+    return await asyncio.to_thread(destination_process, node_id, "execute", job_id=str(job_id), argv=argv,
+                                   cwd=cwd, env=env, stdin_text=stdin_text, timeout_seconds=timeout_seconds)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def read_process(node_id: NodeId, job_id: UUID) -> ProcessDetails:
+    """Read immutable original/resolved request, approval digest, bounded log tails and confirmed outcome.
+    An incompatible legacy worker cannot execute this request; its helper exit is reported unconfirmed.
+    """
+    return await asyncio.to_thread(destination_process, node_id, "read", job_id=str(job_id))
 
 
 @mcp.tool()
