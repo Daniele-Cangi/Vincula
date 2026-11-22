@@ -26,7 +26,7 @@ Dopo tutte le 39 chiamate sono stati raccolti nuovi audit in sola lettura sui tr
 
 **Kali.** Codex 0.171 filtra l’ambiente dei server STDIO. Mancava il contesto necessario al launcher per raggiungere l’agente SSH desktop: il test manuale riusciva, mentre il client nativo chiudeva l’handshake. La sola modifica di configurazione inoltra esplicitamente i nomi `SSH_AUTH_SOCK`, `XDG_RUNTIME_DIR` e `DBUS_SESSION_BUS_ADDRESS` tramite `env_vars`, senza salvare valori o percorsi delle credenziali.
 
-Il fallback sul bus utente è stato verificato anche con `SSH_AUTH_SOCK` assente nel processo chiamante: il server seleziona l’agente del gestore utente e ne verifica la capacità di firma con un nonce sintetico. La sessione Codex corretta ha poi completato 13 vere chiamate, senza iniezioni manuali nell’ambiente, override del modello, feature, trust o catalogo. Anche il daemon esistente espone 23 strumenti senza errori: non è servito un ulteriore riavvio. Il digest della sola tabella Vincula Kali cambia intenzionalmente per l’aggiunta dell’allowlist; gli altri campi restano invariati.
+Il fallback sul bus utente è stato verificato anche con `SSH_AUTH_SOCK` assente nel processo chiamante: il server seleziona l’agente del gestore utente; il collaudo ne ha verificato separatamente la capacità di firma con un nonce sintetico. La sessione Codex corretta ha poi completato 13 vere chiamate, senza iniezioni manuali nell’ambiente, override del modello, feature, trust o catalogo. Anche il daemon esistente espone 23 strumenti senza errori: non è servito un ulteriore riavvio. Il digest della sola tabella Vincula Kali cambia intenzionalmente per l’aggiunta dell’allowlist; gli altri campi restano invariati.
 
 ## GUI e ambito della prova
 
