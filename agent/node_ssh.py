@@ -47,22 +47,37 @@ def environment():
     return env
 
 
-def run(route, program, flags, args, stdout, *, timeout, cwd=None):
+def run(route, program, flags, args, stdout, *, timeout, cwd=None, stdin=None):
     if route is None or not route.configured():
         raise ValueError("The registered node has no configured SSH route.")
     # Use regular files for Windows OpenSSH, which can leave a captured pipe open.
     with TemporaryFile() as stderr:
         subprocess.run([executable(program), *flags, *OPTIONS, *route.options, route.destination, *args],
-                       stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, cwd=cwd, env=environment(),
+                       stdin=subprocess.DEVNULL if stdin is None else stdin,
+                       stdout=stdout, stderr=stderr, cwd=cwd, env=environment(),
                        creationflags=subprocess.CREATE_NO_WINDOW if WINDOWS else 0,
                        timeout=timeout, check=True)
 
 
-def json_command(route, command):
-    with TemporaryFile() as output:
-        run(route, "ssh", ("-nT",), (command,), output, timeout=PROBE_TIMEOUT)
+def json_command(route, command, *, input_data=None, output_limit=256 * 1024):
+    if input_data is not None and (not isinstance(input_data, bytes) or len(input_data) > 512 * 1024):
+        raise ValueError("SSH input exceeds the bounded journal transport.")
+    if type(output_limit) is not int or not 1 <= output_limit <= 1024 * 1024:
+        raise ValueError("Invalid SSH JSON output limit.")
+    with ExitStack() as cleanup:
+        output = cleanup.enter_context(TemporaryFile())
+        source = None
+        if input_data is not None:
+            source = cleanup.enter_context(TemporaryFile())
+            source.write(input_data)
+            source.seek(0)
+        flags = ("-T",) if source is not None else ("-nT",)
+        run(route, "ssh", flags, (command,), output, timeout=PROBE_TIMEOUT, stdin=source)
         output.seek(0)
-        return json.loads(output.read(256 * 1024))
+        raw = output.read(output_limit + 1)
+        if len(raw) > output_limit:
+            raise ValueError("SSH JSON response exceeds its limit.")
+        return json.loads(raw)
 
 
 def copy(route, command, directory):

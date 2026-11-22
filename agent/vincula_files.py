@@ -306,6 +306,10 @@ def dispatch(db, home, mode, operation, request_id=None, **fields):
         return request(db, key, mode, **fields)
     if operation == "status":
         return status(db, key)
+    if operation == "inspect-transfer":
+        if get_request(db, key)["operation"] not in {"export", "import"}:
+            raise ValueError("The file request is not a transfer operation.")
+        return status(db, key)
     if operation == "stage":
         return stage(db, home, key)
     if operation == "commit":

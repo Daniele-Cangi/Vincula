@@ -7,7 +7,6 @@ import asyncio
 import base64
 from collections import defaultdict
 from contextlib import suppress
-from functools import cache
 import json
 import os
 import subprocess
@@ -165,7 +164,6 @@ def legacy_registry():
     ))
 
 
-@cache
 def registry():
     path = os.environ.get("VINCULA_NODE_REGISTRY")
     if not path:
@@ -271,6 +269,68 @@ def destination_job(node_id, action, job_id=None, program=None):
     )
 
 
+WINDOWS_JOURNAL_STDIN = r"""
+$helper = Join-Path $env:LOCALAPPDATA 'Vincula-Jobs/jobs.py'
+$info = New-Object Diagnostics.ProcessStartInfo
+$info.FileName = (Get-Command py.exe -ErrorAction Stop).Source
+$info.Arguments = '-3 -IB "' + $helper + '" journal-stdin'
+$info.UseShellExecute = $false
+$info.CreateNoWindow = $true
+$info.RedirectStandardInput = $true
+$info.RedirectStandardOutput = $true
+$info.RedirectStandardError = $true
+$process = [Diagnostics.Process]::Start($info)
+try {
+    $output = $process.StandardOutput.ReadToEndAsync()
+    $errors = $process.StandardError.ReadToEndAsync()
+    $source = [Console]::OpenStandardInput()
+    $buffer = New-Object byte[] 8192
+    $total = 0
+    while (($count = $source.Read($buffer, 0, $buffer.Length)) -gt 0) {
+        $total += $count
+        if ($total -gt __JOURNAL_LIMIT__) { throw 'Plan journal request exceeds its size limit.' }
+        $process.StandardInput.BaseStream.Write($buffer, 0, $count)
+    }
+    $process.StandardInput.Close()
+    if (!$process.WaitForExit(10000)) { throw 'Plan journal receiver timed out.' }
+    [Console]::Out.Write($output.GetAwaiter().GetResult())
+    [Console]::Error.Write($errors.GetAwaiter().GetResult())
+    exit $process.ExitCode
+} finally {
+    if (!$process.HasExited) { $process.Kill() }
+    $process.Dispose()
+}
+"""
+
+
+def remote_request(node, request):
+    raw = json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    journal = request.get("action") == "plan"
+    if journal and (len(raw) > 4096 or (node.family == "windows" and request.get("operation") == "store")):
+        if len(raw) > jobs.plan_journal.MAX_REQUEST_BYTES:
+            raise ValueError("Plan journal request exceeds its size limit.")
+        if node.family == "linux":
+            command = 'python3 -IB "$HOME/.local/share/vincula-jobs/jobs.py" journal-stdin'
+        else:
+            command = windows_ssh._powershell_command(WINDOWS_JOURNAL_STDIN.replace(
+                "__JOURNAL_LIMIT__", str(jobs.plan_journal.MAX_REQUEST_BYTES),
+            ))
+        return node_ssh.json_command(node.route, command, input_data=raw,
+                                     output_limit=jobs.plan_journal.MAX_RESPONSE_BYTES)
+    payload = base64.b64encode(raw).decode("ascii")
+    if node.family == "linux":
+        command = f'python3 -IB "$HOME/.local/share/vincula-jobs/jobs.py" rpc {payload}'
+    else:
+        script = (
+            "$helper = Join-Path $env:LOCALAPPDATA 'Vincula-Jobs/jobs.py'\n"
+            f"& py.exe -3 -IB $helper rpc '{payload}'\nexit $LASTEXITCODE"
+        )
+        command = windows_ssh._powershell_command(script)
+    if journal:
+        return node_ssh.json_command(node.route, command, output_limit=jobs.plan_journal.MAX_RESPONSE_BYTES)
+    return node_ssh.json_command(node.route, command)
+
+
 def destination_request(node_id, request):
     node = registered_node(node_id)
     if node.node_id == local_node():
@@ -278,17 +338,8 @@ def destination_request(node_id, request):
             return jobs.dispatch(**request)
         except ValueError as error:
             raise ToolError(str(error)) from None
-    payload = base64.b64encode(json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode()).decode("ascii")
     try:
-        if node.family == "linux":
-            command = f'python3 -IB "$HOME/.local/share/vincula-jobs/jobs.py" rpc {payload}'
-        else:
-            script = (
-                "$helper = Join-Path $env:LOCALAPPDATA 'Vincula-Jobs/jobs.py'\n"
-                f"& py.exe -3 -IB $helper rpc '{payload}'\nexit $LASTEXITCODE"
-            )
-            command = windows_ssh._powershell_command(script)
-        reply = node_ssh.json_command(node.route, command)
+        reply = remote_request(node, request)
         if not isinstance(reply, dict) or reply.keys() not in ({"result"}, {"error"}):
             raise ValueError("Invalid remote job reply.")
     except (windows_ssh.LinkError, OSError, subprocess.SubprocessError, ValueError):
@@ -353,12 +404,14 @@ async def registered_programs(node_id):
         return node_id, []
 
 
-async def batch_report(batch_id, plan, operation):
+async def batch_report(batch_id, plan, operation, *, origin=None, publication_errors=None):
     by_node = defaultdict(list)
     for task in plan:
         by_node[task["node_id"]].append(task)
 
     async def contact(node_id, tasks):
+        if publication_errors and node_id in publication_errors:
+            return [BatchTaskResult(**task, error=publication_errors[node_id]) for task in tasks]
         items = [{"job_id": task["job_id"], "program": task["program"]} for task in tasks]
         request = {"action": "batch", "operation": operation, "items": items}
         try:
@@ -382,7 +435,44 @@ async def batch_report(batch_id, plan, operation):
 
     parts = await asyncio.gather(*(contact(node, tasks) for node, tasks in by_node.items()))
     results = sorted((task for part in parts for task in part), key=lambda task: task.index)
-    return BatchReport(batch_id=batch_id, origin=local_node(), tasks=results)
+    return BatchReport(batch_id=batch_id, origin=origin or local_node(), tasks=results)
+
+
+async def publish_plan(manifest):
+    record = jobs.plan_journal.package(manifest)
+    receipt = await asyncio.to_thread(jobs.dispatch, "plan", operation="store", manifest=manifest)
+    jobs.plan_journal.check_replication(receipt, record["sha256"])
+
+    async def publish(node_id):
+        try:
+            receipt = await asyncio.to_thread(destination_request, node_id, {
+                "action": "plan", "operation": "store", "manifest": manifest,
+            })
+        except ToolError as error:
+            return node_id, str(error)
+        jobs.plan_journal.check_replication(receipt, record["sha256"])
+        return node_id, None
+
+    parts = manifest["plan"] if manifest["kind"] == "batch" else manifest["plan"]["parts"]
+    nodes = dict.fromkeys(part["node_id"] for part in parts)
+    replies = await asyncio.gather(*(publish(node) for node in nodes))
+    return {node: error for node, error in replies if error is not None}
+
+
+async def find_plan_manifest(kind, plan_id):
+    async def read(node_id):
+        try:
+            return await asyncio.to_thread(destination_request, node_id, {
+                "action": "plan", "operation": "get", "kind": kind, "plan_id": str(plan_id),
+            })
+        except ToolError:
+            # An unavailable peer cannot prevent reads of manifests and jobs on the other peers.
+            return None
+
+    records = await asyncio.gather(*(read(node.node_id) for node in registry().nodes))
+    if kind == "batch":
+        return batches.select_replica(plan_id, records)
+    return jobs.plan_journal.select_replica(kind, plan_id, records)
 
 
 @mcp.tool()
@@ -401,21 +491,25 @@ async def submit_batch(
                            if task["node_id"] else task for task in request]
             plan = batches.make_plan(batch_id, local_node(), assignments, catalogs)
             plan = await asyncio.to_thread(batches.save, batch_id, request, plan)
+        manifest = await asyncio.to_thread(batches.manifest, batch_id, local_node())
+        publication_errors = await publish_plan(manifest)
     except ValueError as error:
         raise ToolError(str(error)) from None
-    return await batch_report(batch_id, plan, "start")
+    return await batch_report(batch_id, plan, "start", publication_errors=publication_errors)
 
 
 @mcp.tool(annotations=READ_ONLY)
 async def get_batch(batch_id: UUID) -> BatchReport:
-    """Read each task's state and exit code on the PC where the batch was submitted."""
+    """Read original job UUIDs and results, recovering a published plan from reachable workers."""
     try:
-        plan = await asyncio.to_thread(batches.load, batch_id)
+        manifest = await asyncio.to_thread(batches.manifest, batch_id, local_node())
+        if manifest is None:
+            manifest = await find_plan_manifest("batch", batch_id)
     except ValueError as error:
         raise ToolError(str(error)) from None
-    if plan is None:
-        raise ToolError("Unknown batch ID on this origin.")
-    return await batch_report(batch_id, plan, "status")
+    if manifest is None:
+        raise ToolError("Unknown batch ID on this origin and its reachable replicas.")
+    return await batch_report(batch_id, manifest["plan"], "status", origin=manifest["origin"])
 
 
 class InstalledTools(BaseModel):
@@ -697,6 +791,33 @@ def transfer_capability_input(transfer_id, source, destination):
                               FileEndpoint.model_validate(destination)).model_dump(mode="json")
 
 
+def optional_transfer_status(endpoint, request_id, operation):
+    try:
+        reply = file_request(endpoint["node_id"], "inspect-transfer", request_id)
+    except ToolError as error:
+        if str(error) == "Unknown file request.":
+            return None
+        raise
+    try:
+        result = FileRequest.model_validate(reply)
+    except ValueError:
+        raise ValueError("A worker returned an invalid transfer status.") from None
+    if (result.id != request_id or result.operation != operation
+            or result.root != endpoint["root"] or result.path != endpoint["path"]):
+        raise ValueError("The transfer request does not match the recovered capability input.")
+    return result.model_dump(mode="json")
+
+
+def inspect_capability_transfer(transfer_id, source, destination):
+    dest = optional_transfer_status(destination, uuid5(transfer_id, "import"), "import")
+    if dest is None:
+        return None
+    src = None
+    if dest["state"] != "completed":
+        src = optional_transfer_status(source, uuid5(transfer_id, "export"), "export")
+    return {"transfer_id": str(transfer_id), "source": src, "destination": dest}
+
+
 @mcp.tool()
 async def submit_capability(
     run_id: UUID, capability_id: str, parts: Annotated[list[CapabilityPart], Field(min_length=1, max_length=jobs.capabilities.MAX_PARTS)],
@@ -714,21 +835,27 @@ async def submit_capability(
             ))
             plan = await asyncio.to_thread(capability_workflow.make_plan, run_id, request,
                                            dict(zip(nodes, providers)), local_node(), registry().get)
+        manifest = await asyncio.to_thread(capability_workflow.manifest, run_id, local_node())
+        publication_errors = await publish_plan(manifest)
     except ValueError as error:
         raise ToolError(str(error)) from None
-    return await capability_workflow.reconcile(run_id, plan, destination_request, transfer_capability_input)
+    return await capability_workflow.reconcile(run_id, plan, destination_request, transfer_capability_input,
+                                               publication_errors=publication_errors)
 
 
 @mcp.tool(annotations=READ_ONLY)
 async def get_capability_run(run_id: UUID) -> CapabilityReport:
-    """Read parts, job output and status for a capability run submitted from this node."""
+    """Read original capability parts, recovering a published manifest from reachable workers."""
     try:
-        plan = await asyncio.to_thread(capability_workflow.load, run_id)
+        manifest = await asyncio.to_thread(capability_workflow.manifest, run_id, local_node())
+        if manifest is None:
+            manifest = await find_plan_manifest("capability", run_id)
     except ValueError as error:
         raise ToolError(str(error)) from None
-    if plan is None:
-        raise ToolError("Unknown capability run on this origin.")
-    return await capability_workflow.reconcile(run_id, plan, destination_request)
+    if manifest is None:
+        raise ToolError("Unknown capability run on this origin and its reachable replicas.")
+    return await capability_workflow.reconcile(run_id, manifest["plan"], destination_request,
+                                               inspect_transfer=inspect_capability_transfer)
 
 
 if __name__ == "__main__":

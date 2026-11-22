@@ -1,6 +1,6 @@
 # Registro dei nodi Vincula
 
-Il server MCP legge il registro locale all’avvio. Ogni macchina ha un
+Il server MCP rilegge il registro locale a ogni operazione. Ogni macchina ha un
 UUID stabile, un nome leggibile e una famiglia di sistema operativo.
 Ogni origine può configurare percorsi SSH diversi per raggiungere gli
 stessi UUID. Gli strumenti MCP accettano sia l’UUID sia gli alias
@@ -9,9 +9,18 @@ dichiarati dall’operatore.
 Su Linux salva il registro in `~/.config/vincula/nodes.json`, o sotto
 `XDG_CONFIG_HOME` se impostato. Su Windows usa
 `%LOCALAPPDATA%\Vincula\nodes.json`. Puoi indicare un altro file con
-`VINCULA_NODE_REGISTRY`. Riavvia il client MCP dopo le modifiche.
+`VINCULA_NODE_REGISTRY`. Le modifiche valide salvate dal runtime Nodi
+diventano visibili alle chiamate MCP successive nella sessione già aperta.
 In assenza del registro, il server usa le configurazioni Ethernet
 esistenti e gli ID `ubuntu` e `windows`.
+
+Il percorso alternativo è una configurazione dell’operatore nell’ambiente
+del processo. Il CLI JSON `agent/nodes.py`, usato anche dalle app desktop,
+non accetta un argomento `--registry` né un percorso del registro nel
+payload JSON. L’operatore deve quindi predisporre `VINCULA_NODE_REGISTRY`
+prima di avviare il runtime quando usa un percorso diverso da quello standard.
+Questa scelta del file non costituisce un isolamento per un account che
+dispone già dell’accesso completo alla shell e ai file.
 
 ## Esempio da ASUS TUF
 

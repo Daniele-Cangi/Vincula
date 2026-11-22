@@ -24,6 +24,24 @@ def load(run_id, request=None):
     return json.loads(row["plan"])
 
 
+def manifest(run_id, origin):
+    with jobs.transaction() as db:
+        row = db.execute("SELECT request,plan FROM capability_plans WHERE id=?", (str(run_id),)).fetchone()
+        if row is None:
+            return None
+        request, plan = json.loads(row["request"]), json.loads(row["plan"])
+        existing = jobs.plan_journal.get(db, "capability", str(run_id))
+    if existing is not None:
+        saved = jobs.plan_journal.unpack(existing)["manifest"]
+        if saved["request"] != request or saved["plan"] != plan:
+            raise ValueError("Local capability plan conflicts with its published manifest.")
+        return saved
+    return jobs.plan_journal.package({
+        "version": 1, "kind": "capability", "id": str(run_id), "origin": origin,
+        "request": request, "plan": plan,
+    })["manifest"]
+
+
 def make_plan(run_id, request, providers, origin, resolve=None):
     parts = request["parts"]
     if resolve is not None:
@@ -57,6 +75,9 @@ def make_plan(run_id, request, providers, origin, resolve=None):
         })
         index += len(inputs)
     with jobs.transaction() as db:
+        own = db.execute("SELECT 1 FROM capability_plans WHERE id=?", (str(run_id),)).fetchone()
+        if own is None and jobs.plan_journal.get(db, "capability", str(run_id)) is not None:
+            raise ValueError("Run ID belongs to a replicated plan. Use get_capability_run to read its original jobs.")
         db.execute("INSERT OR IGNORE INTO capability_plans VALUES(?,?,?)",
                    (str(run_id), capabilities.encode(request), capabilities.encode(plan)))
     return load(run_id, request)
@@ -71,9 +92,7 @@ async def prepare_input(run_id, part, item, transfer):
     assigned = {"index": index, "root": source["root"], "path": source["path"]}
     if source["node_id"] == part["node_id"]:
         return assigned, None
-    transfer_id = uuid5(run_id, f"capability-input:{part['job_id']}:{index}")
-    destination = {"node_id": part["node_id"], "root": part["inbox"],
-                   "path": f"capability-{transfer_id.hex}{capabilities.suffix(source['path'])}"}
+    transfer_id, source, destination = input_transfer(run_id, part, item)
     receipt = await asyncio.to_thread(transfer, transfer_id, source, destination)
     end = receipt["destination"]
     if any(endpoint and endpoint["state"] == "denied" for endpoint in (receipt["source"], end)):
@@ -81,6 +100,43 @@ async def prepare_input(run_id, part, item, transfer):
     if end["state"] != "completed":
         return None, receipt
     return dict(assigned, root=destination["root"], path=destination["path"], sha256=end["result"]["sha256"]), None
+
+
+def input_transfer(run_id, part, item):
+    transfer_id = uuid5(run_id, f"capability-input:{part['job_id']}:{item['index']}")
+    source = item["source"]
+    destination = {"node_id": part["node_id"], "root": part["inbox"],
+                   "path": f"capability-{transfer_id.hex}{capabilities.suffix(source['path'])}"}
+    return transfer_id, source, destination
+
+
+async def inspect_inputs(run_id, part, inspect_transfer):
+    waiting, missing = [], False
+    for item in part["inputs"]:
+        if item["source"]["node_id"] == part["node_id"]:
+            continue
+        receipt = await asyncio.to_thread(inspect_transfer, *input_transfer(run_id, part, item))
+        if receipt is None:
+            missing = True
+        elif receipt["destination"]["state"] != "completed":
+            waiting.append(receipt)
+    return waiting, missing
+
+
+async def inspect_unqueued(run_id, capability_id, part, report, dispatch, inspect_transfer):
+    provider = await node_call(dispatch, part["node_id"], "describe", capability_id=capability_id)
+    if provider is None or provider["revision"] != part["revision"]:
+        raise ValueError("Capability registration changed or was revoked before this part was queued.")
+    waiting, missing = await inspect_inputs(run_id, part, inspect_transfer)
+    report["waiting_transfers"] = waiting
+    if any(endpoint and endpoint["state"] == "denied" for receipt in waiting
+           for endpoint in (receipt["source"], receipt["destination"])):
+        raise ValueError("A required capability transfer was denied.")
+    if missing:
+        raise ValueError("A required input transfer has not been prepared.")
+    if waiting:
+        raise ValueError("Required input transfers are awaiting approval or completion.")
+    raise ValueError("The capability part has not been queued.")
 
 
 def result_envelope(details):
@@ -98,13 +154,16 @@ def result_envelope(details):
     raise ValueError("Adapter result contains invalid JSON data.")
 
 
-async def reconcile(run_id, plan, dispatch, transfer=None):
+async def reconcile(run_id, plan, dispatch, transfer=None, *, inspect_transfer=None, publication_errors=None):
     capability_id = plan["capability_id"]
 
     async def process(part):
         node, job_id = part["node_id"], part["job_id"]
         report = {"node_id": node, "job_id": job_id, "job": None, "waiting_transfers": [],
                   "output": None, "error": None}
+        if publication_errors and node in publication_errors:
+            report["error"] = publication_errors[node]
+            return report
         try:
             details = await node_call(dispatch, node, "read", job_id=job_id, capability_id=capability_id)
             if details is not None:
@@ -119,6 +178,8 @@ async def reconcile(run_id, plan, dispatch, transfer=None):
                                                     capability_id=capability_id, revision=part["revision"],
                                                     inputs=[item for item, _ in ready],
                                                     parameters=part["parameters"])
+            elif inspect_transfer is not None:
+                await inspect_unqueued(run_id, capability_id, part, report, dispatch, inspect_transfer)
         except (ToolError, ValueError) as error:
             report["error"] = str(error)
         return report
