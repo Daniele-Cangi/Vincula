@@ -23,6 +23,7 @@ class ConflictError(ValueError):
     """The configuration changed after the caller read it."""
 
 
+@node_registry.synchronized
 def registry_path():
     override = os.environ.get("VINCULA_NODE_REGISTRY")
     if override:
@@ -48,6 +49,7 @@ def validate(document):
     return node_registry.from_document(document, validation_legacy(), "NUL" if sys.platform == "win32" else "/dev/null")
 
 
+@node_registry.synchronized
 def snapshot(path):
     try:
         raw = path.read_bytes()
@@ -60,6 +62,12 @@ def snapshot(path):
 
 @contextmanager
 def edit_lock(path):
+    with node_registry.registry_guard(), _edit_lock(path):
+        yield
+
+
+@contextmanager
+def _edit_lock(path):
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     descriptor = os.open(str(path) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
     with os.fdopen(descriptor, "r+b") as lock:
@@ -95,6 +103,7 @@ def edit_lock(path):
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
+@node_registry.synchronized
 def save(path, document):
     raw = (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     stage = None
@@ -188,6 +197,7 @@ def edit_document(document, request):
     return document
 
 
+@node_registry.synchronized
 def execute(request, path):
     if not isinstance(request, dict) or not isinstance(request.get("action"), str):
         raise ValueError("Specify a JSON object with an action.")
@@ -224,7 +234,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.parse_args()
     try:
-        result = execute(json.load(sys.stdin), registry_path())
+        request = json.load(sys.stdin)
+        with node_registry.registry_guard():
+            result = execute(request, registry_path())
     except ConflictError as error:
         result = {"ok": False, "error": {"code": "conflict", "message": str(error)}}
     except (ValueError, TypeError, KeyError, UnicodeError) as error:
