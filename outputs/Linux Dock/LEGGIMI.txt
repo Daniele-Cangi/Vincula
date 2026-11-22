@@ -24,7 +24,7 @@ ascolta solo in loopback su entrambi i PC. Gli appunti restano locali.
 
 Condividere il mouse e la tastiera di Windows
 Linux Dock avvia la condivisione all'apertura e ritenta se il collegamento
-cade. Ubuntu deve avere una sessione X11 aperta. Il lato iniziale è
+cade. Ubuntu deve avere una sessione grafica aperta. Il lato iniziale è
 «A sinistra di Windows». Nella scheda «Mouse e tastiera» puoi cambiarlo
 anche durante la condivisione. Al cambio di lato la sessione si riconnette
 automaticamente e l'app ricorda la scelta.
@@ -41,9 +41,23 @@ casella prima di riconnetterti. Per copiare un file usa «Trasferimenti».
 Barrier 2.4 può svuotare gli appunti locali di Ubuntu all'avvio della
 sessione anche quando la casella è deselezionata.
 
-La modalità usa Deskflow su Windows e il client Barrier su Ubuntu.
-Input e appunti passano nel tunnel SSH e con TLS autenticato da entrambe
+La modalità usa Deskflow su Windows. Su Ubuntu il ricevitore usa Barrier
+in X11 o Deskflow in Wayland. Al primo avvio su Wayland autorizza il
+controllo e gli appunti nella finestra di GNOME. Per gli appunti su
+Wayland, il ricevitore usa Deskflow compilato con libportal 0.10 o
+successivo. Il segnale di connessione usato dall'app Windows è esposto
+con il livello di diagnostica DEBUG del ricevitore.
+La connessione passa nel tunnel SSH e usa TLS autenticato da entrambe
 le parti. Le porte interne ascoltano su loopback.
+
+Su Ubuntu installa start-deskflow-wayland.sh come eseguibile
+~/.local/share/linux-dock/vnc/deskflow-wayland/start-client. Il profilo
+settings/dock-client.conf usa computerName=dock-ubuntu e port=24801 in
+[core], remoteHost=127.0.0.1 in [client], tlsEnabled=true,
+checkPeerFingerprints=true e il percorso del certificato esistente in
+[security], level=DEBUG in [log]. Il file settings/tls/trusted-servers
+contiene l'impronta SHA-256 di Windows già verificata, nel formato
+v2:sha256: seguito dai 64 caratteri esadecimali senza separatori.
 
 Icone
 Generate con ImageGen. Il prompt comune descrive uno scudo compatto
