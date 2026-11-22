@@ -31,6 +31,8 @@ Il registro mantiene gli UUID e gli alias già usati. Un blocco desktop opzional
 
 Il catalogo condiviso è locale al singolo host. L’aggiunta da Windows non replica automaticamente identità e percorsi SSH negli altri computer. L’enrollment dovrà distribuire i riferimenti pubblici verificati e configurare le rotte di ogni origine autorizzata. Le chiavi private rimangono su chi le usa; il file del registro non va copiato tra host con percorsi locali differenti.
 
+Il [contratto di enrollment](node-enrollment.md) definisce identità, invito pubblico, verifica delle rotte e abilitazione separata delle funzioni.
+
 Le due GUI chiamano un runtime locale Python con richieste e risposte JSON. La GUI Ubuntu può usarne direttamente le funzioni. La GUI Windows usa un processo locale senza comporre comandi shell dai dati dell’utente. Il runtime riusa il registro, la validazione e i trasporti esistenti.
 
 ## Esecuzione generale
@@ -65,17 +67,21 @@ Lo scheduler userà requisiti dichiarati dal lavoro e capacità rilevate. Carico
 
 I trasferimenti attuali hanno un limite di 64 MiB e il relay usa disco temporaneo sull’origine. Il protocollo per dataset grandi dovrà gestire quote, spazio libero, ripresa e verifica finale. La scelta fra relay e collegamento diretto dipenderà dalle rotte autorizzate e dalle misure, con verifiche di integrità per entrambe le modalità.
 
+Il [piano dei dataset grandi](large-file-transfers.md) separa manifest, prenotazioni, copie fuori dalle transazioni, ripresa verificata e pubblicazione finale.
+
 ## Stato di avanzamento
 
 Il goal è attivo dal 22 novembre 2026. Tre sessioni Codex nuove hanno usato MCP su Ubuntu, Windows e Kali, ciascuna con dieci chiamate riuscite e i tre nodi disponibili. Codex Windows è stato aggiornato da 0.161 a 0.171. La revisione installata è verificata mediante configurazione di avvio e SHA-256 dei sorgenti. I tool attuali espongono lo stato dei nodi e il sistema operativo, mentre la revisione del runtime resta un dato di installazione.
 
 Il [benchmark sui tre PC](benchmark-cpu-tre-nodi.md) è completato con dodici casi validi. Il totale mediano distribuito a freddo è 24,637 secondi, contro 20,491 secondi del seriale locale. Il risultato impone di includere località dei dati e costo del coordinamento nella scelta dei nodi. Le modalità `ask` sono conservate e le fixture sono state rimosse.
 
-Le PR #10 e #11 sono unite su `main`, revisione `96939c5`. La prima comprende CI, piano, collaudi e stato Windows corretto; la seconda catalogo JSON, supervisione Linux e recupero batch/capability. Le rispettive matrici hosted Windows/Linux con Python 3.10 e 3.14 passano, così come i controlli Sonar. La suite del runtime conta 90 test, con esclusioni specifiche della piattaforma. Il [collaudo dei tre worker isolati](collaudo-recupero-triade.md) verifica anche trasferimenti reali e recupero da Windows e Kali senza nuovi effetti.
+Le PR #10, #11, #12, #13 e #14 sono unite su `main`, revisione `6ac4605`. Comprendono CI, stato Windows corretto, catalogo JSON e GUI, supervisione Linux, recupero batch/capability, supervisore desktop autonomo ed esecuzione nativa MCP. Le matrici hosted Windows/Linux con Python 3.10 e 3.14 passano, così come i controlli Sonar. L’ultima snapshot del runtime conta 165 test, con esclusioni specifiche della piattaforma, più due test del benchmark. Il [collaudo dei tre worker isolati](collaudo-recupero-triade.md) verifica anche trasferimenti reali e recupero da Windows e Kali senza nuovi effetti.
 
-La PR #12 contiene il pannello Nodi e l’anteprima del layout nelle due GUI. Lo stress Windows ha rilevato un conflitto fra lettura e sostituzione atomica del registro: la correzione e il relativo ricollaudo precedono il merge. La PR #13 contiene il supervisore desktop autonomo, con prove su Windows e Linux. Le correzioni dei rilievi automatici sono in review; il componente non avvia ancora Deskflow e non è integrato nelle app.
+La PR #12 contiene il pannello Nodi e l’anteprima del layout nelle due GUI. Il conflitto fra lettura e sostituzione atomica del registro Windows è corretto e verificato con cento round concorrenti e con i token SSH elevato e desktop non elevato. La PR #13 contiene il supervisore desktop autonomo, con prove su Windows e Linux. I rilievi automatici sui percorsi sono risolti mediante pipe private e output fissi; la review indipendente ha verificato anche lo stop durante la preparazione. Il componente non avvia ancora Deskflow e non è integrato nelle app.
 
-La PR #14, in bozza, aggiunge l’esecuzione generale via MCP e attende CI e review della snapshot pubblicata. Le richieste grandi hanno rivelato un blocco del ponte stdin PowerShell; il percorso Python nativo passa tre ripetizioni SSH reali per richieste di processo da 180 KiB e journal da 189 KiB, senza cambiare la configurazione SSH. La verifica riguarda Windows OpenSSH con shell predefinita `cmd.exe`; un wrapper PowerShell provato separatamente non supera lo stesso collaudo e non è dichiarato compatibile.
+La PR #14 aggiunge l’esecuzione generale via MCP. Le richieste grandi hanno rivelato un blocco del ponte stdin PowerShell; il percorso Python nativo passa tre ripetizioni SSH reali per richieste di processo da 180 KiB e journal da 189 KiB, senza cambiare la configurazione SSH. La verifica riguarda Windows OpenSSH con shell predefinita `cmd.exe`; un wrapper PowerShell provato separatamente non supera lo stesso collaudo e non è dichiarato compatibile. La review è conclusa senza rilievi aperti, comprese le ricevute di errore Unicode limitate in byte.
+
+Il [coordinatore desktop](desktop-coordinator.md) è un incremento separato in review, con diciannove test mirati. Prepara tutti i nodi prima dei commit, controlla identità e lease, ordina le RPC per nodo e mantiene lo stop circoscritto indipendente. I supervisor reali restano `desktop_ready:false`: il protocollo remoto scoped e il backend Deskflow devono ancora essere collegati. Le fixture pronte verificano il contratto, senza certificare un desktop operativo.
 
 Il runtime operativo sui tre PC resta alla revisione precedentemente verificata `b470517` fino alla distribuzione controllata. Il piano di aggiornamento deve ritirare i vecchi processi MCP prima dell’inizializzazione dei nuovi helper: i client precedenti possono altrimenti ricopiare il proprio gestore nella cartella condivisa. Le sessioni interattive già aperte richiedono il rinnovo del client; le prove con nuove sessioni sono registrate separatamente.
 
