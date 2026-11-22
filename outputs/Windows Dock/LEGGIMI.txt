@@ -43,14 +43,22 @@ Condivisione di mouse e tastiera
 Apri la scheda «Mouse e tastiera» in Windows Dock su Linux. Seleziona il
 lato in cui si trova lo schermo Windows e premi «Attiva condivisione».
 Muovi il puntatore oltre quel bordo per usare il mouse e la tastiera Linux
-su Windows. Ctrl+F12 cambia schermo in qualsiasi momento. Il PC Windows
-mostra sempre la propria sessione grafica.
+su Windows. Su X11 puoi usare anche Ctrl+F12 per cambiare schermo.
+Il PC Windows mostra sempre la propria sessione grafica.
 
 Per fermare la modalità premi «Disattiva condivisione» in alto nella
 finestra, anche durante un trasferimento o uno script. Il desktop remoto
 e la condivisione usano lo stesso collegamento e si avviano uno alla volta.
-Ubuntu deve usare X11. La condivisione passa nel tunnel SSH esistente e
-blocca lo scambio di appunti. La patch locale di x2vnc è in questa cartella.
+Su X11 si usa x2vnc. Su Wayland si usa Deskflow 1.27 installato in
+~/.local/share/linux-dock/vnc/deskflow-wayland, con il certificato e le
+impronte già autorizzate per i due PC. Al primo avvio autorizza Deskflow
+nella finestra di GNOME. L'input passa via SSH.
+
+Gli appunti di testo su GNOME 50 richiedono Deskflow compilato con
+libportal 0.10 o successivo. Per usare Ubuntu come postazione principale,
+applica deskflow-gnome50-clipboard.patch a Deskflow v1.27.0. Installa
+deskflow-core in deskflow-wayland/clipboard-native e libportal nella
+sottocartella lib. Autorizza anche gli appunti quando GNOME lo chiede.
 Per usare Windows come postazione principale, apri la scheda omonima di
 Linux Dock su Windows. Da lì puoi anche abilitare gli appunti condivisi.
 
@@ -69,4 +77,10 @@ Windows. Se il server viene reinstallato o la sua chiave cambia, confronta
 la nuova impronta con quella mostrata da Windows prima di aggiornare il file.
 
 Se la chiave Linux è bloccata, sbloccala nel terminale di Linux:
+    ssh-add ~/.ssh/id_ed25519_windows_dock
+
+Se Ubuntu 26.04 usa l'agente GNOME e l'accesso resta in attesa, carica la
+chiave nell'agente OpenSSH della sessione e avvia Windows Dock con lo stesso
+socket.
+    export SSH_AUTH_SOCK="$XDG_RUNTIME_DIR/openssh_agent"
     ssh-add ~/.ssh/id_ed25519_windows_dock

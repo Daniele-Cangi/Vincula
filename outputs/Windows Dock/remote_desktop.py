@@ -114,10 +114,15 @@ def show_windows(stop):
 
 
 def share_input(stop, edge, opened):
-    if os.environ.get("XDG_SESSION_TYPE") != "x11" or not os.environ.get("DISPLAY"):
-        raise LinkError("Per condividere mouse e tastiera, accedi a Ubuntu con una sessione X11.")
     if edge not in ("east", "west", "north", "south"):
         raise LinkError("Seleziona il lato in cui si trova lo schermo di Windows.")
+    session = os.environ.get("XDG_SESSION_TYPE")
+    if session == "wayland":
+        from wayland_input import share_input as share_wayland_input
+
+        return share_wayland_input(stop, edge, opened, _managed_process)
+    if session != "x11" or not os.environ.get("DISPLAY"):
+        raise LinkError("Apri una sessione grafica Ubuntu per condividere mouse e tastiera.")
 
     bridge = RUNTIME / "bin/x2vnc"
     password = RUNTIME / "windows.pass"

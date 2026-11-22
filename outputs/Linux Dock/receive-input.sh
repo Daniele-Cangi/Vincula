@@ -19,11 +19,28 @@ if [[ "$mode" == stop ]]; then
 fi
 [[ "$mode" == start ]] || exit 2
 
-if ! systemctl --user is-active --quiet graphical-session.target ||
-   ! systemctl --user show-environment | grep -qx 'XDG_SESSION_TYPE=x11'; then
-    printf '%s\n' 'Apri una sessione grafica X11 su Ubuntu per ricevere mouse e tastiera.' >&2
+if ! systemctl --user is-active --quiet graphical-session.target; then
+    printf '%s\n' 'Apri la sessione grafica Ubuntu prima di condividere mouse e tastiera.' >&2
     exit 1
 fi
+session="$(systemctl --user show-environment | sed -n 's/^XDG_SESSION_TYPE=//p')"
+case "$session" in
+    wayland)
+        if [[ ! -x "$runtime/deskflow-wayland/start-client" ]]; then
+            printf '%s\n' 'Il ricevitore Deskflow Wayland non è installato su Ubuntu.' >&2
+            exit 1
+        fi
+        client=("$runtime/deskflow-wayland/start-client")
+        ;;
+    x11)
+        client=("$runtime/bin/barrierc" --no-daemon --no-restart --no-tray --enable-crypto
+                --profile-dir "$runtime/input-profile" --name dock-ubuntu 127.0.0.1:24801)
+        ;;
+    *)
+        printf '%s\n' 'Sessione grafica Ubuntu non supportata.' >&2
+        exit 1
+        ;;
+esac
 if ! flock --exclusive --nonblock --conflict-exit-code 75 "$runtime/desktop-session.lock" \
     systemd-run --user --collect --wait --pipe --quiet \
       --unit="$unit" --property=PartOf=graphical-session.target --property=TimeoutStopSec=2s \
@@ -32,12 +49,11 @@ if ! flock --exclusive --nonblock --conflict-exit-code 75 "$runtime/desktop-sess
         "$@" </dev/null 3<&- &
         client=$!
         ( IFS= read -r -u 3 || : ) &
-        # Exiting on SSH EOF makes systemd stop the whole service, including Barrier.
+        # Exiting on SSH EOF makes systemd stop the receiver and its children.
         wait -n -p finished "$client" "$!" || exit "$?"
         [[ "$finished" != "$client" ]]
       ' bash \
-      "$runtime/bin/barrierc" --no-daemon --no-restart --no-tray --enable-crypto --profile-dir "$runtime/input-profile" \
-      --name dock-ubuntu 127.0.0.1:24801; then
-    printf '%s\n' 'Condivisione interrotta. Verifica la sessione X11 e chiudi eventuali altre sessioni Dock.' >&2
+      "${client[@]}"; then
+    printf '%s\n' 'Condivisione interrotta. Verifica il server e il consenso di Ubuntu.' >&2
     exit 1
 fi

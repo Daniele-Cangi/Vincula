@@ -74,8 +74,9 @@ esterni, le chiavi e i profili remoti vanno predisposti sui tuoi PC.
    account Linux, chiave di autenticazione e file delle chiavi host verificate.
    Usa `StrictHostKeyChecking yes`, `BatchMode yes` e `IdentitiesOnly yes`.
 4. Per il desktop remoto, configura server VNC autenticati su loopback, porta
-   `5909`, e installa i visualizzatori. Per il controllo da Ubuntu, Windows
-   Dock cerca TigerVNC e x2vnc in `~/.local/share/linux-dock/vnc/bin/`.
+   `5909`, e installa i visualizzatori. Windows Dock cerca TigerVNC in
+   `~/.local/share/linux-dock/vnc/bin/`. Per Ubuntu usa un visualizzatore
+   compatibile con la versione del sistema installata.
    Per il controllo da Windows, Linux Dock cerca TightVNC Viewer sotto
    `%LOCALAPPDATA%\Linux Dock\vnc-package\PFiles\TightVNC\`.
    Prepara il profilo VNC locale di ciascuna app con accesso ristretto.
@@ -88,6 +89,11 @@ esterni, le chiavi e i profili remoti vanno predisposti sui tuoi PC.
    di Deskflow e Barrier con verifica reciproca delle impronte. Il server
    Deskflow ascolta su `127.0.0.1:24800` e l'inoltro SSH inverso espone la
    porta `24801` su loopback Ubuntu.
+6. Per mouse, tastiera e appunti di testo su Wayland usa Deskflow con
+   libportal 0.10 o successivo e autorizza l'accesso agli appunti in GNOME.
+   Le guide delle due app descrivono il ricevitore e la modalità con Ubuntu
+   come postazione principale. Il desktop remoto da Windows verso Ubuntu
+   usa il server VNC X11.
 
 ## Avvio dai sorgenti
 
@@ -117,6 +123,8 @@ Deskflow, Barrier, TigerVNC, TightVNC, x11vnc, OpenSSH e x2vnc si installano
 separatamente. La [patch x2vnc](outputs/Windows%20Dock/x2vnc-no-clipboard.patch)
 si applica a x2vnc 1.7.2. Il [testo GPL incluso](outputs/Windows%20Dock/x2vnc-COPYING.txt)
 proviene dalla distribuzione x2vnc.
+La [patch per gli appunti su GNOME 50](outputs/Windows%20Dock/deskflow-gnome50-clipboard.patch)
+si applica a Deskflow 1.27.0 con la licenza di Deskflow.
 
 ## Licenza
 
