@@ -1,0 +1,59 @@
+{
+  "passed": true,
+  "source_commit": "6ac46058c6245b18cc46af7b066366b15c3b316c",
+  "native_mcp_calls": 39,
+  "origins": [
+    {
+      "origin": "ubuntu",
+      "native_mcp_calls": 13,
+      "available_nodes": 3,
+      "correct_local_node": true,
+      "mode": [
+        "ask"
+      ],
+      "native_opt_in": false,
+      "active_jobs": 0,
+      "jobs_count": 15,
+      "helpers_verified": 6,
+      "grants_and_existing_data_preserved": true
+    },
+    {
+      "origin": "windows",
+      "native_mcp_calls": 13,
+      "available_nodes": 3,
+      "correct_local_node": true,
+      "mode": [
+        "ask"
+      ],
+      "native_opt_in": false,
+      "active_jobs": 0,
+      "jobs_count": 14,
+      "helpers_verified": 6,
+      "grants_and_existing_data_preserved": true
+    },
+    {
+      "origin": "kali",
+      "native_mcp_calls": 13,
+      "available_nodes": 3,
+      "correct_local_node": true,
+      "mode": [
+        "ask"
+      ],
+      "native_opt_in": false,
+      "active_jobs": 0,
+      "jobs_count": 13,
+      "helpers_verified": 6,
+      "grants_and_existing_data_preserved": true
+    }
+  ],
+  "post_all_calls_readonly_audits": true,
+  "historical_receipts_preserved": true,
+  "manifest_sha256": "3a78e0b3d9142aa593103ab5609c810778d81535a0b7c9ea8ece2f598c65b422",
+  "original_events_sha256": {
+    "ubuntu": "4102e1e9ebc28519089c6fe559f181370eabfb3b62e9409333a44b8bea61782d",
+    "windows": "274a5c692fb55c958993d6aa06fa62cd7da4a199e4753d38a92bb1afe0c9362f",
+    "kali": "8ef36c909b7d0418931be5acadc34f7068f9f9ab16b89c206fc18bcaf84338e7"
+  },
+  "scope": "Native read-only MCP calls and subsequent installation/data audits; no desktop readiness or speedup is certified.",
+  "raw_evidence": "Private original JSONL and audit receipts retained on the test hosts; no credentials or raw account logs published."
+}
