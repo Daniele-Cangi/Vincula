@@ -3,6 +3,7 @@
 
 """Diagnose real Windows queries only after a failed, unwarmed MCP smoke test."""
 
+import base64
 import json
 from pathlib import Path
 import subprocess
@@ -32,6 +33,13 @@ def probe():
     from server import WINDOWS_RESOURCES, WINDOWS_STATUS, windows_ssh
 
     query(".NET startup", "[Console]::WriteLine('{\"ci\":true}')", 20)
+    paths = query("Effective module paths", r'''[Console]::WriteLine('{"paths":"' +
+        [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($env:PSModulePath)) + '"}')''', 20)
+    if paths is not None:
+        print("Effective PSModulePath: " + base64.b64decode(paths["paths"]).decode("utf-8"), flush=True)
+    restricted = "$env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules')\n"
+    query("JSON with built-in modules only", restricted + "@{ci=$true} | ConvertTo-Json", 20)
+    query("Full status with built-in modules only", restricted + WINDOWS_STATUS, 60)
     query("JSON cmdlet", "@{ci=$true} | ConvertTo-Json", 20)
     status = query("Base status", windows_ssh.STATUS_COMMAND, 60)
     if status is not None:
@@ -52,7 +60,7 @@ def main():
         )
         environment["PYTHONWARNINGS"] = "error::DeprecationWarning"
         subprocess.run([sys.executable, str(Path(__file__).resolve()), "--probe"],
-                       env=environment, check=True, timeout=240)
+                       env=environment, check=True, timeout=340)
 
 
 if __name__ == "__main__":
