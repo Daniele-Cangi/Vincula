@@ -389,6 +389,16 @@ class Supervisor:
         self.heartbeat_socket.close()
 
 
+def validated_control_action(request):
+    action = request.get("action")
+    allowed = {"prepare": {"plan"}, "status": set(), "commit": {"session_id"},
+               "heartbeat": {"session_id"}, "stop_session": {"session_id"},
+               "stop": set(), "shutdown": set()}
+    if action not in allowed or set(request) != {"token", "action"} | allowed[action]:
+        raise ValueError("Invalid local desktop control action or fields.")
+    return action
+
+
 class Handler(socketserver.StreamRequestHandler):
     def handle(self):
         self.request.settimeout(1)
@@ -400,12 +410,7 @@ class Handler(socketserver.StreamRequestHandler):
             request = json.loads(line)
             if not isinstance(request, dict) or not isinstance(request.get("token"), str) or not hmac.compare_digest(request["token"], self.server.token):
                 raise ValueError("Unauthorized local desktop control request.")
-            action = request.get("action")
-            allowed = {"prepare": {"plan"}, "status": set(), "commit": {"session_id"},
-                       "heartbeat": {"session_id"}, "stop_session": {"session_id"},
-                       "stop": set(), "shutdown": set()}
-            if action not in allowed or set(request) != {"token", "action"} | allowed[action]:
-                raise ValueError("Invalid local desktop control action or fields.")
+            action = validated_control_action(request)
             supervisor = self.server.supervisor
             if action == "prepare":
                 result = supervisor.prepare(request["plan"])
