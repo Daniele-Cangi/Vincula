@@ -10,17 +10,46 @@ from pathlib import Path
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+from time import monotonic
 from uuid import uuid4
 
 
 AGENT = Path(__file__).resolve().parents[2] / "agent"
 
 
+def windows_query(label, command, timeout):
+    from server import windows_ssh
+
+    started = monotonic()
+    print(f"Starting Windows {label} query (limit {timeout}s).", flush=True)
+    try:
+        result = windows_ssh.local_status(timeout=timeout, command=command)
+    except subprocess.TimeoutExpired:
+        print(f"Windows {label} query timed out after {monotonic() - started:.2f}s.", flush=True)
+        raise
+    print(f"Windows {label} query completed in {monotonic() - started:.2f}s.", flush=True)
+    return result
+
+
+def diagnose_windows_components():
+    from server import WINDOWS_RESOURCES, windows_ssh
+
+    print("Diagnosing the failed probe with separate real queries.", flush=True)
+    windows_query("PowerShell startup", "@{ci='started'} | ConvertTo-Json", 20)
+    status = windows_query("base status", windows_ssh.STATUS_COMMAND, 60)
+    command = "$status = " + windows_ssh._ps_string(json.dumps(status)) + " | ConvertFrom-Json\n" + WINDOWS_RESOURCES
+    windows_query("hardware inventory", command, 60)
+
+
 def windows_probe():
     sys.path.insert(0, str(AGENT))
-    from server import WINDOWS_STATUS, windows_ssh
+    from server import WINDOWS_STATUS
 
-    result = windows_ssh.local_status(timeout=12, command=WINDOWS_STATUS)
+    try:
+        result = windows_query("normal MCP", WINDOWS_STATUS, 12)
+    except subprocess.TimeoutExpired:
+        diagnose_windows_components()
+        raise RuntimeError("The normal Windows MCP probe exceeded its 12-second limit.") from None
     print(json.dumps(result, ensure_ascii=True))
 
 
@@ -35,7 +64,7 @@ def prepare_windows_probe(env):
         print("Windows status providers initialized.")
         result = subprocess.run(
             [sys.executable, str(Path(__file__).resolve()), "--windows-probe"],
-            env=get_default_environment() | env, capture_output=True, text=True, timeout=75,
+            env=get_default_environment() | env, capture_output=True, text=True, timeout=180,
         )
         print(result.stdout + result.stderr)
         if result.returncode:
