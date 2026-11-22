@@ -21,9 +21,12 @@ function Stop-ClientTask {
         $entry = Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
     }
     if ($entry.State -eq 'Running') {
-        Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
+        Stop-ScheduledTask -TaskName $task
     }
     if ($entry) { Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue }
+    if (Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue) {
+        throw 'Rimozione del processo pianificato Deskflow non confermata.'
+    }
 }
 
 if ($Stop) {
