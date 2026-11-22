@@ -74,6 +74,8 @@ def select_replica(batch_id, records):
         if record is None:
             continue
         checked = jobs.plan_journal.unpack(record)
+        if checked["manifest"]["kind"] != "batch":
+            raise ValueError("A replica returned another plan kind instead of a batch.")
         if checked["manifest"]["id"] != str(batch_id):
             raise ValueError("A replica returned another batch UUID.")
         if selected is not None and checked["sha256"] != selected["sha256"]:
