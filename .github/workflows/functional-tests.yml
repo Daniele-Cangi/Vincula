@@ -45,8 +45,14 @@ jobs:
           python -m pip check
       - name: Test runtime, permissions, registry and files
         run: python -m unittest discover -s agent -p "test_*.py" -v
+      - name: Test bounded benchmark fixture
+        run: python -m unittest discover -s tools -p "test_*.py" -v
       - name: Test isolated MCP sessions
+        id: mcp_smoke
         run: python .github/scripts/mcp_smoke.py
+      - name: Diagnose failed Windows status queries
+        if: failure() && runner.os == 'Windows' && steps.mcp_smoke.outcome == 'failure'
+        run: python .github/scripts/windows_probe.py
       - name: Compile Python desktop entry points
         if: runner.os == 'Linux'
         run: python -m compileall -q "outputs/Windows Dock"

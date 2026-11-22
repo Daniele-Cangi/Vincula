@@ -295,6 +295,24 @@ class BatchRecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "digest does not match"):
             batches.select_replica(self.key, [valid, malformed])
 
+    def test_capability_replica_with_same_uuid_is_rejected_before_batch_status_reads(self):
+        wrong_kind = jobs.plan_journal.package({
+            "version": 1, "kind": "capability", "id": str(self.key), "origin": self.origin,
+            "request": {"capability_id": "example.text", "parts": [
+                {"node_id": self.windows, "files": [], "parameters": {}}]},
+            "plan": {"capability_id": "example.text", "parts": [
+                {"node_id": self.windows, "job_id": str(uuid4()), "revision": "a" * 32,
+                 "inbox": None, "parameters": {}, "inputs": []}]},
+        })
+        with self.assertRaisesRegex(ValueError, "another plan kind"):
+            batches.select_replica(self.key, [wrong_kind])
+        with patch.object(server, "destination_request", return_value=wrong_kind) as dispatch:
+            with self.assertRaisesRegex(server.ToolError, "another plan kind"):
+                asyncio.run(server.get_batch(self.key))
+        self.assertTrue(dispatch.called)
+        self.assertTrue(all(call.args[1]["action"] == "plan" and call.args[1]["operation"] == "get"
+                            for call in dispatch.call_args_list))
+
 
 if __name__ == "__main__":
     unittest.main()
