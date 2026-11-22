@@ -3,6 +3,7 @@
 
 """The local Windows status probe must also work with a filtered MCP environment."""
 
+import base64
 import os
 from pathlib import Path
 import subprocess
@@ -34,6 +35,17 @@ class WindowsStatusEnvironmentTests(unittest.TestCase):
             "systemroot": "C:/Windows", "userprofile": "private-profile",
             "psmodulepath": str(powershell.parent / "Modules"),
         })
+        script = self.script(call)
+        self.assertLess(script.index("$env:PSModulePath = "), script.index("Get-CimInstance"))
+        prelude = script.split("$env:PSModulePath = ", 1)[1].split("\n", 1)[0]
+        self.assertNotIn("Join-Path", prelude)
+        self.assertIn("[Text.Encoding]::UTF8.GetString", prelude)
+
+    @staticmethod
+    def script(call):
+        arguments = call.args[0]
+        payload = arguments[arguments.index("-EncodedCommand") + 1]
+        return base64.b64decode(payload).decode("utf-16le")
 
     def test_explicit_module_path_is_preserved_case_insensitively(self):
         for name, value in (("PSModulePath", "custom-modules"), ("psmodulepath", "")):
@@ -44,6 +56,7 @@ class WindowsStatusEnvironmentTests(unittest.TestCase):
                 matches = [key for key in actual if key.casefold() == "psmodulepath"]
                 self.assertEqual(len(matches), 1)
                 self.assertEqual(actual[matches[0]], value)
+                self.assertNotIn("$env:PSModulePath = ", self.script(call))
 
 
 if __name__ == "__main__":
