@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -30,6 +31,17 @@ class NodeEditingTests(unittest.TestCase):
         return {'primary': self.local, 'clipboard': True,
                 'members': [{'node_id': self.local, 'x': 0, 'y': 0},
                             {'node_id': self.peer, 'x': 1, 'y': 0}]}
+
+    def cli_environment(self):
+        private = str(self.path.parent.parent / 'profile')
+        environment = os.environ | dict.fromkeys(('HOME', 'USERPROFILE', 'LOCALAPPDATA', 'XDG_CONFIG_HOME'), private)
+        environment['VINCULA_NODE_REGISTRY'] = str(self.path)
+        return environment
+
+    def cli(self, request, *arguments):
+        return subprocess.run([sys.executable, '-S', str(Path(nodes.__file__).resolve()), *arguments],
+                              input=json.dumps(request), capture_output=True, text=True,
+                              env=self.cli_environment(), timeout=20)
 
     def test_crud_keeps_stable_identity_and_guards_desktop_references(self):
         initial = nodes.execute({'action': 'list'}, self.path)
@@ -102,11 +114,11 @@ class NodeEditingTests(unittest.TestCase):
     def test_concurrent_cli_additions_keep_all_nodes_without_mcp_dependencies(self):
         requests = [dict(action='add', node={'id': str(uuid4()), 'label': f'Peer {i}',
                                             'family': 'linux', 'aliases': [f'peer{i}']}) for i in range(5)]
-        command = [sys.executable, '-S', str(Path(nodes.__file__).resolve()), '--registry', str(self.path)]
+        command = [sys.executable, '-S', str(Path(nodes.__file__).resolve())]
         running = []
         for request in requests:
             process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                       stderr=subprocess.PIPE, text=True)
+                                       stderr=subprocess.PIPE, text=True, env=self.cli_environment())
             process.stdin.write(json.dumps(request))
             process.stdin.close()
             running.append(process)
@@ -117,6 +129,41 @@ class NodeEditingTests(unittest.TestCase):
             process.stderr.close()
         saved = nodes.snapshot(self.path)['registry']['nodes']
         self.assertEqual({node['id'] for node in saved}, {self.local, *(r['node']['id'] for r in requests)})
+
+    def test_cli_uses_only_the_operator_configured_registry(self):
+        result = self.cli({'action': 'list'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        saved = json.loads(result.stdout)
+        self.assertEqual(saved, nodes.snapshot(self.path))
+        self.assertEqual(saved['registry']['local'], self.local)
+
+    def test_cli_rejects_registry_flag_without_reading_or_mutating_other_files(self):
+        victim = self.path.parent.parent / 'unrelated.json'
+        original = self.path.read_bytes()
+        victim.write_bytes(original)
+        traversal = self.path.parent / '..' / victim.name
+        for request in ({'action': 'list'},
+                        {'action': 'update', 'node_id': self.local, 'changes': {'label': 'Unexpected'}}):
+            with self.subTest(action=request['action']):
+                result = self.cli(request, '--registry', str(traversal))
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, '')
+                self.assertIn('unrecognized arguments: --registry', result.stderr)
+                self.assertEqual(victim.read_bytes(), original)
+                self.assertEqual(self.path.read_bytes(), original)
+                self.assertFalse(Path(str(victim) + '.lock').exists())
+
+    def test_cli_rejects_registry_path_in_json_payload(self):
+        victim = self.path.parent.parent / 'unrelated.json'
+        original = self.path.read_bytes()
+        victim.write_bytes(original)
+        result = self.cli({'action': 'update', 'node_id': self.local, 'changes': {'label': 'Unexpected'},
+                           'registry': str(victim)})
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(json.loads(result.stdout)['error']['code'], 'invalid_request')
+        self.assertEqual(victim.read_bytes(), original)
+        self.assertEqual(self.path.read_bytes(), original)
+        self.assertFalse(Path(str(victim) + '.lock').exists())
 
     def test_route_switch_and_legacy_validation_preserve_compatibility(self):
         if sys.platform == 'win32':
