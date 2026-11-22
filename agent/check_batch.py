@@ -31,8 +31,12 @@ async def check():
     requests = [{"program": name} for _, name, _, _ in PARTS]
     ref = {"batch_id": str(uuid4())}
     async with session() as first:
+        inventory = await call(first, "list_nodes", {})
+        selectors = {alias: node["node_id"] for node in inventory["nodes"]
+                     for alias in (node["node_id"], *node["aliases"])}
+        expected_nodes = [selectors[alias] for alias, _, _, _ in PARTS]
         submitted = await call(first, "submit_batch", {**ref, "tasks": requests})
-        assert [part["node_id"] for part in submitted["tasks"]] == [part[0] for part in PARTS], submitted
+        assert [part["node_id"] for part in submitted["tasks"]] == expected_nodes, submitted
         assert all(part["job"] and not part["error"] for part in submitted["tasks"]), submitted
         ids = [part["job_id"] for part in submitted["tasks"]]
 
