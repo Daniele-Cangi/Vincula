@@ -10,9 +10,59 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 from time import monotonic
+from unittest.mock import patch
 
 
 AGENT = Path(__file__).resolve().parents[2] / "agent"
+MEASURE_STAGE = r"""
+function Measure-CI([string]$name, [scriptblock]$body) {
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    try { & $body }
+    finally {
+        [Console]::Error.WriteLine('VINCULA_CI ' + $name + ' ' +
+            $watch.Elapsed.TotalSeconds.ToString('F3', [Globalization.CultureInfo]::InvariantCulture) + 's')
+    }
+}
+"""
+
+
+def cold_command(base, resources):
+    for label, expression in (
+        ("OS", "Get-CimInstance Win32_OperatingSystem"),
+        ("CPU", 'Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name=\'_Total\'"'),
+        ("disks", "Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3'"),
+    ):
+        base = base.replace(expression, f"(Measure-CI '{label}' {{ {expression} }})", 1)
+    expression = "Get-CimInstance Win32_VideoController"
+    resources = resources.replace(expression, f"(Measure-CI 'GPU' {{ {expression} }})", 1)
+    expression = "Get-Command nvidia-smi.exe -CommandType Application -ErrorAction SilentlyContinue"
+    resources = resources.replace(expression, f"(Measure-CI 'NVIDIA' {{ {expression} }})", 1)
+    return MEASURE_STAGE + "$status = & {\n" + base + "\n} | ConvertFrom-Json\n" + resources
+
+
+def cold_probe():
+    sys.path.insert(0, str(AGENT))
+    from server import WINDOWS_RESOURCES, windows_ssh
+
+    process_run = subprocess.run
+
+    def show_stderr(*args, **kwargs):
+        try:
+            result = process_run(*args, **kwargs)
+        except subprocess.TimeoutExpired as error:
+            print((error.stderr or b"").decode("utf-8", "replace"), end="", flush=True)
+            raise
+        print(result.stderr.decode("utf-8", "replace"), end="", flush=True)
+        return result
+
+    started = monotonic()
+    try:
+        # This is the first and only status call in this fresh runner process.
+        with patch.object(windows_ssh.subprocess, "run", show_stderr):
+            windows_ssh.local_status(timeout=60, command=cold_command(windows_ssh.STATUS_COMMAND, WINDOWS_RESOURCES))
+    except (subprocess.SubprocessError, windows_ssh.LinkError, OSError, ValueError) as error:
+        raise SystemExit(f"Cold Windows status: {type(error).__name__} after {monotonic() - started:.2f}s.") from None
+    print(f"Cold Windows status: completed in {monotonic() - started:.2f}s.", flush=True)
 
 
 def query(label, command, timeout):
@@ -49,6 +99,9 @@ def probe():
 
 
 def main():
+    if sys.argv[1:] == ["--cold-probe"]:
+        cold_probe()
+        return
     if sys.argv[1:] == ["--probe"]:
         probe()
         return
@@ -59,7 +112,8 @@ def main():
             ("HOME", "USERPROFILE", "LOCALAPPDATA", "XDG_CONFIG_HOME"), directory,
         )
         environment["PYTHONWARNINGS"] = "error::DeprecationWarning"
-        subprocess.run([sys.executable, str(Path(__file__).resolve()), "--probe"],
+        mode = "--cold-probe" if sys.argv[1:] == ["--cold"] else "--probe"
+        subprocess.run([sys.executable, str(Path(__file__).resolve()), mode],
                        env=environment, check=True, timeout=340)
 
 
