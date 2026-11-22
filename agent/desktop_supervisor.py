@@ -389,6 +389,16 @@ class Supervisor:
         self.heartbeat_socket.close()
 
 
+def validated_control_action(request):
+    action = request.get("action")
+    allowed = {"prepare": {"plan"}, "status": set(), "commit": {"session_id"},
+               "heartbeat": {"session_id"}, "stop_session": {"session_id"},
+               "stop": set(), "shutdown": set()}
+    if action not in allowed or set(request) != {"token", "action"} | allowed[action]:
+        raise ValueError("Invalid local desktop control action or fields.")
+    return action
+
+
 class Handler(socketserver.StreamRequestHandler):
     def handle(self):
         self.request.settimeout(1)
@@ -400,11 +410,7 @@ class Handler(socketserver.StreamRequestHandler):
             request = json.loads(line)
             if not isinstance(request, dict) or not isinstance(request.get("token"), str) or not hmac.compare_digest(request["token"], self.server.token):
                 raise ValueError("Unauthorized local desktop control request.")
-            action = request.get("action")
-            allowed = {"prepare": {"plan"}, "status": set(), "commit": {"session_id"},
-                       "heartbeat": {"session_id"}, "stop": set(), "shutdown": set()}
-            if action not in allowed or set(request) != {"token", "action"} | allowed[action]:
-                raise ValueError("Invalid local desktop control action or fields.")
+            action = validated_control_action(request)
             supervisor = self.server.supervisor
             if action == "prepare":
                 result = supervisor.prepare(request["plan"])
@@ -412,6 +418,8 @@ class Handler(socketserver.StreamRequestHandler):
                 result = supervisor.commit(request["session_id"])
             elif action == "heartbeat":
                 result = supervisor.heartbeat(request["session_id"])
+            elif action == "stop_session":
+                result = supervisor.stop(canonical_uuid(request["session_id"]))
             elif action in {"stop", "shutdown"}:
                 shutdown = action == "shutdown"
                 result = supervisor.stop()
@@ -457,6 +465,9 @@ def request(directory, payload, timeout=2):
     if not isinstance(payload, dict) or "token" in payload:
         raise ValueError("Supply a control object without a token; the local endpoint authenticates it.")
     emergency = payload.get("action") in {"stop", "shutdown"} and set(payload) == {"action"}
+    if payload.get("action") == "stop_session" and set(payload) == {"action", "session_id"}:
+        canonical_uuid(payload["session_id"])
+        emergency = True
     # Permission drift must not remove the owner's emergency stop capability.
     # The server still authenticates the token and never permits unsafe prepare/commit.
     directory = Path(directory).resolve() if emergency else desktop_security.private_directory(directory)
