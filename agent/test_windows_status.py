@@ -88,7 +88,11 @@ class NvidiaLookupTests(unittest.TestCase):
     [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$nvidia)) + '"}')
 '''
                     result = windows_ssh.local_status(timeout=12, command=command)
-                    self.assertEqual(base64.b64decode(result["found"]).decode("utf-8"), expected)
+                    found = base64.b64decode(result["found"]).decode("utf-8")
+                    if expected:
+                        self.assertTrue(Path(found).samefile(expected))
+                    else:
+                        self.assertEqual(found, "")
 
 
 if __name__ == "__main__":
