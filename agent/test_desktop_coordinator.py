@@ -4,9 +4,13 @@
 import asyncio
 from contextlib import ExitStack
 from copy import deepcopy
+import json
 from pathlib import Path
+import secrets
+import socket
 import sys
 from tempfile import TemporaryDirectory
+from threading import Event, Thread
 import unittest
 from uuid import uuid4
 
@@ -380,75 +384,196 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.network.calls, [])
 
 
-class RealSupervisorTests(unittest.IsolatedAsyncioTestCase):
-    async def exercise(self, expire=False):
-        ids, registry, revisions, commands = topology()
-        with TemporaryDirectory(prefix="vincula-coordinator-") as temporary, ExitStack() as cleanup:
-            supervisors = {}
-            for node in ids:
-                supervisor = desktop_supervisor.Supervisor(Path(temporary) / node, lease_seconds=1.5, guardian_lease=0.7)
-                supervisors[node] = supervisor
-                cleanup.callback(supervisor.close)
-            calls = []
+class FaultableHandler(desktop_supervisor.Handler):
+    """Run the real handler; optionally lose only an accepted commit's reply."""
 
-            async def local(node, request):
-                calls.append((node, deepcopy(request)))
-                supervisor = supervisors[node]
-                action = request["action"]
+    def handle(self):
+        reader, writer = self.rfile, self.wfile
+        handler = self
+        action, dropping = None, False
+
+        class Reader:
+            def __getattr__(self, name):
+                return getattr(reader, name)
+
+            def readline(self, *args):
+                nonlocal action
+                line = reader.readline(*args)
                 try:
-                    if action == "prepare":
-                        result = supervisor.prepare(request["plan"])
-                    elif action == "status":
-                        result = supervisor.status()
-                    elif action == "stop_session":
-                        result = supervisor.stop(request["session_id"])
-                    else:
-                        result = getattr(supervisor, action)(request["session_id"])
-                    return {"ok": True, "session": result}
-                except ValueError as error:
-                    return {"ok": False, "error": str(error)}
+                    request = json.loads(line)
+                    action = request.get("action") if isinstance(request, dict) else None
+                except ValueError:
+                    pass
+                return line
 
-            controller = coordinator.DesktopCoordinator(registry, revisions, commands, local, timeout=1)
-            report = await controller.start()
-            self.assertFalse(report["ready"], "Real Supervisor.desktop_ready is always False in this increment.")
-            for _ in range(250):
-                report = await controller.status()
-                self.assertFalse(report["ready"])
-                if all(value["state"] == "running" for value in (record["status"] for record in report["nodes"].values())):
-                    break
-                await controller.heartbeat()
-                await asyncio.sleep(0.02)
-            self.assertTrue(all(supervisor.status()["state"] == "running" for supervisor in supervisors.values()))
-            self.assertEqual([request["action"] for _, request in calls[:3]], ["prepare"] * 3)
-            if expire:
-                await asyncio.sleep(1.6)
-                for _ in range(100):
-                    if all(supervisor.status()["state"] == "expired" for supervisor in supervisors.values()):
-                        break
-                    await asyncio.sleep(0.02)
-                self.assertTrue(all(supervisor.status()["state"] == "expired" for supervisor in supervisors.values()))
-                self.assertEqual((await controller.status())["state"], "failed")
-            else:
-                await controller.stop()
-                for _ in range(40):
-                    if (await controller.status())["cleanup_complete"]:
-                        break
-                    await asyncio.sleep(0.02)
-                self.assertEqual(controller.report()["state"], "stopped")
-                node = ids[0]
-                replacement = deepcopy(controller.prepared_plan()["nodes"][node])
-                replacement["session_id"] = str(uuid4())
-                supervisors[node].prepare(replacement)
-                await controller.stop()
-                self.assertEqual(supervisors[node].status()["state"], "prepared")
-                self.assertFalse(supervisors[node].stop_event.is_set())
-            self.assertFalse(any(request["action"] in {"stop", "shutdown"} for _, request in calls))
+        class Writer:
+            def __getattr__(self, name):
+                return getattr(writer, name)
+
+            def write(self, data):
+                nonlocal dropping
+                if action == "commit" and handler.server.drop_commit_ack and json.loads(data).get("ok") is True:
+                    handler.server.drop_commit_ack = False
+                    handler.server.commit_ack_lost.set()
+                    dropping = True
+                if dropping:
+                    raise BrokenPipeError("Synthetic lost commit acknowledgment")
+                return writer.write(data)
+
+        self.rfile, self.wfile = Reader(), Writer()
+        super().handle()
+
+
+class LocalIpcCluster:
+    """Three authenticated loopback endpoints, with all files below one TEMP root."""
+
+    def __init__(self, ids):
+        self.stack = ExitStack()
+        self.root = Path(self.stack.enter_context(TemporaryDirectory(prefix="vincula-coordinator-ipc-")))
+        self.supervisors, self.servers, self.threads, self.directories, self.calls = {}, {}, {}, {}, []
+        try:
+            for node in ids:
+                directory = self.root / node
+                self.stack.enter_context(desktop_supervisor.owner_lock(directory))
+                supervisor = desktop_supervisor.Supervisor(directory, lease_seconds=2.5, guardian_lease=0.7)
+                self.supervisors[node] = supervisor
+                self.stack.callback(supervisor.close)
+                server = desktop_supervisor.Server(("127.0.0.1", 0), FaultableHandler)
+                self.servers[node] = server
+                server.token, server.supervisor = secrets.token_hex(32), supervisor
+                server.drop_commit_ack, server.commit_ack_lost = False, Event()
+                desktop_supervisor.atomic_json(directory / "endpoint.json", {
+                    "port": server.server_address[1], "token": server.token, "instance": supervisor.instance})
+                self.directories[node] = directory
+                self.stack.callback(server.server_close)
+                thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+                self.threads[node] = thread
+                thread.start()
+                self.stack.callback(thread.join, timeout=2)
+                self.stack.callback(server.shutdown)
+        except BaseException:
+            self.stack.close()
+            raise
+
+    async def rpc(self, node, request):
+        # The standard local client reads the private token on its destination.
+        # No token, pin or endpoint secret is passed to the coordinator.
+        return await asyncio.to_thread(desktop_supervisor.request, self.directories[node], request)
+
+    async def transport(self, node, request):
+        self.calls.append((node, deepcopy(request)))
+        return await self.rpc(node, request)
+
+    async def disconnect(self, node):
+        await asyncio.to_thread(self.servers[node].shutdown)
+        self.servers[node].server_close()
+        self.threads[node].join(timeout=2)
+
+    async def close(self):
+        await asyncio.to_thread(self.stack.close)
+        if any(thread.is_alive() for thread in self.threads.values()):
+            raise AssertionError("A temporary IPC server thread survived cleanup.")
+        if self.root.exists():
+            raise AssertionError("The temporary IPC namespace survived cleanup.")
+
+
+class RealSupervisorTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.ids, self.registry, self.revisions, self.commands = topology()
+        self.cluster = LocalIpcCluster(self.ids)
+        self.addAsyncCleanup(self.cluster.close)
+        self.controller = coordinator.DesktopCoordinator(self.registry, self.revisions, self.commands,
+                                                         self.cluster.transport, timeout=1)
+
+    async def until(self, predicate, attempts=200):
+        for _ in range(attempts):
+            if predicate():
+                return
+            await asyncio.sleep(0.02)
+        self.fail("The isolated IPC session did not reach its expected terminal state.")
+
+    async def start_running(self):
+        report = await self.controller.start()
+        self.assertFalse(report["ready"], "Actual supervisors always report desktop_ready=False here.")
+        for _ in range(200):
+            report = await self.controller.status()
+            self.assertFalse(report["ready"])
+            if all(record["status"]["state"] == "running" for record in report["nodes"].values()):
+                break
+            await self.controller.heartbeat()
+            await asyncio.sleep(0.02)
+        self.assertTrue(all(supervisor.status()["state"] == "running" for supervisor in self.cluster.supervisors.values()))
+        self.assertEqual([request["action"] for _, request in self.cluster.calls[:3]], ["prepare"] * 3)
+        self.assertTrue(all("token" not in request for _, request in self.cluster.calls))
+
+    async def finish_stop(self):
+        await self.controller.stop()
+        for _ in range(100):
+            report = await self.controller.status()
+            if report["cleanup_complete"]:
+                return report
+            await asyncio.sleep(0.02)
+        self.fail("IPC cleanup remained unconfirmed.")
 
     async def test_three_real_supervisors_never_infer_ready_and_stop_is_scoped(self):
-        await self.exercise()
+        await self.start_running()
+        self.assertEqual((await self.finish_stop())["state"], "stopped")
+        node = self.ids[0]
+        replacement = self.controller.prepared_plan()["nodes"][node]
+        replacement["session_id"] = str(uuid4())
+        self.assertTrue((await self.cluster.rpc(node, {"action": "prepare", "plan": replacement}))["ok"])
+        old = await self.cluster.rpc(node, {"action": "stop_session", "session_id": self.controller.session_id})
+        self.assertFalse(old["ok"])
+        await self.controller.stop()
+        current = await self.cluster.rpc(node, {"action": "status"})
+        self.assertEqual(current["session"]["state"], "prepared")
+        self.assertEqual(current["session"]["session_id"], replacement["session_id"])
+        self.assertFalse(self.cluster.supervisors[node].stop_event.is_set())
+        self.assertFalse(any(request["action"] in {"stop", "shutdown"} for _, request in self.cluster.calls))
 
     async def test_origin_loss_expires_three_real_supervisors_without_resume(self):
-        await self.exercise(expire=True)
+        await self.start_running()
+        # No caller heartbeat task remains. Only autonomous destination monitors run.
+        await self.until(lambda: all(supervisor.status()["state"] == "expired"
+                                    for supervisor in self.cluster.supervisors.values()))
+        self.assertEqual((await self.controller.status())["state"], "failed")
+
+    async def test_three_real_handlers_reject_unauthenticated_control(self):
+        def wrong_token(node):
+            port = json.loads((self.cluster.directories[node] / "endpoint.json").read_text())["port"]
+            with socket.create_connection(("127.0.0.1", port), timeout=1) as connection:
+                connection.sendall(b'{"action":"status","token":"incorrect-test-token"}\n')
+                with connection.makefile("rb") as reader:
+                    return json.loads(reader.readline())
+
+        for node in self.ids:
+            self.assertTrue((await self.cluster.rpc(node, {"action": "status"}))["ok"])
+            self.assertFalse((await asyncio.to_thread(wrong_token, node))["ok"])
+
+    async def test_real_commit_ack_loss_rolls_back_all_three_network_endpoints(self):
+        node = self.ids[1]
+        self.cluster.servers[node].drop_commit_ack = True
+        report = await self.controller.start()
+        self.assertTrue(self.cluster.servers[node].commit_ack_lost.is_set())
+        self.assertEqual(report["state"], "failed")
+        self.assertEqual(report["nodes"][node]["error"]["phase"], "commit")
+        self.assertEqual({peer for peer, request in self.cluster.calls if request["action"] == "stop_session"}, set(self.ids))
+        await self.until(lambda: all(supervisor.status()["state"] == "stopped" for supervisor in self.cluster.supervisors.values()))
+        report = await self.controller.status()
+        self.assertTrue(report["cleanup_complete"])
+        self.assertFalse(report["ready"])
+
+    async def test_network_loss_stops_reachable_peers_and_offline_peer_expires(self):
+        await self.start_running()
+        offline = self.ids[1]
+        await self.cluster.disconnect(offline)
+        report = await self.controller.heartbeat()
+        self.assertEqual(report["state"], "failed")
+        self.assertIsNotNone(report["nodes"][offline]["stop_error"])
+        self.assertFalse(report["cleanup_complete"])
+        await self.until(lambda: all(self.cluster.supervisors[node].status()["state"] in coordinator.TERMINAL for node in self.ids))
+        self.assertEqual(self.cluster.supervisors[offline].status()["state"], "expired")
+        self.assertEqual({peer for peer, request in self.cluster.calls if request["action"] == "stop_session"}, set(self.ids))
 
 
 if __name__ == "__main__":
