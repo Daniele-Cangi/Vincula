@@ -91,7 +91,12 @@ $status | Add-Member -NotePropertyMembers @{
 }
 $status | ConvertTo-Json -Compress -Depth 5
 """
-WINDOWS_STATUS = "$status = & {\n" + windows_ssh.STATUS_COMMAND + "\n} | ConvertFrom-Json\n" + WINDOWS_RESOURCES
+WINDOWS_STATUS_SOURCE = "$status = & {\n" + windows_ssh.STATUS_COMMAND + "\n} | ConvertFrom-Json\n" + WINDOWS_RESOURCES
+# These fixed scripts have no here-strings. Preserve newlines while keeping the
+# encoded SSH command below cmd.exe's 8191-character limit on default Windows SSH.
+WINDOWS_STATUS = "\n".join(
+    line.lstrip() for line in WINDOWS_STATUS_SOURCE.splitlines()
+)
 
 
 class GPU(BaseModel):
