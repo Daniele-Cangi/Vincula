@@ -43,7 +43,7 @@ class ProtocolTests(unittest.TestCase):
             bridge.encode({"data": "x" * bridge.MAX_MESSAGE}, bridge.MAX_MESSAGE)
 
     def test_duplicate_fields_nonfinite_and_invalid_utf8_are_rejected(self):
-        for raw in (b'{"action":"status","action":"shutdown"}', b'{"x":NaN}', b'"\xff"'):
+        for raw in (b'{"action":"status","action":"shutdown"}', b'{"x":NaN}', b'"\xff"', b'\xef\xbb\xbf{}'):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 bridge.decode(raw)
 
@@ -77,6 +77,23 @@ class ProtocolTests(unittest.TestCase):
                 self.assertIn("-IB", command)
                 self.assertIn({"control": "stdio", "stop": "stop-stdio", "status": "status-stdio"}[mode], command)
         self.assertTrue(bridge.fixed_remote_command("windows").startswith('py.exe -3 -IB -c "'))
+
+    @unittest.skipUnless(sys.platform == "win32", "Native Windows delete-sharing contract")
+    def test_windows_reader_allows_atomic_catalog_publication_while_held(self):
+        with TemporaryDirectory(prefix="vincula-reader-publication-") as directory:
+            path = Path(directory) / "nodes.json"
+            node = str(uuid4())
+            document = {"local": node, "nodes": [{"id": node, "label": "Before", "family": "windows"}]}
+            original = json.dumps(document).encode()
+            path.write_bytes(original)
+            revision = nodes.snapshot(path)["revision"]
+            request = {"action": "update", "node_id": node, "changes": {"label": "After"},
+                       "expected_revision": revision}
+            with bridge.metadata_reader(path) as reader:
+                updated = nodes.execute(request, path)
+                self.assertEqual(reader.read(len(original) + 1), original)
+                self.assertEqual(updated["registry"]["nodes"][0]["label"], "After")
+            self.assertEqual(json.loads(path.read_bytes())["nodes"][0]["label"], "After")
 
 
 class LocalProcesses(bridge.DesktopSSHTransport):
@@ -198,20 +215,23 @@ class SSHBridgeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_wrong_bundle_pin_is_rejected_before_prepare_has_effects(self):
         transport = self.transport(helper_pins=dict.fromkeys(self.ids, "f" * 64))
+        payload = {"action": "prepare", "plan": self.plan(self.ids[0])}
         with self.assertRaises(bridge.BridgeError):
-            await transport(self.ids[0], {"action": "prepare", "plan": self.plan(self.ids[0])})
+            await transport(self.ids[0], payload)
         self.assertEqual((await self.state(self.ids[0]))["state"], "idle")
         self.assertFalse((self.fixtures[self.ids[0]]["control"] / self.session_id).exists())
 
     async def test_wrong_catalog_revision_identity_and_group_are_rejected_before_effects(self):
         node = self.ids[0]
         transport = self.transport(revisions=self.revisions | {node: "f" * 64})
+        payload = {"action": "prepare", "plan": self.plan(node, revision="f" * 64)}
         with self.assertRaises(bridge.BridgeError):
-            await transport(node, {"action": "prepare", "plan": self.plan(node, revision="f" * 64)})
+            await transport(node, payload)
         self.assertEqual((await self.state(node))["state"], "idle")
         transport = self.transport()
+        payload = {"action": "prepare", "plan": self.plan(node, primary=self.ids[1])}
         with self.assertRaises(bridge.BridgeError):
-            await transport(node, {"action": "prepare", "plan": self.plan(node, primary=self.ids[1])})
+            await transport(node, payload)
         self.assertEqual((await self.state(node))["state"], "idle")
 
     async def test_global_status_never_leaks_another_session_or_its_logs(self):
@@ -233,8 +253,9 @@ class SSHBridgeTests(unittest.IsolatedAsyncioTestCase):
         endpoint["token"] = "deliberately-wrong-private-test-token"
         desktop_supervisor.atomic_json(endpoint_path, endpoint)
         transport = self.transport()
+        payload = {"action": "prepare", "plan": self.plan(node)}
         with self.assertRaises(bridge.BridgeError) as caught:
-            await transport(node, {"action": "prepare", "plan": self.plan(node)})
+            await transport(node, payload)
         self.assertNotIn(endpoint["token"], str(caught.exception))
         desktop_supervisor.atomic_json(endpoint_path, original)
 
@@ -333,11 +354,46 @@ class SSHBridgeTests(unittest.IsolatedAsyncioTestCase):
             pending.cancel()
             await asyncio.gather(pending, return_exceptions=True)
 
+    async def test_external_cancellation_propagates_when_close_cancels_a_pending_open(self):
+        node = self.ids[0]
+        transport = self.transport()
+        entered, closing, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        async def pending_open(_node, _mode):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                closing.set()
+                await release.wait()
+
+        transport._open_channel = pending_open
+        payload = {"action": "prepare", "plan": self.plan(node)}
+        pending = asyncio.create_task(transport(node, payload))
+        closer = None
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            closer = asyncio.create_task(transport.close())
+            await asyncio.wait_for(closing.wait(), 2)
+            pending.cancel()  # Caller cancellation after the independent close.
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await pending
+            await asyncio.wait_for(closer, 2)
+            self.assertFalse(transport.opening)
+        finally:
+            release.set()
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+            if closer is not None:
+                await closer
+
     async def test_changed_supervisor_instance_is_never_automatically_adopted(self):
         node = self.ids[0]
         transport = self.transport(instances={node: str(uuid4())})
+        payload = {"action": "prepare", "plan": self.plan(node)}
         with self.assertRaises(bridge.BridgeError):
-            await transport(node, {"action": "prepare", "plan": self.plan(node)})
+            await transport(node, payload)
         self.assertEqual((await self.state(node))["state"], "idle")
 
     async def test_endpoint_instance_change_after_bind_blocks_commit_before_effects(self):
@@ -382,6 +438,27 @@ class SSHBridgeTests(unittest.IsolatedAsyncioTestCase):
             await transport(node, {"action": "heartbeat", "session_id": self.session_id})
         reply = await transport(node, {"action": "stop_session", "session_id": self.session_id})
         self.assertEqual(reply["session"]["state"], "stopped")
+
+    async def test_published_bom_catalog_preserves_fresh_stop_and_terminal_status(self):
+        node = self.ids[0]
+        transport = self.transport()
+        await transport(node, {"action": "prepare", "plan": self.plan(node)})
+        await transport(node, {"action": "commit", "session_id": self.session_id})
+        await self.wait_state(node, {"running"})
+        document = deepcopy(self.fixtures[node]["document"])
+        document["nodes"][0]["label"] = "Valid BOM catalog published while active"
+        stage = self.fixtures[node]["registry"].with_name("bom-candidate.json")
+        stage.write_bytes(b"\xef\xbb\xbf" + json.dumps(document).encode("utf-8"))
+        stage.replace(self.fixtures[node]["registry"])
+        self.assertNotEqual(nodes.snapshot(self.fixtures[node]["registry"])["revision"], self.revisions[node])
+        reply = await transport(node, {"action": "stop_session", "session_id": self.session_id})
+        self.assertIn(reply["session"]["state"], {"stopping", "stopped"})
+        await self.wait_state(node, {"stopped"})
+        reply = await transport(node, {"action": "status"})
+        self.assertEqual(reply["session"]["state"], "stopped")
+        self.assertEqual(reply["session"]["session_id"], self.session_id)
+        self.assertEqual(reply["session"]["revision"], self.revisions[node])
+        self.assertEqual(reply["session"]["instance"], transport.bindings[node]["instance"])
 
     async def test_emergency_channel_bypasses_a_blocked_control_rpc_and_no_mutation_retries(self):
         node = self.ids[0]

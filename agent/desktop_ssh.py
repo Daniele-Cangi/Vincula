@@ -9,6 +9,7 @@ The caller must supply trusted release pins and an explicitly authorized group.
 
 import argparse
 import asyncio
+from contextlib import contextmanager
 from copy import deepcopy
 from hashlib import sha256
 import json
@@ -68,8 +69,62 @@ def implementation_digest(directory=None):
     return sha256(json.dumps(files, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+class WindowsMetadataReader:
+    """A disk-file handle that does not prevent atomic registry replacement."""
+
+    def __init__(self, kernel, handle):
+        self.kernel, self.handle = kernel, handle
+
+    def read(self, size):
+        import ctypes
+        from ctypes import wintypes
+
+        result = bytearray()
+        while len(result) < size:
+            buffer = ctypes.create_string_buffer(min(65536, size - len(result)))
+            count = wintypes.DWORD()
+            if not self.kernel.ReadFile(self.handle, buffer, len(buffer), ctypes.byref(count), None):
+                raise ctypes.WinError(ctypes.get_last_error())
+            if not count.value:
+                break
+            result.extend(buffer.raw[:count.value])
+        return bytes(result)
+
+
+@contextmanager
+def metadata_reader(path):
+    if sys.platform != "win32":
+        with Path(path).open("rb") as stream:
+            yield stream
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                  wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.GetFileType.argtypes = [wintypes.HANDLE]
+    kernel.GetFileType.restype = wintypes.DWORD
+    kernel.ReadFile.argtypes = [wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
+                               ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID]
+    kernel.ReadFile.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    # FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE is required even for
+    # the emergency read outside the registry writer's mutex.
+    handle = kernel.CreateFileW(str(path), 0x80000000, 7, None, 3, 0x80, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        if kernel.GetFileType(handle) != 1:  # FILE_TYPE_DISK; never read a named pipe.
+            raise ValueError("Desktop metadata must be a disk file.")
+        yield WindowsMetadataReader(kernel, handle)
+    finally:
+        kernel.CloseHandle(handle)
+
+
 def bounded_file(path, maximum):
-    with Path(path).open("rb") as stream:
+    with metadata_reader(path) as stream:
         raw = stream.read(maximum + 1)
     if len(raw) > maximum:
         raise ValueError("Desktop local metadata exceeds its limit.")
@@ -121,10 +176,17 @@ def default_registry_path():
     # the file. Emergency stop must not queue behind a GUI registry writer.
     override = os.environ.get("VINCULA_NODE_REGISTRY")
     if override:
-        return Path(override).resolve()
+        return registry_argument_path(override)
     if sys.platform == "win32":
         return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData/Local") / "Vincula/nodes.json"
     return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "vincula/nodes.json"
+
+
+def registry_argument_path(path):
+    # Path.resolve can briefly open Windows registry targets without delete
+    # sharing. The common writer mutex is intentionally not used by emergency
+    # stop, so locating its metadata must be lexical on Windows too.
+    return Path(os.path.abspath(path)) if sys.platform == "win32" else Path(path).resolve()
 
 
 def fixed_remote_command(family, mode="control"):
@@ -205,7 +267,10 @@ class Helper:
         if not require_revision:
             # Node publication is atomic. Emergency identity reads must not wait
             # for a control operation or the cross-session registry edit mutex.
-            registry = decode(bounded_file(self.registry_path, 1024 * 1024))
+            # nodes.snapshot accepts UTF-8 BOM catalogs (e.g. PowerShell-authored
+            # JSON). Preserve that on emergency reads, without relaxing the wire.
+            raw = bounded_file(self.registry_path, 1024 * 1024)
+            registry = decode(raw.removeprefix(b"\xef\xbb\xbf"))
             if not isinstance(registry, dict) or canonical_uuid(registry.get("local")) != binding["node_id"]:
                 raise ValueError("The desktop route does not identify this computer.")
             return registry
@@ -214,7 +279,7 @@ class Helper:
         registry = snapshot["registry"]
         if registry is None or registry["local"] != binding["node_id"]:
             raise ValueError("The desktop route does not identify this computer.")
-        if require_revision and snapshot["revision"] != binding["revision"]:
+        if snapshot["revision"] != binding["revision"]:
             raise ValueError("The destination registry changed.")
         return registry
 
@@ -223,29 +288,32 @@ class Helper:
         if binding["helper_sha256"] != implementation_digest():
             raise ValueError("The destination desktop helper is not the pinned release.")
         registry = self.catalog(binding, require_revision=self.mode == "control")
-        if self.mode == "stop":
-            # Preserve the local owner's scoped stop after control ACL drift.
-            # request(stop_session) still authenticates the private token at the server.
-            endpoint = decode(bounded_file(self.directory / "endpoint.json", MAX_REPLY))
-            instance = canonical_uuid(endpoint["instance"])
-        else:
-            group = registry.get("desktop")
-            if self.mode == "control" and (group is None or not any(member["node_id"] == binding["node_id"] for member in group["members"])):
-                raise ValueError("Configure and authorize the local desktop group first.")
-            reply = desktop_supervisor.request(self.directory, {"action": "status"})
-            if not isinstance(reply, dict) or reply.get("ok") is not True:
-                raise BridgeError(GENERIC_ERROR)
-            status = reply["session"]
-            instance = canonical_uuid(status["instance"])
-            if status["state"] != "idle" and status["local_id"] != binding["node_id"]:
-                raise ValueError("The endpoint does not attest this local node.")
-            if status["state"] in desktop_supervisor.ACTIVE and status["session_id"] != binding["session_id"]:
-                raise ValueError("A different desktop session owns this endpoint.")
+        instance = self.endpoint_instance(binding, registry)
         if binding["instance"] is not None and binding["instance"] != instance:
             raise ValueError("The destination supervisor instance changed.")
         binding["instance"] = instance
         self.binding = binding
         return {"ok": True, "binding": deepcopy(binding)}
+
+    def endpoint_instance(self, binding, registry):
+        if self.mode == "stop":
+            # Preserve the local owner's scoped stop after control ACL drift.
+            # request(stop_session) still authenticates the private token at the server.
+            endpoint = decode(bounded_file(self.directory / "endpoint.json", MAX_REPLY))
+            return canonical_uuid(endpoint["instance"])
+        group = registry.get("desktop")
+        if self.mode == "control" and (group is None or not any(member["node_id"] == binding["node_id"] for member in group["members"])):
+            raise ValueError("Configure and authorize the local desktop group first.")
+        reply = desktop_supervisor.request(self.directory, {"action": "status"})
+        if not isinstance(reply, dict) or reply.get("ok") is not True:
+            raise BridgeError(GENERIC_ERROR)
+        status = reply["session"]
+        instance = canonical_uuid(status["instance"])
+        if status["state"] != "idle" and status["local_id"] != binding["node_id"]:
+            raise ValueError("The endpoint does not attest this local node.")
+        if status["state"] in desktop_supervisor.ACTIVE and status["session_id"] != binding["session_id"]:
+            raise ValueError("A different desktop session owns this endpoint.")
+        return instance
 
     def check_instance(self):
         endpoint = decode(bounded_file(self.directory / "endpoint.json", MAX_REPLY))
@@ -383,7 +451,7 @@ class DesktopSSHTransport:
                                    "session_id": self.session_id, "revision": digest(revisions[node]),
                                    "helper_sha256": digest(helper_pins[node]), "instance": instance}
         self.local_directory = default_directory() if local_directory is None else Path(local_directory).resolve()
-        self.local_registry_path = default_registry_path() if local_registry_path is None else Path(local_registry_path).resolve()
+        self.local_registry_path = default_registry_path() if local_registry_path is None else registry_argument_path(local_registry_path)
         self.channels, self.retired = {}, set()
         self.owned = set()
         self.opening = set()
@@ -413,11 +481,15 @@ class DesktopSSHTransport:
         task = asyncio.create_task(self._open_channel(node_id, mode))
         self.opening.add(task)
         try:
-            return await task
-        except asyncio.CancelledError:
-            if self.closed:
+            # An owned child cancelled by close is an operational failure. A
+            # caller cancellation cancels gather itself and propagates naturally,
+            # including when close and external cancellation happen together.
+            outcome, = await asyncio.gather(task, return_exceptions=True)
+            if isinstance(outcome, asyncio.CancelledError):
                 raise BridgeError(GENERIC_ERROR) from None
-            raise
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
         finally:
             self.opening.discard(task)
 
@@ -452,20 +524,24 @@ class DesktopSSHTransport:
             await channel.close()
             raise
 
+    async def _control_channel(self, node_id):
+        if node_id in self.retired or self.closed:
+            raise BridgeError(GENERIC_ERROR)
+        channel = self.channels.get(node_id)
+        if channel is None:
+            channel = await self._open(node_id, "control")
+            self.channels[node_id] = channel
+        if node_id in self.retired or self.closed:
+            raise BridgeError(GENERIC_ERROR)
+        return channel
+
     async def _exchange(self, node_id, payload, mode):
         channel = None
         try:
             if mode != "control":
                 channel = await self._open(node_id, mode)
             else:
-                if node_id in self.retired or self.closed:
-                    raise BridgeError(GENERIC_ERROR)
-                channel = self.channels.get(node_id)
-                if channel is None:
-                    channel = await self._open(node_id, "control")
-                    self.channels[node_id] = channel
-                if node_id in self.retired or self.closed:
-                    raise BridgeError(GENERIC_ERROR)
+                channel = await self._control_channel(node_id)
             reply = await channel.exchange(payload)
             return scoped_reply(reply, channel.binding)
         except BaseException:
@@ -484,7 +560,11 @@ class DesktopSSHTransport:
         if node_id not in self.bindings:
             raise ValueError("Select a canonical member of this desktop session.")
         action = payload.get("action") if isinstance(payload, dict) else None
-        mode = "stop" if action == "stop_session" else "status" if action == "status" and (node_id in self.retired or self.closed) else "control"
+        mode = "control"
+        if action == "stop_session":
+            mode = "stop"
+        elif action == "status" and node_id in self.retired:
+            mode = "status"
         payload = validate_request(payload, self.bindings[node_id], mode)
         if mode == "stop":
             self.retired.add(node_id)
@@ -495,9 +575,11 @@ class DesktopSSHTransport:
                 return await self._exchange(node_id, payload, "control")
         try:
             return await asyncio.wait_for(exchange(), self.timeout)
-        except asyncio.CancelledError:
-            raise
-        except (OSError, ValueError, TypeError, KeyError, asyncio.TimeoutError, asyncio.IncompleteReadError):
+        except asyncio.TimeoutError:
+            # Python3.10 uses a distinct asyncio timeout type; 3.11+ aliases the
+            # built-in OSError subclass. Keep its handling separate and ordered.
+            raise BridgeError(GENERIC_ERROR) from None
+        except (OSError, ValueError, TypeError, KeyError, asyncio.IncompleteReadError):
             raise BridgeError(GENERIC_ERROR) from None
 
     async def close(self):

@@ -101,6 +101,12 @@ può leggere l’identità del catalogo pubblicato atomicamente senza attendere 
 mutex degli editor GUI; una revisione cambiata non deve impedire di fermare la
 vecchia sessione. Richiede comunque catalogo leggibile e identità locale
 corrispondente. Il bridge non ripara permessi, cataloghi o endpoint danneggiati.
+Su Windows le letture bounded dei metadati aprono handle di file disco con
+`FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE`, chiusi sempre a fine
+lettura. Così anche il lettore di emergenza fuori dal mutex consente agli editor
+di pubblicare il catalogo tramite sostituzione atomica. La risoluzione del
+percorso del catalogo resta lessicale su Windows e non apre anticipatamente il
+file senza questa condivisione.
 
 L’istanza viene ricontrollata prima di ogni operazione e nelle risposte. Il
 primo pin di istanza stabilito da un canale resta invariato anche se una risposta
@@ -133,6 +139,9 @@ supervisor e del guardiano non dipendono dal bridge.
 corso. Un processo completato sul confine fra spawn e chiusura viene chiuso prima
 del primo frame di bind; non può iniziare una sessione dopo il ritorno da close.
 Stop e lettura terminale vanno quindi completati prima di chiudere il trasporto.
+La cancellazione esterna del chiamante resta `CancelledError` anche se avviene
+mentre close sta cancellando un’apertura interna; non viene trasformata in un
+errore operativo ordinario.
 
 `agent/test_desktop_ssh.py` avvia helper stdio separati e tre supervisor TCP
 autenticati veri, tutti in TEMP privato e con programmi sintetici. Copre pin,
