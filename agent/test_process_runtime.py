@@ -291,9 +291,9 @@ class ProcessRuntimeTests(unittest.TestCase):
             "    raise OSError('synthetic lost native launch acknowledgment')\n"
             "if sys.platform=='win32':\n"
             "    original=module['write_launch_status']\n"
-            "    def broken(path,value):\n"
+            "    def broken(value,**options):\n"
             "        if value.get('started') is True: lose_ack()\n"
-            "        return original(path,value)\n"
+            "        return original(value,**options)\n"
             "    module['windows_launch'].__globals__['write_launch_status']=broken\n"
             "    module['windows_launch'](json.load(sys.stdin))\n"
             "else:\n"
@@ -312,6 +312,52 @@ class ProcessRuntimeTests(unittest.TestCase):
         self.assertEqual(result["state"], "unconfirmed")
         self.assertIsNone(result["outcome"]["started"])
         self.assertIsNone(result["exit_code"])
+
+    def test_launcher_rejects_forged_ack_path_before_program_or_file_effects(self):
+        effect = self.home / "forged-program-effect"
+        forged = self.home / "outside-ack.json"
+        payload = {"protocol_version": 1, "request": {
+            "argv": [sys.executable, "-c", f"from pathlib import Path; Path({str(effect)!r}).touch()"],
+            "cwd": str(self.home), "env": dict(os.environ), "stdin_text": None, "timeout_seconds": 5},
+            "status_path": str(forged)}
+        with patch.object(jobs.subprocess, "Popen") as create:
+            with self.assertRaisesRegex(ValueError, "native launcher protocol"):
+                jobs.windows_launch(payload)
+            create.assert_not_called()
+        self.assertFalse(effect.exists())
+        self.assertFalse(forged.exists())
+        if jobs.WINDOWS:
+            rejected = subprocess.run([sys.executable, "-I", str(self.root / "jobs.py"), "_launch"],
+                                      input=json.dumps(payload).encode(), cwd=self.home, env=self.env,
+                                      capture_output=True, timeout=10)
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn(b"Unsupported native launcher protocol", rejected.stderr)
+            self.assertFalse(effect.exists())
+            self.assertFalse(forged.exists())
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows private launcher directory")
+    def test_helper_ack_directory_is_parent_owned_and_program_keeps_approved_cwd(self):
+        ready_paths = []
+        original = jobs.confirm_windows_launch
+
+        def observe(process, status):
+            ready_paths.append(status)
+            self.assertEqual(status.name, "ready.json")
+            self.assertEqual(status.parent.parent, self.root)
+            self.assertTrue(status.parent.name.startswith("native-launch-"))
+            return original(process, status)
+
+        spec = {"protocol_version": 1, "request": {
+            "argv": [sys.executable, "-c", "import os,sys; print(os.getcwd()); sys.exit(17)"],
+            "cwd": str(self.home), "env": dict(os.environ), "stdin_text": None, "timeout_seconds": 5}}
+        with (self.home / "private.out").open("wb") as out, (self.home / "private.err").open("wb") as err, \
+                patch.object(jobs, "confirm_windows_launch", side_effect=observe):
+            with jobs.program_process(spec, out, err) as process:
+                self.wait(lambda: jobs.exited(process))
+        self.assertEqual(process.returncode, 17)
+        self.assertEqual((self.home / "private.out").read_text().strip(), str(self.home))
+        self.assertEqual(len(ready_paths), 1)
+        self.assertFalse(ready_paths[0].parent.exists())
 
     @unittest.skipUnless(sys.platform == "linux", "Linux SIGKILL parent-death cleanup")
     def test_sigkill_worker_then_restart_cleans_tree_without_reexecution(self):

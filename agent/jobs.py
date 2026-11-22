@@ -17,7 +17,7 @@ import sqlite3
 import subprocess
 import sys
 import time
-from tempfile import TemporaryFile
+from tempfile import TemporaryDirectory, TemporaryFile
 from uuid import UUID, uuid4
 
 WINDOWS = sys.platform == "win32"
@@ -476,7 +476,9 @@ def launch_context(payload):
     if not isinstance(payload, dict):
         yield payload, {"stdin": subprocess.DEVNULL}
         return
-    if payload.get("protocol_version") != direct_execution.PROTOCOL_VERSION:
+    if (payload.keys() != {"protocol_version", "request"}
+            or type(payload["protocol_version"]) is not int
+            or payload["protocol_version"] != direct_execution.PROTOCOL_VERSION):
         raise ValueError("Unsupported native launcher protocol.")
     # The public request bound has already been checked before queueing. The
     # internal specification additionally inherits the worker environment.
@@ -598,29 +600,31 @@ def linux_program_process(argv, stdout, stderr, worker_lock):
                 proc.native_exited = result.get("native_exited", False)
 
 
-def write_launch_status(path, value):
-    target = Path(path)
-    stage = target.with_suffix(".tmp")
-    stage.write_text(json.dumps(value), encoding="utf-8")
+def write_launch_status(value, *, completed=False):
+    # The launcher cwd is a fresh private directory created by its parent.
+    # No acknowledgment filename or directory comes from the JSON request.
+    target = Path("outcome.json" if completed else "ready.json")
+    stage = Path("outcome.tmp" if completed else "ready.tmp")
+    with stage.open("x", encoding="utf-8") as stream:
+        json.dump(value, stream)
     stage.replace(target)
 
 
 def windows_launch(payload):
     if not isinstance(payload, dict):
         return subprocess.call(payload, stdin=subprocess.DEVNULL)
-    status = payload["status_path"]
     # The enclosing JobObject owns cleanup even if an acknowledgment is lost.
     with launch_context(payload) as (argv, options):
         try:
             proc = subprocess.Popen(argv, **options)
         except Exception as error:
-            write_launch_status(status, {"error": str(error)[:4096]})
+            write_launch_status({"error": str(error)[:4096]})
             raise
-        write_launch_status(status, {"started": True})
+        write_launch_status({"started": True})
         code = proc.wait()
         # Never replace the ready file while another Windows process has it
         # open without FILE_SHARE_DELETE. Each acknowledgment is immutable.
-        write_launch_status(Path(status).with_suffix(".outcome.json"), {"started": True, "exit_code": code})
+        write_launch_status({"started": True, "exit_code": code}, completed=True)
     return 0
 
 
@@ -664,10 +668,13 @@ def program_process(argv, stdout, stderr, worker_lock=None):
         import win32job
         # The helper waits for argv until its entire descendant tree is contained.
         group = win32job.CreateJobObject(None, "Vincula-" + uuid4().hex)
-        status = ROOT / ("launch-" + uuid4().hex + ".json") if isinstance(argv, dict) else None
-        if status is not None:
-            argv = dict(argv, status_path=str(status))
+        launch_directory = None
+        status = None
         try:
+            if isinstance(argv, dict):
+                launch_directory = TemporaryDirectory(prefix="native-launch-", dir=ROOT, ignore_cleanup_errors=True)
+                streams["cwd"] = launch_directory.name
+                status = Path(launch_directory.name) / "ready.json"
             limits = win32job.QueryInformationJobObject(group, win32job.JobObjectExtendedLimitInformation)
             limits["BasicLimitInformation"]["LimitFlags"] |= win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
             win32job.SetInformationJobObject(group, win32job.JobObjectExtendedLimitInformation, limits)
@@ -700,7 +707,7 @@ def program_process(argv, stdout, stderr, worker_lock=None):
                         raise TimeoutError("Windows could not confirm that the job processes stopped.")
                     time.sleep(0.025)
                 if status is not None and launched:
-                    result = read_launch_status(status.with_suffix(".outcome.json"))
+                    result = read_launch_status(status.with_name("outcome.json"))
                     if (result and result.get("started") is True and set(result) == {"started", "exit_code"}
                             and type(result["exit_code"]) is int):
                         proc.returncode = result["exit_code"]
@@ -713,11 +720,8 @@ def program_process(argv, stdout, stderr, worker_lock=None):
                         proc.native_exited = False
         finally:
             group.Close()
-            if status is not None:
-                for path in (status, status.with_suffix(".outcome.json")):
-                    with suppress(OSError):
-                        path.unlink(missing_ok=True)
-                        path.with_suffix(".tmp").unlink(missing_ok=True)
+            if launch_directory is not None:
+                launch_directory.cleanup()
     else:
         with linux_program_process(argv, stdout, stderr, worker_lock) as proc:
             yield proc
