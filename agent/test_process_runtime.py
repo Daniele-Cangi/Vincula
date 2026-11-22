@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -186,6 +187,29 @@ class ProcessRuntimeTests(unittest.TestCase):
         self.assertEqual(result["outcome"]["reason"], "launch_error")
         self.assertFalse(result["outcome"]["started"])
         self.assertIsNone(result["exit_code"])
+
+    def test_long_unicode_cwd_removed_before_approval_is_confirmed_launch_error(self):
+        base = Path("\\\\?\\" + str(self.home)) if jobs.WINDOWS else self.home
+        start = base / ("🙂" * 40)
+        directory = start
+        for _ in range(19):
+            directory /= "🙂" * 40
+        directory.mkdir(parents=True)
+        self.assertTrue(directory.is_dir())
+        self.assertGreater(len(str(directory).encode("utf-8")), 3000)
+        request = jobs.dispatch("process", operation="execute", protocol_version=1, job_id=str(uuid4()),
+                                argv=[sys.executable, "-V"], cwd=str(directory))
+        shutil.rmtree(start)
+        with jobs.transaction() as db:
+            jobs.decide(db, request["id"], True, request["manifest"]["sha256"])
+        result = self.completed(request["id"], "failed")
+        self.assertEqual(result["outcome"]["reason"], "launch_error")
+        self.assertFalse(result["outcome"]["started"])
+        self.assertIsNone(result["exit_code"])
+        diagnostic = (self.root / (request["id"] + ".err")).read_text(encoding="utf-8", errors="replace")
+        self.assertIn("Traceback", diagnostic)
+        if not jobs.WINDOWS:
+            self.assertIn("diagnostic truncated; see stderr", diagnostic)
 
     def test_disable_between_claim_and_launch_prevents_effects(self):
         marker = self.home / "must-not-start"
@@ -374,6 +398,25 @@ class ProcessRuntimeTests(unittest.TestCase):
         self.assertEqual(retry["state"], "unconfirmed")
         with jobs.transaction() as db:
             self.assertEqual(db.execute("SELECT count(*) FROM direct_process_jobs").fetchone()[0], 1)
+
+
+class LaunchAcknowledgmentEncodingTests(unittest.TestCase):
+    def test_error_budget_counts_json_escapes_and_newline_in_encoded_bytes(self):
+        for message in ("🙂" * 4000, "é" * 10000, "\"\\\n\x00\ud800" * 4000):
+            with self.subTest(kind=repr(message[:8])):
+                self.assertGreater(len(json.dumps({"error": message}).encode("utf-8")), 8192)
+                packet = jobs.encode_launch_status({"error": message})
+                self.assertLessEqual(len(packet), 8192)
+                self.assertTrue(packet.endswith(b"\n"))
+                result = json.loads(packet)
+                self.assertEqual(set(result), {"error"})
+                self.assertIn("diagnostic truncated; see stderr", result["error"])
+        self.assertEqual(json.loads(jobs.encode_launch_status({"error": "short failure"})),
+                         {"error": "short failure"})
+
+    def test_oversize_nonerror_receipt_is_rejected_instead_of_becoming_an_ack(self):
+        with self.assertRaisesRegex(ValueError, "byte budget"):
+            jobs.encode_launch_status({"started": "x" * 9000})
 
 
 if __name__ == "__main__":

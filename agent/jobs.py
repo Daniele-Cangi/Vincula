@@ -30,6 +30,7 @@ BATCH_LIMIT = 12
 PAGE_LIMIT = 50
 SUMMARY = "id, program, state, exit_code, created, finished"
 ACTIVE = ("pending", "queued", "running", "stopping")
+LAUNCH_ACK_BYTES = 8192
 
 def load_adapter(name):
     # The SSH entry point runs with Python -I, so load the installed adapter by absolute path.
@@ -518,7 +519,7 @@ def supervise_linux(parent_pid, ready_fd):
         try:
             proc = subprocess.Popen(argv, start_new_session=True, **options)
         except Exception as error:
-            os.write(ready_fd, json.dumps({"error": str(error)}).encode() + b"\n")
+            os.write(ready_fd, encode_launch_status({"error": str(error)}))
             raise
         try:
             with suppress(BrokenPipeError):
@@ -600,13 +601,29 @@ def linux_program_process(argv, stdout, stderr, worker_lock):
                 proc.native_exited = result.get("native_exited", False)
 
 
+def encode_launch_status(value):
+    packet = json.dumps(value).encode("utf-8") + b"\n"
+    if len(packet) <= LAUNCH_ACK_BYTES:
+        return packet
+    if set(value) != {"error"} or not isinstance(value["error"], str):
+        raise ValueError("Native launch acknowledgment exceeds its byte budget.")
+    message = value["error"]
+    while True:
+        message = message[:len(message) // 2]
+        clipped = {"error": message + " [diagnostic truncated; see stderr]"}
+        packet = json.dumps(clipped).encode("utf-8") + b"\n"
+        if len(packet) <= LAUNCH_ACK_BYTES:
+            return packet
+
+
 def write_launch_status(value, *, completed=False):
     # The launcher cwd is a fresh private directory created by its parent.
     # No acknowledgment filename or directory comes from the JSON request.
     target = Path("outcome.json" if completed else "ready.json")
     stage = Path("outcome.tmp" if completed else "ready.tmp")
-    with stage.open("x", encoding="utf-8") as stream:
-        json.dump(value, stream)
+    packet = encode_launch_status(value)
+    with stage.open("xb") as stream:
+        stream.write(packet)
     stage.replace(target)
 
 
@@ -618,7 +635,7 @@ def windows_launch(payload):
         try:
             proc = subprocess.Popen(argv, **options)
         except Exception as error:
-            write_launch_status({"error": str(error)[:4096]})
+            write_launch_status({"error": str(error)})
             raise
         write_launch_status({"started": True})
         code = proc.wait()
