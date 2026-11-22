@@ -102,6 +102,19 @@ def ssh_route(data, empty_config, node_id):
     return Route(host, tuple(options), (identity, known), network)
 
 
+def configured_route(entry, legacy, empty_config, node_id, family):
+    if "legacy_route" in entry:
+        if "ssh" in entry or entry["legacy_route"] not in ("ubuntu", "windows"):
+            raise ValueError("Choose exactly one SSH route for a node.")
+        previous = legacy.get(entry["legacy_route"])
+        if previous.route is None or previous.family != family:
+            raise ValueError("The selected legacy route does not match this remote node.")
+        return previous.route
+    if "ssh" in entry:
+        return ssh_route(entry["ssh"], empty_config, node_id)
+    return None
+
+
 def node_from_config(entry, legacy, empty_config):
     if not isinstance(entry, dict) or entry.keys() - {"id", "label", "family", "aliases", "ssh", "legacy_route"}:
         raise ValueError("Invalid registered node fields.")
@@ -114,16 +127,7 @@ def node_from_config(entry, legacy, empty_config):
         raise ValueError("Each node needs a label and a supported OS family.")
     if not isinstance(aliases, list) or not all(isinstance(alias, str) for alias in aliases):
         raise ValueError("Node aliases must be strings.")
-    route = None
-    if "legacy_route" in entry:
-        if "ssh" in entry or entry["legacy_route"] not in ("ubuntu", "windows"):
-            raise ValueError("Choose exactly one SSH route for a node.")
-        previous = legacy.get(entry["legacy_route"])
-        if previous.route is None or previous.family != family:
-            raise ValueError("The selected legacy route does not match this remote node.")
-        route = previous.route
-    elif "ssh" in entry:
-        route = ssh_route(entry["ssh"], empty_config, node_id)
+    route = configured_route(entry, legacy, empty_config, node_id, family)
     return Node(node_id, label, family, tuple(aliases), route)
 
 

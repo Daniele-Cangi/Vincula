@@ -30,6 +30,13 @@ CREATE TABLE IF NOT EXISTS file_transfers(id TEXT PRIMARY KEY, plan TEXT NOT NUL
 """
 
 
+def reserved_windows_path(part):
+    detector = getattr(os.path, "isreserved", None)
+    if detector is not None:
+        return detector(part)
+    return PureWindowsPath(part).is_reserved()
+
+
 def components(relative):
     if not relative:
         return []
@@ -37,7 +44,7 @@ def components(relative):
     for part in parts:
         if (part in {"", ".", ".."} or part.endswith((" ", ".")) or part.casefold().startswith(STAGE_PREFIX)
                 or any(char in '\\:<>|?*"' or ord(char) < 32 for char in part)
-                or (os.name == "nt" and PureWindowsPath(part).is_reserved())):
+                or (os.name == "nt" and reserved_windows_path(part))):
             raise ValueError("Use a relative file path inside an authorized folder.")
     return parts
 

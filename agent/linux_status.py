@@ -40,7 +40,7 @@ def gpu_devices():
     devices = nvidia_devices()
     have_nvidia = bool(devices)
     for card in sorted(Path("/sys/class/drm").glob("card*")):
-        if not re.fullmatch(r"card[0-9]+", card.name):
+        if not re.fullmatch(r"card\d+", card.name, flags=re.ASCII):
             continue
         device = card / "device"
         vendor, product = (sysfs_value(device / name) for name in ("vendor", "device"))

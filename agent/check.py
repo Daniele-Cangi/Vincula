@@ -14,6 +14,28 @@ from mcp import Client, MCPError, StdioServerParameters
 from server import Metrics, legacy_registry, registry
 
 
+async def check_node(client, origin, definition, node, include_remotes):
+    node_id = node["node_id"]
+    is_local = node_id == origin
+    configured = include_remotes and definition.route is not None and definition.route.configured()
+    expected = "available" if is_local or configured else "not_configured"
+    assert node["local"] == is_local and node["availability"] == expected, node
+    assert node["label"] == definition.label and node["os_family"] == definition.family, node
+    assert node["aliases"] == list(definition.aliases), node
+    assert node["network"] == (definition.route.network if definition.route else None), node
+    reply = await client.call_tool("get_node_status", {"node_id": node_id})
+    info = dict(reply.structured_content)
+    metrics = info.pop("metrics")
+    assert not reply.is_error and info == node, reply
+    if expected == "available":
+        status = Metrics.model_validate(metrics)
+        assert status.os and status.memory_available_bytes <= status.memory_total_bytes
+        print(f"{origin} -> {node_id}: {status.os}, uptime/CPU/RAM validated")
+    else:
+        assert metrics is None
+        print(f"{origin} -> {node_id}: missing SSH config reported")
+
+
 async def check(topology, include_remotes: bool, env: dict[str, str]) -> None:
     params = StdioServerParameters(
         command=sys.executable, args=[str(Path(__file__).with_name("server.py").resolve())], env=env,
@@ -37,25 +59,7 @@ async def check(topology, include_remotes: bool, env: dict[str, str]) -> None:
         inventory = (await client.call_tool("list_nodes")).structured_content
         assert [node["node_id"] for node in inventory["nodes"]] == [node.node_id for node in topology.nodes]
         for definition, node in zip(topology.nodes, inventory["nodes"]):
-            node_id = node["node_id"]
-            is_local = node_id == origin
-            configured = include_remotes and definition.route is not None and definition.route.configured()
-            expected = "available" if is_local or configured else "not_configured"
-            assert node["local"] == is_local and node["availability"] == expected, node
-            assert node["label"] == definition.label and node["os_family"] == definition.family, node
-            assert node["aliases"] == list(definition.aliases), node
-            assert node["network"] == (definition.route.network if definition.route else None), node
-            reply = await client.call_tool("get_node_status", {"node_id": node_id})
-            info = dict(reply.structured_content)
-            metrics = info.pop("metrics")
-            assert not reply.is_error and info == node, reply
-            if expected == "available":
-                status = Metrics.model_validate(metrics)
-                assert status.os and status.memory_available_bytes <= status.memory_total_bytes
-                print(f"{origin} -> {node_id}: {status.os}, uptime/CPU/RAM validated")
-            else:
-                assert metrics is None
-                print(f"{origin} -> {node_id}: missing SSH config reported")
+            await check_node(client, origin, definition, node, include_remotes)
 
         try:
             invalid = await client.call_tool("get_node_status", {"node_id": "other"})

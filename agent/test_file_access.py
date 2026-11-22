@@ -3,9 +3,11 @@
 
 from argparse import Namespace
 from hashlib import sha256
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+import warnings
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -13,6 +15,15 @@ import jobs
 
 
 class FileAccessTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows reserved file names")
+    def test_windows_reserved_names_without_deprecation_warnings(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            for name in ("CON", "NUL.txt", "sub/COM1", "LPT9"):
+                with self.subTest(name=name), self.assertRaises(ValueError):
+                    jobs.files.components(name)
+            self.assertEqual(jobs.files.components("sub/report.txt"), ["sub", "report.txt"])
+
     def setUp(self):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
