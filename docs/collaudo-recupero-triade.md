@@ -2,7 +2,7 @@
 
 Il collaudo ha usato Ubuntu, Windows e Kali reali con tre worker temporanei. Ogni host aveva sorgenti, profilo, configurazione e database separati in un namespace QA. Gli ambienti virtuali esistenti fornivano soltanto l'interprete: sorgenti, configurazioni e worker di produzione non sono stati aggiornati o fermati.
 
-Il **harness SSH/MCP isolato con ambiente adattato** indirizzava le RPC verso HOME/LOCALAPPDATA QA e verificava che anche gli staging SFTP appartenessero alle cartelle temporanee. Riutilizzava le route SSH autorizzate e gli agenti di firma esistenti, incluso il socket della sessione utente Kali.
+L’**harness SSH/MCP isolato con ambiente adattato** indirizzava le RPC verso HOME/LOCALAPPDATA QA e verificava che anche gli staging SFTP appartenessero alle cartelle temporanee. Riutilizzava le route SSH autorizzate e gli agenti di firma esistenti, incluso il socket della sessione utente Kali.
 
 ## Risultati
 
