@@ -57,11 +57,36 @@ class JournalTransportTests(unittest.TestCase):
         raw = options["input_data"]
         self.assertGreater(len(raw), 32767)
         self.assertEqual(json.loads(raw), request)
-        self.assertLess(len(args[1]), 12000)
+        self.assertLess(len(args[1]), 8192)
         command = base64.b64decode(args[1].split()[-1]).decode("utf-16-le")
         self.assertIn("journal-stdin", command)
         self.assertNotIn("journal-content-", command)
         self.assertEqual(options["output_limit"], jobs.plan_journal.MAX_RESPONSE_BYTES)
+
+    def test_windows_store_uses_constant_stdin_command_even_for_intermediate_or_small_manifests(self):
+        commands = []
+        body = large_capability_manifest()
+        body["request"]["parts"] = body["request"]["parts"][:1]
+        body["plan"]["parts"] = body["plan"]["parts"][:1]
+        body["request"]["parts"][0]["files"] = body["request"]["parts"][0]["files"][:2]
+        body["plan"]["parts"][0]["inputs"] = body["plan"]["parts"][0]["inputs"][:2]
+        for inputs in (True, False):
+            if not inputs:
+                body["request"]["parts"][0]["files"] = []
+                body["plan"]["parts"][0]["inputs"] = []
+                body["request"]["parts"][0]["parameters"] = {}
+                body["plan"]["parts"][0]["parameters"] = {}
+            request = {"action": "plan", "operation": "store", "manifest": body}
+            with patch.object(node_ssh, "json_command", return_value={"result": {}}) as execute:
+                server.remote_request(self.windows, request)
+            args, options = execute.call_args
+            self.assertIn("input_data", options)
+            if inputs:
+                self.assertGreater(len(options["input_data"]), 2048)
+                self.assertLess(len(options["input_data"]), 4096)
+            commands.append(args[1])
+        self.assertEqual(commands[0], commands[1])
+        self.assertLess(len(commands[0]), 8192)
 
     def test_small_rpc_keeps_its_previous_argument_protocol(self):
         with patch.object(node_ssh, "json_command", return_value={"result": {}}) as execute:
@@ -150,14 +175,28 @@ class JournalStdinTests(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform == "win32", "Windows PowerShell stdin bridge")
     def test_windows_powershell_bridge_forwards_large_payload_without_argument_expansion(self):
-        body = large_capability_manifest()
-        expected = jobs.plan_journal.package(body)
-        script = server.WINDOWS_JOURNAL_STDIN.replace("__JOURNAL_LIMIT__", str(jobs.plan_journal.MAX_REQUEST_BYTES))
         powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
-        request = json.dumps({"action": "plan", "operation": "store", "manifest": body}, ensure_ascii=False).encode()
-        result = subprocess.run([str(powershell), *server.windows_ssh._powershell_arguments(script)],
-                                input=request, capture_output=True, env=self.env, timeout=20, check=True)
-        self.assertEqual(json.loads(result.stdout), {"result": {"state": "stored", "sha256": expected["sha256"]}})
+        node = node_registry.Node(str(uuid4()), "Windows", "windows", route=node_registry.Route("peer", ()))
+        large = large_capability_manifest()
+        intermediate = deepcopy(large_capability_manifest())
+        intermediate["request"]["parts"] = intermediate["request"]["parts"][:1]
+        intermediate["plan"]["parts"] = intermediate["plan"]["parts"][:1]
+        intermediate["request"]["parts"][0]["files"] = intermediate["request"]["parts"][0]["files"][:2]
+        intermediate["plan"]["parts"][0]["inputs"] = intermediate["plan"]["parts"][0]["inputs"][:2]
+
+        def native(route, command, **options):
+            self.assertLess(len(command), 8192)
+            result = subprocess.run([str(powershell), *command.split()[1:]], input=options["input_data"],
+                                    capture_output=True, env=self.env, timeout=20, check=True)
+            return json.loads(result.stdout)
+
+        for body in (intermediate, large):
+            with self.subTest(parts=len(body["plan"]["parts"])):
+                expected = jobs.plan_journal.package(body)
+                request = {"action": "plan", "operation": "store", "manifest": body}
+                with patch.object(node_ssh, "json_command", side_effect=native):
+                    result = server.remote_request(node, request)
+                self.assertEqual(result, {"result": {"state": "stored", "sha256": expected["sha256"]}})
 
 
 if __name__ == "__main__":

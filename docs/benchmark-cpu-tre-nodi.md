@@ -48,7 +48,7 @@ La preparazione delle fixture, copie del programma, grant e registrazioni è dur
 
 ## Metodo di riproduzione
 
-Il carico versionabile è [tools/benchmark_cpu.py](../tools/benchmark_cpu.py). Usa solo la standard library e accetta una directory di input e gli indici delle parti. Il suo AST coincide con quello del programma eseguito nel collaudo. Per preparare gli stessi tre file, esegui questo frammento in una directory di prova dedicata.
+Il carico versionabile è [tools/benchmark_cpu.py](../tools/benchmark_cpu.py). Usa solo la standard library e accetta una directory di input e gli indici delle tre parti documentate. La funzione di conteggio coincide con quella eseguita nel collaudo. Il wrapper verifica dimensione e contenuto dei JSON e usa intervalli e numero di ripetizioni costanti, così un file modificato non può aumentare il lavoro. I record conservano l’hash del programma originale misurato. Per preparare gli stessi tre file, esegui questo frammento in una directory di prova dedicata.
 
 ```python
 import json

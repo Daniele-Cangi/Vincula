@@ -45,7 +45,7 @@ try {
         @{ name = $_.Name; vram_total_bytes = $null; vram_available_bytes = $null }
     })
 } catch {}
-$nvidia = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue
+$nvidia = Get-Command nvidia-smi.exe -CommandType Application -ErrorAction SilentlyContinue
 if ($nvidia) {
     try {
         $info = New-Object Diagnostics.ProcessStartInfo
@@ -288,7 +288,7 @@ try {
 def remote_request(node, request):
     raw = json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     journal = request.get("action") == "plan"
-    if journal and len(raw) > 4096:
+    if journal and (len(raw) > 4096 or (node.family == "windows" and request.get("operation") == "store")):
         if len(raw) > jobs.plan_journal.MAX_REQUEST_BYTES:
             raise ValueError("Plan journal request exceeds its size limit.")
         if node.family == "linux":
