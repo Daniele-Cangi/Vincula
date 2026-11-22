@@ -19,7 +19,7 @@ class NodeEditingTests(unittest.TestCase):
     def setUp(self):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.path = Path(temporary.name) / 'vincula/nodes.json'
+        self.path = Path(temporary.name).resolve() / 'vincula/nodes.json'
         self.local = str(uuid4())
         self.peer = str(uuid4())
         family = 'windows' if sys.platform == 'win32' else 'linux'
