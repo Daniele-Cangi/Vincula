@@ -129,8 +129,9 @@ class ArtifactTests(unittest.TestCase):
         extra = canonical_json(artifact().manifest.to_document() | {"trusted": True})
         malformed = [base + b"\n", duplicate, extra, b"[]", b"{", b"\xff", b"{}" * 600000]
         for raw in malformed:
+            approved_sha256 = hashlib.sha256(raw).hexdigest()
             with self.subTest(size=len(raw)), self.assertRaises(ValueError):
-                verify_artifact_manifest(raw, approved_sha256=hashlib.sha256(raw).hexdigest())
+                verify_artifact_manifest(raw, approved_sha256=approved_sha256)
 
     def test_paths_cannot_traverse_alias_or_select_a_directory_as_file(self):
         base = artifact().manifest

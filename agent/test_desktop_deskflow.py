@@ -141,9 +141,10 @@ clipboardSize=3
             local = paths(platform)
             with self.subTest(platform=platform, bad=bad), self.assertRaises(ValueError):
                 replace(local, profile_root=bad)
+        local = paths()
         for profile in ("/opt/vincula-engine", "/opt/vincula-engine/profiles", "/opt"):
             with self.subTest(profile=profile), self.assertRaises(ValueError):
-                replace(paths(), profile_root=profile)
+                replace(local, profile_root=profile)
 
     def test_network_needs_literal_unicast_addresses_and_integer_port(self):
         for fields in [

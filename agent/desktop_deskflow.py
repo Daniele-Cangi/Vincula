@@ -15,6 +15,8 @@ UPSTREAM_REPOSITORY = "https://github.com/deskflow/deskflow"
 UPSTREAM_COMMIT = "081f6478e654a112168879e67a41ce7d7e4ae3af"
 MANAGED_CAPABILITIES = frozenset({"managed_profile_v1", "private_attestation_v1", "mutual_tls_uuid_v1", "backend_consent_v1"})
 DIRECTIONS = (("left", -1, 0), ("right", 1, 0), ("up", 0, -1), ("down", 0, 1))
+SETTINGS_FILENAME = "Deskflow.conf"
+LAYOUT_FILENAME = "layout.conf"
 
 
 def _windows_path(value, path, parts):
@@ -81,9 +83,9 @@ def _profile_entries(files, role):
             or any(not isinstance(row, tuple) or len(row) != 2
                    or not all(isinstance(value, str) for value in row) for row in files)):
         raise ValueError("Use immutable in-memory profile entries.")
-    expected = {"Deskflow.conf", "tls/trusted-clients", "tls/trusted-servers"}
+    expected = {SETTINGS_FILENAME, "tls/trusted-clients", "tls/trusted-servers"}
     if role == "primary":
-        expected.add("layout.conf")
+        expected.add(LAYOUT_FILENAME)
     if len(files) != len(expected) or {name for name, _ in files} != expected:
         raise ValueError("Unexpected managed profile file selection.")
 
@@ -232,17 +234,17 @@ def compile_profile(group, node_id, artifact, paths, network):
     primary = _compile_inputs(group, node_id, artifact, paths, network)
     profile = _path(paths.profile_root, paths.platform)
     engine = _path(paths.artifact_root, paths.platform).joinpath(*artifact.manifest.engine_file.split("/"))
-    settings = profile / "Deskflow.conf"
+    settings = profile / SETTINGS_FILENAME
     sections, files = _base_settings(node_id, paths, network), _trust_files(group, node_id)
     if primary:
-        sections += ["", "[server]", "externalConfig=true", "externalConfigFile=" + _ini_string((profile / "layout.conf").as_posix())]
-        files["layout.conf"] = _layout(group)
+        sections += ["", "[server]", "externalConfig=true", "externalConfigFile=" + _ini_string((profile / LAYOUT_FILENAME).as_posix())]
+        files[LAYOUT_FILENAME] = _layout(group)
     else:
         sections += ["", "[client]", "remoteHost=" + _ini_string(network.primary_address)]
         sections += ["", "[server]"]
     sections += ["protocol=barrier", "enableClipboard=" + str(group.clipboard).lower(),
                  "clipboardSize=" + ("3" if group.clipboard else "0")]
-    files["Deskflow.conf"] = "\n".join([*sections, ""])
+    files[SETTINGS_FILENAME] = "\n".join([*sections, ""])
     return PreparedProfile(node_id, group.session_id, group.digest, "primary" if primary else "client",
                            (str(engine), "server" if primary else "client", "--settings", str(settings)), tuple(sorted(files.items())))
 
@@ -264,7 +266,13 @@ def _preflight_context(group, node_id, paths, facts, approved_artifact_sha256):
 
 
 def _check(code, value):
-    return PreflightCheck(code, "missing" if value is None else "ok" if value else "unsupported")
+    if value is None:
+        status = "missing"
+    elif value:
+        status = "ok"
+    else:
+        status = "unsupported"
+    return PreflightCheck(code, status)
 
 
 def _artifact_checks(artifact, facts, approved_sha256):
