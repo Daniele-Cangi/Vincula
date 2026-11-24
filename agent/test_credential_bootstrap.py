@@ -58,6 +58,8 @@ class CredentialBootstrapTests(unittest.TestCase):
         self.session_type = 'wayland'
         self.session_uid = str(os.getuid())
         self.session_valid = True
+        self.manager_response = {'type': 'as', 'data': [
+            'OTHER_SECRET=never publish', 'SSH_AUTH_SOCK=' + str(self.runtime / 'openssh_agent')]}
 
     def save_config(self):
         self.config.write_text(json.dumps(self.profile))
@@ -74,8 +76,8 @@ class CredentialBootstrapTests(unittest.TestCase):
             if not self.session_valid:
                 return 1, b''
             return 0, (f'Id={session}\nUser={self.session_uid}\nType={self.session_type}\nRemote=no\nState=active\n').encode()
-        if argv == [bootstrap.SYSTEMCTL, '--user', 'show-environment']:
-            return 0, ('OTHER_SECRET=never publish\nSSH_AUTH_SOCK=' + str(self.runtime / 'openssh_agent') + '\n').encode()
+        if argv == bootstrap.MANAGER_ENVIRONMENT:
+            return 0, json.dumps(self.manager_response).encode()
         self.assertEqual(argv[0], bootstrap.SSH_ADD)
         self.load_calls.append((list(argv), dict(environment)))
         if self.return_after_load == 0:
@@ -164,7 +166,46 @@ class CredentialBootstrapTests(unittest.TestCase):
         value = self.run_bootstrap()
         self.assertTrue(value['credentials_ready'])
         self.assertNotIn('OTHER_SECRET', json.dumps(value))
-        self.assertEqual(self.calls[0][0], [bootstrap.SYSTEMCTL, '--user', 'show-environment'])
+        self.assertEqual(self.calls[0][0], ['/usr/bin/busctl', '--user', '--json=short', 'get-property',
+                                         'org.freedesktop.systemd1', '/org/freedesktop/systemd1',
+                                         'org.freedesktop.systemd1.Manager', 'Environment'])
+
+    def test_manager_socket_path_preserves_whitespace_unicode_and_shell_characters(self):
+        target = self.runtime / "è '$`\\ = agent"
+        agent = socket.socket(socket.AF_UNIX)
+        self.addCleanup(agent.close)
+        agent.bind(str(target))
+        self.profile['agent_source'] = 'user-manager'
+        self.save_config()
+        self.manager_response['data'][1] = 'SSH_AUTH_SOCK=' + str(target)
+        self.loaded = True
+        value = self.run_bootstrap()
+        self.assertTrue(value['credentials_ready'])
+        helpers = [call for call in self.calls if call[0][0] == bootstrap.SSH_ADD]
+        self.assertTrue(helpers)
+        self.assertTrue(all(call[1]['SSH_AUTH_SOCK'] == str(target) for call in helpers))
+        self.assertNotIn('OTHER_SECRET', json.dumps(value))
+
+    def test_manager_environment_rejects_invalid_shape_or_ambiguous_socket(self):
+        self.profile['agent_source'] = 'user-manager'
+        self.save_config()
+        invalid = [{'type': 's', 'data': []}, {'type': 'as', 'data': [3]},
+                   {'type': 'as', 'data': []}, {'type': 'as', 'data': ['OTHER_SECRET=value']},
+                   {'type': 'as', 'data': ['SSH_AUTH_SOCK=/one', 'SSH_AUTH_SOCK=/two']}]
+        for document in invalid:
+            with self.subTest(document=document):
+                self.manager_response = document
+                value = self.run_bootstrap()
+                self.assertEqual(value['code'], 'agent_missing')
+                self.assertFalse(value['credentials_ready'])
+        self.assertFalse(self.load_calls)
+
+    def test_manager_environment_rejects_malformed_json_without_exposing_data(self):
+        with patch.object(bootstrap, 'command', return_value=(0, b'PRIVATE malformed {')):
+            with self.assertRaises(bootstrap.BootstrapError) as caught:
+                bootstrap.manager_agent_socket(self.environment)
+        self.assertEqual(caught.exception.code, 'agent_missing')
+        self.assertNotIn('PRIVATE', str(caught.exception))
 
     def test_kali_without_askpass_reports_unsupported_without_terminal_or_key_load(self):
         self.profile['agent_source'] = 'user-manager'
@@ -237,7 +278,7 @@ class CredentialBootstrapTests(unittest.TestCase):
         self.save_config()
         value = self.run_bootstrap(unlock=True)
         self.assertEqual(value['code'], 'agent_missing')
-        self.assertEqual([call[0] for call in self.calls], [[bootstrap.SYSTEMCTL, '--user', 'show-environment']])
+        self.assertEqual([call[0] for call in self.calls], [bootstrap.MANAGER_ENVIRONMENT])
 
     def test_absent_socket_and_non_socket_are_distinct_from_locked_key(self):
         self.agent.close()
