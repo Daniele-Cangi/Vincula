@@ -245,7 +245,7 @@ class OpenSSHIntegration(unittest.TestCase):
             provider.socket.parent.mkdir(parents=True, mode=0o700)
             creds = root / "credentials"
             creds.mkdir(mode=0o700)
-            private = creds / ci.CREDENTIAL
+            private = creds / ci.CREDENTIAL_NAME
             subprocess.run(["/usr/bin/ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(private)],
                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=10)
             provider.public.write_bytes(private.with_suffix(".pub").read_bytes())

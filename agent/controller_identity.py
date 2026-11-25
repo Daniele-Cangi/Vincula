@@ -23,7 +23,10 @@ else:
     fcntl = pwd = None
 
 SCHEMA = 1
-CREDENTIAL = "vincula-controller-key"
+# Public systemd credential identifier, not credential contents.
+CREDENTIAL_NAME = "vincula-controller-key"
+ENCRYPTION_PROVIDERS = ("host", "host+tpm2")
+SYSTEMCTL = "/usr/bin/systemctl"
 TOOLS = ("systemctl", "systemd-creds", "systemd-analyze", "ssh-keygen", "ssh-agent", "ssh-add", "python3")
 
 
@@ -68,7 +71,7 @@ class Controller:
     def __init__(self, owner, encryption=None, *, paths=None, runner=command, account=None):
         require(sys.platform.startswith("linux"), "Controller identity requires Linux")
         require(isinstance(owner, str) and re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}\$?", owner), "Explicit Linux owner required")
-        require(encryption in (None, "host", "host+tpm2"), "Select host or host+tpm2 encryption")
+        require(encryption is None or encryption in ENCRYPTION_PROVIDERS, "Select host or host+tpm2 encryption")
         self.account = account or pwd.getpwnam(owner)
         require(self.account.pw_name == owner, "Owner account mismatch")
         self.paths, self.runner, self.encryption = paths or Paths(), runner, encryption
@@ -99,8 +102,8 @@ class Controller:
         return output
 
     def show(self):
-        code, raw = self.run(["/usr/bin/systemctl", "show", self.name, "--property=LoadState,ActiveState,SubState,UnitFileState,MainPID,FragmentPath"], output=True)
-        values = dict(line.split("=", 1) for line in raw.splitlines() if "=" in line)
+        code, raw = self.run([SYSTEMCTL, "show", self.name, "--property=LoadState,ActiveState,SubState,UnitFileState,MainPID,FragmentPath"], output=True)
+        values = {key: value for key, separator, value in (line.partition("=") for line in raw.splitlines()) if separator}
         require(code == 0 and "LoadState" in values, "System manager state unavailable")
         return values
 
@@ -111,7 +114,7 @@ class Controller:
             "[Unit]", "Description=Vincula controller OpenSSH identity", "After=local-fs.target",
             "StartLimitIntervalSec=120", "StartLimitBurst=3", "", "[Service]", "Type=exec",
             "User=" + self.account.pw_name, "RuntimeDirectory=" + runtime, "RuntimeDirectoryMode=0700",
-            "UMask=0077", "LoadCredentialEncrypted=" + unit_word(CREDENTIAL + ":" + str(self.cipher)),
+            "UMask=0077", "LoadCredentialEncrypted=" + unit_word(CREDENTIAL_NAME + ":" + str(self.cipher)),
             "UnsetEnvironment=DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS SSH_AUTH_SOCK",
             "Environment=SSH_ASKPASS_REQUIRE=never",
             "ExecStart=" + " ".join(unit_word(x, True) for x in ("/usr/bin/ssh-agent", "-D", "-a", str(self.socket))),
@@ -218,7 +221,7 @@ class Controller:
             self._check_parents(directory)
         receipt = json.loads(self._public_file(self.receipt))
         require(receipt.get("schema") == SCHEMA and receipt.get("owner") == self.account.pw_name
-                and receipt.get("uid") == self.account.pw_uid and receipt.get("encryption") in ("host", "host+tpm2")
+                and receipt.get("uid") == self.account.pw_uid and receipt.get("encryption") in ENCRYPTION_PROVIDERS
                 and (self.encryption is None or receipt["encryption"] == self.encryption), "Controller receipt mismatch")
         require(self._public_file(self.unit) == self.unit_bytes(), "Controller unit differs from selected provider")
         for path in (self.public, self.cipher, self.unit, self.paths.helper):
@@ -275,7 +278,7 @@ class Controller:
 
     def start_ready(self):
         self.activation_attempted = True
-        self.checked(["/usr/bin/systemctl", "enable", "--now", self.name])
+        self.checked([SYSTEMCTL, "enable", "--now", self.name])
         observed = self.status()
         require(observed["system_unit"].get("ActiveState") == "active"
                 and observed["system_unit"].get("UnitFileState") == "enabled"
@@ -287,7 +290,7 @@ class Controller:
         require(os.geteuid() == self.account.pw_uid, "Credential loader must run as selected owner")
         directory = os.environ.get("CREDENTIALS_DIRECTORY", "")
         require(directory and Path(directory).is_absolute(), "System credential directory unavailable")
-        private = Path(directory) / CREDENTIAL
+        private = Path(directory) / CREDENTIAL_NAME
         info = private.lstat()
         require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid in (0, self.account.pw_uid) and not info.st_mode & 0o077,
                 "System credential is not private")
@@ -302,7 +305,7 @@ class Controller:
     def _identity(self, stage):
         private, cipher = stage / "identity", stage / "identity.cred"
         self.checked(["/usr/bin/ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "vincula-controller-" + str(self.account.pw_uid), "-f", str(private)])
-        self.checked(["/usr/bin/systemd-creds", "--name=" + CREDENTIAL, "--with-key=" + self.encryption,
+        self.checked(["/usr/bin/systemd-creds", "--name=" + CREDENTIAL_NAME, "--with-key=" + self.encryption,
                       "encrypt", str(private), str(cipher)])
         # Read only the PUBLIC key and OS-encrypted envelope, never the plaintext private file.
         public = private.with_suffix(".pub").read_bytes()
@@ -319,7 +322,7 @@ class Controller:
         if self.activation_attempted:
             if not self._owned(self.unit):
                 return False
-            code, _ = self.run(["/usr/bin/systemctl", "disable", "--now", self.name])
+            code, _ = self.run([SYSTEMCTL, "disable", "--now", self.name])
             if code != 0:
                 return False
             state = self.show()
@@ -328,7 +331,7 @@ class Controller:
         for path in reversed(list(self.created)):
             if self._owned(path):
                 path.unlink()
-        self.run(["/usr/bin/systemctl", "daemon-reload"])
+        self.run([SYSTEMCTL, "daemon-reload"])
         return True
 
     def install(self):
@@ -363,7 +366,7 @@ class Controller:
                                "sha256": {str(path): digest(raw) for path, raw in payloads.items()}}
                     self._publish(self.receipt, (json.dumps(receipt, indent=2) + "\n").encode())
                     self.checked(["/usr/bin/systemd-analyze", "verify", str(self.unit)])
-                    self.checked(["/usr/bin/systemctl", "daemon-reload"])
+                    self.checked([SYSTEMCTL, "daemon-reload"])
                     observed = self.start_ready()
                     return {"installed": True, "fingerprint": fingerprint, **observed}
                 except (ValueError, OSError, subprocess.SubprocessError):
@@ -377,7 +380,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("plan", "status", "install", "load"))
     parser.add_argument("--owner", required=True)
-    parser.add_argument("--encryption", choices=("host", "host+tpm2"))
+    parser.add_argument("--encryption", choices=ENCRYPTION_PROVIDERS)
     args = parser.parse_args()
     try:
         provider = Controller(args.owner, args.encryption)

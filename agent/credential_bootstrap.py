@@ -343,18 +343,22 @@ def agent_socket(config, environment, *, activate=False):
     return candidate
 
 
+def check_key_file(path, name, managed):
+    item = path.lstat()
+    owners = (0, os.getuid()) if managed else (os.getuid(),)
+    if not stat.S_ISREG(item.st_mode) or item.st_uid not in owners:
+        raise BootstrapError('key_invalid', 'SSH key files must be regular files owned by this user.')
+    if name == 'identity' and stat.S_IMODE(item.st_mode) & 0o077:
+        raise BootstrapError('key_invalid', 'Private key permissions allow access by other users.')
+    if name == 'public' and item.st_mode & 0o022:
+        raise BootstrapError('key_invalid', 'The public key can be modified by other users.')
+
+
 def key_metadata(key):
     # Do not open/read the private file. Only OpenSSH receives its filename.
     managed = 'identity_agent' in key
     for name in ('public',) if managed else ('identity', 'public'):
-        item = key[name].lstat()
-        owners = (0, os.getuid()) if managed else (os.getuid(),)
-        if not stat.S_ISREG(item.st_mode) or item.st_uid not in owners:
-            raise BootstrapError('key_invalid', 'SSH key files must be regular files owned by this user.')
-        if name == 'identity' and stat.S_IMODE(item.st_mode) & 0o077:
-            raise BootstrapError('key_invalid', 'Private key permissions allow access by other users.')
-        if name == 'public' and item.st_mode & 0o022:
-            raise BootstrapError('key_invalid', 'The public key can be modified by other users.')
+        check_key_file(key[name], name, managed)
     # The public file is deliberately the only key material read by this module.
     with key['public'].open('rb') as stream:
         raw = stream.read(8193)
@@ -575,7 +579,7 @@ def merge_managed(value, states):
 def credential_selection(config):
     try:
         return credentials(config), None
-    except (BootstrapError, OSError, ValueError, TypeError, KeyError) as error:
+    except (OSError, ValueError, TypeError, KeyError) as error:
         # Report under the existing desktop lock so a malformed registry also
         # replaces a previous ready status, as it did before managed routes.
         return [], error
