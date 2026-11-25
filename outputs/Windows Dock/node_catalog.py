@@ -15,7 +15,7 @@ class CatalogError(Exception):
     pass
 
 
-def runtime_script(enrollment=False):
+def runtime_script(enrollment=False, node_check=False):
     override = os.environ.get("VINCULA_RUNTIME")
     if override:
         roots = [Path(override)]
@@ -28,6 +28,9 @@ def runtime_script(enrollment=False):
             if enrollment and not (root / "agent/node_enrollment.py").is_file():
                 raise CatalogError("Aggiorna il runtime Vincula: gli inviti richiedono agent/node_enrollment.py. "
                                    "Il catalogo manuale resta disponibile.")
+            if node_check and not (root / "agent/node_probe.py").is_file():
+                raise CatalogError("Aggiorna il runtime Vincula: la verifica del nodo richiede agent/node_probe.py. "
+                                   "Il catalogo manuale resta disponibile.")
             return script
     raise CatalogError("Runtime dei nodi incompleto. Installa nodes.py, node_registry.py e desktop_layout.py "
                        "nella cartella agent dell’app oppure imposta VINCULA_RUNTIME alla radice di Vincula.")
@@ -35,12 +38,14 @@ def runtime_script(enrollment=False):
 
 def request(payload):
     interpreter = os.environ.get("VINCULA_PYTHON") or sys.executable
-    invitation_reply = payload.get("action") in ("enrollment_export", "enrollment_preview")
+    action = str(payload.get("action", ""))
+    invitation_reply = action in ("enrollment_export", "enrollment_preview")
+    timeout = 75 if action == "enrollment_check" else 15
     try:
-        result = subprocess.run([interpreter, str(runtime_script(str(payload.get("action", "")).startswith("enrollment_")))], input=json.dumps(payload),
-                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
+        result = subprocess.run([interpreter, str(runtime_script(action.startswith("enrollment_"), action == "enrollment_check"))], input=json.dumps(payload),
+                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
     except subprocess.TimeoutExpired:
-        raise CatalogError("Il catalogo non ha risposto entro 15 secondi. Aggiorna l’elenco per verificarne lo stato.") from None
+        raise CatalogError(f"Il runtime non ha risposto entro {timeout} secondi. Aggiorna l’elenco per verificarne lo stato.") from None
     except OSError as error:
         raise CatalogError("Impossibile avviare il runtime dei nodi. " + str(error)) from None
     try:
@@ -54,6 +59,8 @@ def request(payload):
         if not isinstance(error, dict):
             error = {}
         if error.get("code") == "conflict":
+            if action == "enrollment_check":
+                raise CatalogError("Il catalogo, la rotta o la chiave host sono cambiati. Aggiorna l’elenco e ripeti la verifica.")
             raise CatalogError("Il catalogo è cambiato. Aggiorna l’elenco e riapri il modulo prima di salvare.")
         raise CatalogError("Catalogo non aggiornato. " + str(error.get("message", "Errore del runtime.")))
     complete = isinstance(reply.get("invitation"), dict) if invitation_reply else "registry" in reply and "revision" in reply

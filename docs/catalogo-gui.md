@@ -29,11 +29,34 @@ Su Linux mantieni `node_catalog.py` accanto a `windows-dock.py`, insieme ai modu
 
 Su Windows la build WinForms richiede anche `System.Web.Extensions.dll` per la serializzazione JSON. Il comando nella README include il riferimento. Il PC deve avere `py -3` con Python 3.10 o successivo disponibile oppure `VINCULA_PYTHON` configurata. L’app può essere compilata direttamente in `outputs/Linux Dock` per usare la ricerca della checkout, oppure distribuita con il runtime in uno dei percorsi indicati.
 
+La PR #20 aggiunge su main `f304b91` il [bootstrap locale delle credenziali SSH](ssh-credentials-bootstrap.md) per le sessioni utente che lo utilizzano. Il [Core ricevente Linux](core-service.md) viene configurato separatamente per partire senza login grafico o bootstrap dell'agente SSH sul destinatario. La presenza di questi componenti non prova l'avvio delle GUI o il funzionamento del desktop multinodo.
+
 ## Compatibilità e passaggi successivi
 
 Quando il registro manca, la scheda mostra il profilo a due PC e offre **Registra questo PC**. Questa operazione crea l’identità locale con un UUID. Se esiste un profilo legacy configurato, il nodo locale conserva il relativo alias storico. Le installazioni nuove iniziano con alias vuoti.
 
 Un profilo SSH legacy di un nodo già registrato rimane selezionabile nel modulo. Per passare a un percorso esplicito si sceglie **SSH esplicito** e si compilano i campi. **Da configurare** rimuove il percorso del nodo dal registro.
+
+Per gli [inviti pubblici](node-enrollment.md), **Esporta invito** conserva l’UUID del computer e la sua chiave host pubblica; **Importa invito** richiede il confronto indipendente dell’impronta e una rotta propria di questa origine. Il modulo manuale resta disponibile. La registrazione non autorizza la chiave dell’origine sul destinatario e non attiva automaticamente worker o desktop.
+
+## Verifica del nodo
+
+**Verifica nodo**, nella scheda Nodi e nel risultato dell’importazione, apre una finestra modeless e interroga il nodo selezionato. La verifica parte solo dopo l’azione esplicita; il costruttore della finestra non apre connessioni. Il risultato è vincolato agli UUID dell’origine e del destinatario e alla revisione richiesta. La finestra mostra l’UUID del nodo, la revisione del catalogo, il digest della rotta e la data dell’osservazione.
+
+| Controllo | Cosa dimostra |
+| --- | --- |
+| SSH | Autenticazione sulla rotta esplicita con il pin host configurato. Sul nodo locale non è applicabile. |
+| Identità | Corrispondenza dell’UUID persistente letto nei cataloghi del destinatario. Cataloghi discordanti o illeggibili restano espliciti. |
+| Helper | Compatibilità dei byte di sei file installati con quelli del runtime di verifica. Non certifica il processo worker attivo. |
+| Permessi | Policy `ask`/`full` e opt-in all’esecuzione generale osservati in sola lettura, se gli helper sono compatibili. |
+| Worker | Rimane **Servizio autonomo non verificato**: serve un collaudo separato. |
+| Desktop | Rimane non verificato: include motore, TLS, sessione, consenso, input e appunti. |
+
+La verifica non cambia registro, credenziali o permessi e non avvia lavori sul destinatario. Una modifica concorrente a catalogo, rotta o pin invalida il risultato; aggiorna l’elenco e ripeti il controllo. Il risultato è un’osservazione temporanea della finestra, non uno stato di disponibilità persistente. Le rotte legacy restano utilizzabili dalle funzioni esistenti ma questo nuovo controllo richiede una rotta SSH esplicita.
+
+Lo stop della condivisione resta indipendente dalla verifica e dalle operazioni di trasferimento. Il ponte GUI concede alla nuova azione 75 secondi, mentre le azioni precedenti mantengono 15 secondi; i limiti del trasporto e della raccolta sono descritti nel [contratto di verifica](node-enrollment.md). L’eventuale arresto non confermato del processo di verifica è indicato esplicitamente, senza presentare un esito riuscito.
+
+Serve un runtime completo con `agent/node_probe.py` e le sue dipendenze, oltre a `node_enrollment.py`. Un runtime minimo precedente conserva il catalogo manuale e chiede di aggiornarsi per la nuova azione. La verifica usa il catalogo selezionato da `VINCULA_NODE_REGISTRY`, o quello standard della GUI: configurare il profilo Core di Codex non migra automaticamente il catalogo Desktop. Questo incremento non distribuisce le nuove GUI sulle installazioni operative.
 
 ## Layout desktop e controlli preliminari
 
@@ -47,6 +70,6 @@ Le opzioni previste richiedono TLS e verifica delle impronte. Gli appunti produc
 
 Il preflight inventaria localmente il binario Deskflow e l’esistenza dei file SSH. **Presente** non significa collaudato. Le capacità dei nodi remoti, autenticazione, forwarding, certificati TLS e consenso grafico sono indicati come mancanti o da verificare. Una chiave host SSH verificata non autentica il certificato TLS Deskflow. Su Wayland occorre verificare i portali InputCapture/RemoteDesktop e Clipboard e il relativo consenso locale; su X11 occorre l’accesso alla sessione grafica. Il preflight non richiede né sostituisce quel consenso e non modifica i livelli agente `ask`/`full`.
 
-L’anteprima restituisce sempre `launchable:false`, `preflight.ready:false` e `active:false`: supervisor, lease, provisioning e trasporti multinodo non sono ancora implementati. In particolare il collegamento MCP di Kali non abilita automaticamente il forwarding desktop: servono credenziali dedicate con permessi limitati e una verifica effettiva. Il salvataggio del layout non altera una condivisione legacy già attiva.
+L’anteprima restituisce sempre `launchable:false`, `preflight.ready:false` e `active:false`. Il [supervisore](desktop-supervisor.md) e il [coordinatore](desktop-coordinator.md), con lease e stop circoscritto, esistono in moduli separati su main ma non sono integrati nelle GUI. La PR #19 aggiunge anche [contratti e anteprime dei profili Deskflow](desktop-backend.md), che restano non attivabili: integrazione dei trasporti, provisioning e motore gestito sono ancora da completare. Il collegamento MCP di Kali non abilita automaticamente il desktop condiviso; restano da verificare identità TLS, rete e consenso grafico. Il salvataggio del layout non altera una condivisione legacy già attiva.
 
 L’instradamento delle altre schede verso il nodo selezionato e l’attivazione Deskflow multinodo appartengono all’incremento successivo.
