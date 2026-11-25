@@ -17,6 +17,21 @@ Ogni `plan` e `install` richiede entrambe le scelte esplicite:
 
 Nessuna scelta viene dedotta dall'assenza di una GUI. Se l'operatore seleziona esplicitamente root, runtime, stato, helper, interprete e relativi antenati devono appartenere a UID 0 e non essere scrivibili da group/other; non sono ammessi symlink per stato e runtime. Per l'interprete OS sono ammessi symlink root-owned, con destinazione e antenati verificati in sola lettura. Anche eventuali directory `__pycache__` e tutte le entry preesistenti accanto agli helper devono soddisfare questa verifica: `-B` impedisce la scrittura del bytecode, non la sua lettura. Non è possibile eseguire come root un runtime modificabile da un altro account. `full` con esecuzione nativa abilitata consente lavori autonomi entro i privilegi dell'account selezionato. `ask` conserva il flusso di approvazione esatto esistente, utilizzabile dal proprietario attraverso i comandi locali anche senza Desktop. L'installazione non approva lavori pendenti.
 
+## Autorizzare l'agente una volta
+
+L'agente usa gli strumenti MCP: riceve identificativi dei nodi, capacità ed esiti e non deve conoscere password, passphrase o contenuti delle chiavi SSH. Vincula e il sistema operativo gestiscono la connessione. La configurazione iniziale del servizio richiede l'autorizzazione amministrativa locale; i successivi lavori `full` non richiedono quella password.
+
+L'autorizzazione del nodo e quella del client AI sono due controlli distinti. Per esempio, Codex può rifiutare una chiamata MCP che richiede conferma anche se il nodo è già `full`; `approval_policy="never"` non preautorizza automaticamente tali chiamate. Se l'operatore vuole delegare a Vincula le richieste verso i nodi già configurati, può aggiungere alla **tabella Vincula esistente** nel proprio `config.toml`:
+
+```toml
+[mcp_servers.vincula]
+default_tools_approval_mode = "approve"
+```
+
+Conservare i campi esistenti di comando, argomenti e ambiente. Questa è un'impostazione del solo server MCP Vincula, descritta nella [documentazione ufficiale Codex](https://learn.chatgpt.com/docs/extend/mcp?surface=cli). Non cambia il modello, l'autenticazione del client, la sandbox locale o gli altri server MCP. Le policy del destinatario continuano a valere: un nodo `ask` mantiene l'approvazione esatta e un nodo `full` esegue entro i privilegi del proprio worker. Eventuali requisiti amministrati del client rimangono vincolanti. Altri client MCP hanno le proprie impostazioni di preautorizzazione.
+
+Su un ricevente puro non serve avviare il bootstrap grafico delle chiavi SSH in uscita. Se una precedente installazione lo avvia al login, la relativa voce autostart può essere disabilitata conservandone una copia e mantenendo protette le chiavi. Il provisioning delle credenziali per un controller Linux è un componente distinto. Anche lo sblocco di un disco di sistema cifrato precede l'avvio dell'OS ed è separato dall'autenticazione dell'agente: questo installer non rimuove la cifratura.
+
 ## Uso
 
 Esempio con segnaposto da sostituire con dati verificati localmente:
@@ -58,6 +73,8 @@ Vengono creati un helper root-owned in `/usr/local/libexec/vincula/core-network.
 ## Stato e limiti della verifica
 
 `worker_running` conferma l'osservazione corrente del processo. `reboot_verified` e `desktop_ready` non vengono attestati dall'installazione. La prova richiesta dopo un riavvio deve avvenire dal controller reale, senza login grafico sul ricevente, eseguendo via MCP un lavoro autorizzato e verificandone log e codice di uscita.
+
+Il [collaudo del 25 novembre](collaudo-core-ricevente.md) documenta installazione reale, avvio di sistema e due lavori MCP dal vero Codex Windows, inclusa l'esecuzione con le chiavi in uscita del ricevente bloccate. Distingue esplicitamente questi risultati dalla prova completa senza login grafico, ancora pendente.
 
 Credenziali gestite per controller Linux, provider Windows, integrazione GUI e consenso alla condivisione schermo/input/clipboard sono componenti separate. Un ricevente Core non richiede una propria chiave in uscita. Le capacità che usano applicazioni grafiche possono richiedere una sessione grafica, indipendentemente dalla disponibilità del worker Core.
 
