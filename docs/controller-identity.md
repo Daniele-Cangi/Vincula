@@ -23,6 +23,24 @@ Per consegnare questa copia, systemd può mantenere root come proprietario e con
 
 Fonti primarie: [credenziali systemd](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#Credentials), [systemd-creds](https://www.freedesktop.org/software/systemd/man/latest/systemd-creds.html), [ssh-agent](https://man.openbsd.org/ssh-agent.1).
 
+### Directory pubbliche e segnalazione Sonar S2612
+
+Il `0755` di `_create_directory` riguarda soltanto directory amministrative nuove: i parent del codice condiviso, delle unità e della configurazione pubblicata. Consente agli account dei servizi di attraversarle e leggere codice, chiave pubblica e ricevuta; non concede scrittura a gruppo o altri. Proprietario e inode sono verificati attraverso un descrittore `O_DIRECTORY|O_NOFOLLOW` prima e dopo il cambio di modalità. Le directory preesistenti non vengono allargate.
+
+| Materiale | Protezione distinta |
+| --- | --- |
+| Chiave privata temporanea | Directory privata `0700` sotto `/run`, eliminata dopo la cifratura |
+| Involucro cifrato `identity.cred` | Root `0600`, impostato prima della pubblicazione e verificato anche dal piano senza lettura del contenuto |
+| Pubblico, ricevuta, loader e unità | Root `0644`, nelle directory condivise `0755` |
+| Socket dell'account | Directory runtime `0700` gestita da systemd |
+| Credenziale decifrata del servizio | Lettura per root/UID selezionato, con i controlli di modalità e ACL descritti sopra |
+
+La possibilità di elencare nomi e metadati pubblici non rende leggibile il file `0600` né consente di sostituirlo. I byte privati non sono pubblicati nei file `0644`. Rendere indistintamente queste directory `0700` impedirebbe al loader non root di avviarsi, in particolare dopo installazione con umask `077`.
+
+La segnalazione S2612 sul `fchmod(0755)` va quindi valutata come falso positivo di contesto per questo uso preciso, mantenendo attiva la regola. Il 25 novembre 2026 la [issue della PR #22](https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=22&issues=AaIS2jqnPN1eE77QDBhs&open=AaIS2jqnPN1eE77QDBhs) è stata classificata in Sonar come **False positive**, con motivazione nella sua cronologia e senza esclusioni o `NOSONAR`. Una nota nel codice o nella documentazione non chiude da sola una issue: la classificazione è una decisione esplicita del progetto. Questa valutazione non si estende a futuri file privati in chiaro pubblicati nello stesso percorso, né isola la credenziale da root o dal proprietario del servizio.
+
+Le regressioni verificano umask `077` e `000`, directory private `0700`, involucro `0600` già prima che sia raggiungibile dal nome pubblico, conservazione dei permessi preesistenti e rifiuto di un involucro con lettura o scrittura aggiuntiva. Le fixture di installazione usano materiale sintetico e non modificano credenziali o servizi reali.
+
 ## Pianificare e installare
 
 Sostituire `nomeutente` con l'account locale scelto. Dal checkout verificato:
