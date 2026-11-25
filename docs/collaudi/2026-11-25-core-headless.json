@@ -1,0 +1,254 @@
+{
+  "format_version": 1,
+  "date": "2026-11-25",
+  "scope": "Kali receiving Core after reboot and local encrypted-disk unlock, without a graphical user login. Not a fully unattended encrypted boot or an OS without graphical packages.",
+  "acceptance_passed": true,
+  "operator_actions": {
+    "reboot_authorized_and_performed": true,
+    "encrypted_disk_unlocked_locally": true,
+    "graphical_login_performed": false,
+    "ssh_keys_unlocked_on_receiver": false,
+    "secondary_wifi_removed_by_operator_before_reboot": true
+  },
+  "nodes": {
+    "origin_windows": "a197f389-14b2-4716-86a2-70314e2ee4e2",
+    "target_kali": "12365c6d-f1c3-41ad-a4cb-458363b2fae5",
+    "recovery_origin_ubuntu": "0d97d16f-1624-4467-b834-f0592a4d29ab"
+  },
+  "boots": {
+    "previous": "6681a602-552e-432d-b052-591899560938",
+    "verified": "201d0c36-b26f-439d-956d-769514b226ad"
+  },
+  "os_before": {
+    "observed_at_utc": "2026-11-25T20:21:21.647622+00:00",
+    "sessions": [
+      {
+        "User": "115",
+        "TimestampMonotonic": "251893293",
+        "Remote": "no",
+        "Type": "unspecified",
+        "Class": "manager-early",
+        "State": "active"
+      },
+      {
+        "User": "1000",
+        "TimestampMonotonic": "269210490",
+        "Remote": "yes",
+        "Type": "tty",
+        "Class": "user",
+        "State": "active"
+      },
+      {
+        "User": "1000",
+        "TimestampMonotonic": "269293356",
+        "Remote": "no",
+        "Type": "unspecified",
+        "Class": "manager",
+        "State": "active"
+      },
+      {
+        "User": "115",
+        "TimestampMonotonic": "251709375",
+        "Remote": "no",
+        "Type": "x11",
+        "Class": "greeter",
+        "State": "active"
+      }
+    ],
+    "services": {
+      "exit_code": 0,
+      "stdout": "Id=ssh.service\nActiveState=active\nSubState=running\nUnitFileState=enabled\nActiveEnterTimestampMonotonic=256229278\nUser=\n\nId=vincula-core-worker.service\nActiveState=active\nSubState=running\nUnitFileState=enabled\nActiveEnterTimestampMonotonic=248080569\nUser=dac\n"
+    },
+    "addresses": {
+      "exit_code": 0,
+      "stdout": "lo               UNKNOWN        127.0.0.1/8 \nwlan0            UP             192.168.1.137/24 \n"
+    },
+    "routes": {
+      "exit_code": 0,
+      "stdout": "[{\"dst\":\"default\",\"gateway\":\"192.168.1.1\",\"dev\":\"wlan0\",\"protocol\":\"dhcp\",\"prefsrc\":\"192.168.1.137\",\"metric\":700,\"flags\":[]},{\"dst\":\"192.168.1.0/24\",\"dev\":\"wlan0\",\"protocol\":\"kernel\",\"scope\":\"link\",\"prefsrc\":\"192.168.1.137\",\"metric\":700,\"flags\":[]}]\n"
+    }
+  },
+  "os_after": {
+    "observed_at_utc": "2026-11-25T20:27:59.111360+00:00",
+    "sessions": [
+      {
+        "User": "115",
+        "TimestampMonotonic": "251893293",
+        "Remote": "no",
+        "Type": "unspecified",
+        "Class": "manager-early",
+        "State": "active"
+      },
+      {
+        "User": "1000",
+        "TimestampMonotonic": "666780899",
+        "Remote": "yes",
+        "Type": "tty",
+        "Class": "user",
+        "State": "active"
+      },
+      {
+        "User": "1000",
+        "TimestampMonotonic": "666819291",
+        "Remote": "no",
+        "Type": "unspecified",
+        "Class": "manager",
+        "State": "active"
+      },
+      {
+        "User": "115",
+        "TimestampMonotonic": "251709375",
+        "Remote": "no",
+        "Type": "x11",
+        "Class": "greeter",
+        "State": "active"
+      }
+    ],
+    "services": {
+      "exit_code": 0,
+      "stdout": "Id=ssh.service\nActiveState=active\nSubState=running\nUnitFileState=enabled\nActiveEnterTimestampMonotonic=256229278\nUser=\n\nId=vincula-core-worker.service\nActiveState=active\nSubState=running\nUnitFileState=enabled\nActiveEnterTimestampMonotonic=248080569\nUser=dac\n"
+    },
+    "addresses": {
+      "exit_code": 0,
+      "stdout": "lo               UNKNOWN        127.0.0.1/8 \nwlan0            UP             192.168.1.137/24 \n"
+    },
+    "routes": {
+      "exit_code": 0,
+      "stdout": "[{\"dst\":\"default\",\"gateway\":\"192.168.1.1\",\"dev\":\"wlan0\",\"protocol\":\"dhcp\",\"prefsrc\":\"192.168.1.137\",\"metric\":700,\"flags\":[]},{\"dst\":\"192.168.1.0/24\",\"dev\":\"wlan0\",\"protocol\":\"kernel\",\"scope\":\"link\",\"prefsrc\":\"192.168.1.137\",\"metric\":700,\"flags\":[]}]\n"
+    }
+  },
+  "actual_codex_windows": {
+    "cli_version": "0.171.0",
+    "outer_job_id": "9dd3abe9-8757-4380-874c-3e9a74068cc1",
+    "outer_manifest_sha256": "c4578f342b1022a9a14dca59fbfdf5cc2b4fb990c9177607a321dcf77bc6f5cb",
+    "outer_outcome": {
+      "runtime_protocol_version": 1,
+      "state": "completed",
+      "program_exit_code": 0,
+      "reason": "exit",
+      "started": true
+    },
+    "case_sha256": "d66408e958be989291e4972c19be5d5671b46e86ad7f3a2e9a76aa88dbd6f08b",
+    "launcher_sha256": "2a8d53fae18999945804afdbb710c21f8c86f81ddf44792a8b81aec92951e9c8",
+    "mcp_calls": [
+      "get_process_execution_info",
+      "execute_process",
+      "read_process"
+    ],
+    "policy_confirmed": {
+      "mode": "full",
+      "native_enabled": true,
+      "protocol_version": 1
+    },
+    "native_result": {
+      "passed": true,
+      "phase": "job",
+      "node_id": "12365c6d-f1c3-41ad-a4cb-458363b2fae5",
+      "job_id": "dd3bc7e2-5bcd-454c-9e06-b67c4342cf24",
+      "mcp_calls": 3,
+      "manifest_sha256": "0bf9c4e8a05c8eb51f6acec5b4d1c2b912ddde84dc87ca4af91d30c694297295",
+      "output": {
+        "marker": "VINCULA_CORE_COLD_BOOT_NO_GUI",
+        "nonce": "16722afb183a49239edd2b043807582e",
+        "boot_id": "201d0c36-b26f-439d-956d-769514b226ad",
+        "uid": 1000,
+        "cgroup": "0::/system.slice/vincula-core-worker.service",
+        "env_present": {
+          "DISPLAY": false,
+          "SSH_AUTH_SOCK": false,
+          "DBUS_SESSION_BUS_ADDRESS": false
+        }
+      },
+      "exit_code": 0,
+      "events_sha256": "ec0f85590903c16ee8cff67f5766793858f2ed101a0be37663b0526e22bc8da0"
+    },
+    "request": {
+      "node_id": "12365c6d-f1c3-41ad-a4cb-458363b2fae5",
+      "job_id": "dd3bc7e2-5bcd-454c-9e06-b67c4342cf24",
+      "argv": [
+        "/usr/bin/python3",
+        "-IB",
+        "-c",
+        "import json,os;from pathlib import Path;print(json.dumps({'marker':'VINCULA_CORE_COLD_BOOT_NO_GUI','nonce':'16722afb183a49239edd2b043807582e','boot_id':Path('/proc/sys/kernel/random/boot_id').read_text().strip(),'uid':os.getuid(),'cgroup':Path('/proc/self/cgroup').read_text().strip(),'env_present':{k:k in os.environ for k in ['DISPLAY','SSH_AUTH_SOCK','DBUS_SESSION_BUS_ADDRESS']}}))"
+      ],
+      "cwd": null,
+      "env": null,
+      "stdin_text": null,
+      "timeout_seconds": 30
+    },
+    "vincula_config_sha256_before_after": "38d5e8ec05f8e8c2ccb70b4f8fe8021322713fb3de3e47433ade3808db3e4dce",
+    "configuration_model_auth_cli_unchanged": true
+  },
+  "recovery_from_ubuntu": {
+    "id": "dd3bc7e2-5bcd-454c-9e06-b67c4342cf24",
+    "state": "completed",
+    "exit_code": 0,
+    "stdout": {
+      "text": "{\"marker\": \"VINCULA_CORE_COLD_BOOT_NO_GUI\", \"nonce\": \"16722afb183a49239edd2b043807582e\", \"boot_id\": \"201d0c36-b26f-439d-956d-769514b226ad\", \"uid\": 1000, \"cgroup\": \"0::/system.slice/vincula-core-worker.service\", \"env_present\": {\"DISPLAY\": false, \"SSH_AUTH_SOCK\": false, \"DBUS_SESSION_BUS_ADDRESS\": false}}\n",
+      "truncated": false
+    },
+    "stderr": {
+      "text": "",
+      "truncated": false
+    },
+    "outcome": {
+      "runtime_protocol_version": 1,
+      "state": "completed",
+      "program_exit_code": 0,
+      "reason": "exit",
+      "started": true
+    },
+    "manifest_sha256": "0bf9c4e8a05c8eb51f6acec5b4d1c2b912ddde84dc87ca4af91d30c694297295",
+    "recovered_from_origin": "0d97d16f-1624-4467-b834-f0592a4d29ab",
+    "original_origin": "a197f389-14b2-4716-86a2-70314e2ee4e2"
+  },
+  "sdk_is_separate": {
+    "outer_job_id": "bd7d7cb2-48d6-4bde-9f42-be0fa4e155e5",
+    "kali_job_id": "9864c265-b9ed-4758-8580-1fd534024ab5",
+    "mcp_calls": 4,
+    "is_actual_codex": false
+  },
+  "runtime_sources": {
+    "receiver_core_service_sha256": "9e501a15c845f2c57b8c086359c05c057de4c9e3479a9f7fc63784bfae9e591f",
+    "ubuntu_controller_identity_sha256": "dbfb00777386cb5cdabfc7005a1705d60a75e2bcf5c969eb77e301fcde542045",
+    "prior_qa_launcher_sha256": "3d9ed0fb85e544ef1921c821086d0e626bcf4095bbcd01ad215dce31a9a5db88",
+    "fileio_qa_launcher_sha256": "2a8d53fae18999945804afdbb710c21f8c86f81ddf44792a8b81aec92951e9c8"
+  },
+  "qa_launcher_delta": {
+    "local_tests": 5,
+    "independent_review": "no P1/P2 in preflight-only delta",
+    "timeouts_seconds": [
+      20,
+      30,
+      30
+    ],
+    "oracle_and_actual_codex_lifecycle_unchanged": true,
+    "prior_timeout_cause": "unknown; file capture currently succeeds, PIPE causality not proved"
+  },
+  "limits": {
+    "greeter_x11_present": true,
+    "no_graphical_user_session_before_after": true,
+    "encrypted_disk_unlock_still_required": true,
+    "worker_account": "dac (uid1000), OS permissions apply",
+    "windows_or_kali_headless_controller_provider_certified": false,
+    "three_node_desktop_certified": false,
+    "probe_file_checks_certify_running_worker": false,
+    "production_gui_deployed_by_test": false,
+    "policies_or_credentials_changed_by_test": false,
+    "merge_performed": false
+  },
+  "evidence_sha256": {
+    "COLD_BOOT_BEFORE_AGENT.json": "f0607ddae3fbfde081c8aae3e79510cc17df7682cc6edefb10297c0d2b7be5c3",
+    "COLD_BOOT_AFTER_AGENT.json": "b7f91d0a024ea4ccb373cc95beb15c0d3f41a933d56a54d3e3aff7e5c9a55134",
+    "WINDOWS_COLD_BOOT_CASE.json": "d66408e958be989291e4972c19be5d5671b46e86ad7f3a2e9a76aa88dbd6f08b",
+    "WINDOWS_COLD_BOOT_INTENT.json": "a292bb4cebedd3c0b1f4070c81cc7c544334572bf0da34c303d8b00fff601cc4",
+    "WINDOWS_COLD_BOOT_NATIVE_RESULT.json": "307f93231402deb40e4064a760621d4f9a99f3375d072c6fc15b1a7556ff5ae5",
+    "UBUNTU_RECOVERED_COLD_BOOT_JOB.json": "e048b25268848be3d0e97e9625f0515bee3d3e47b4d0536357fa98f5a6e569a0",
+    "NATIVE_FILEIO_FREEZE.json": "494cbd6fbce142ab9db3419318d9c2c9c5daa95a9f43e2936b523c881c1de0df",
+    "NATIVE_FILEIO_REVIEW.md": "d9da2f396285a5d40b9214ca03edd98e8b44add13245d9910c8211e465f8579c",
+    "KALI_SINGLE_WIFI_RESULT.json": "6a82b2e56b08ec957ca31be6aded5a3d7bca457e2d66c12bf83ac40b62f57804",
+    "WINDOWS_KALI_SINGLE_WIFI_RESULT.json": "47a6223e4cc57aa5ed660058a845e4768be576f2620a8c7bc0534caed0f4b9af",
+    "WINDOWS_SDK_SINGLE_WIFI_RESULT.json": "76480a21f52bbcf4eb4680173ce59ef628b8a0936ecc8004dbb18e08f0161d3e",
+    "WINDOWS_ROUTE_RESTORED_NATIVE_RESULT.json": "fff47d9512f42690b4a3444f0a4c9d76e9b0790db1bece670d1c92dd028d116e"
+  }
+}

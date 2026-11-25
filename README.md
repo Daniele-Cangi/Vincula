@@ -18,8 +18,17 @@ dei nodi](docs/registro-nodi.md) consente di aggiungere altre macchine
 raggiungibili via SSH.
 
 Sul nodo di destinazione puoi scegliere **Richiedi approvazione** oppure
-**Accesso completo ai programmi autorizzati**. I lavori continuano anche
+**Accesso completo**. Abilitando anche l'[esecuzione generale](docs/native-process-mcp.md),
+l'agente può avviare nuovi programmi e argomenti senza registrarli uno per uno;
+in accesso completo non richiede conferme per ogni lavoro. I processi usano
+i privilegi dell'account del worker. I lavori continuano anche
 quando il client MCP si scollega. [Configurazione e strumenti per i lavori](docs/lavori-mcp.md)
+
+Il [servizio ricevente Linux di Vincula Core](docs/core-service.md) prepara
+l'avvio del worker con il sistema, indipendente da login grafico, Codex locale
+e condivisione del desktop. Un nodo che riceve soltanto lavori non richiede
+chiavi SSH in uscita. L'agente controller usa il proprio MCP; autenticazione
+e connessioni sono gestite da Vincula e dal sistema operativo.
 
 I lotti di calcolo assegnano lavori indipendenti a Windows e Ubuntu,
 li eseguono in parallelo e conservano gli identificatori per il recupero
