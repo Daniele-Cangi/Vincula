@@ -3,12 +3,14 @@
 """Controller transactions and isolated OpenSSH; never installs a service or contacts peers."""
 from contextlib import ExitStack
 import ast
+import errno
 import json
 import hashlib
 import os
 from pathlib import Path
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -132,6 +134,20 @@ class ControllerTests(unittest.TestCase):
     def install(self):
         with patch.object(ci.os, "geteuid", return_value=0), patch.object(self.provider, "signature", return_value=True), patch.object(self.provider, "process_ready", return_value=True):
             return self.provider.install()
+
+    def credential_acl(self, entries=None, *, version=2):
+        if entries is None:
+            entries = [(1, 4, 0xFFFFFFFF), (2, 4, self.account.pw_uid), (4, 0, 0xFFFFFFFF),
+                       (16, 4, 0xFFFFFFFF), (32, 0, 0xFFFFFFFF)]
+        return struct.pack("<I", version) + b"".join(struct.pack("<HHI", *entry) for entry in entries)
+
+    def credential_fixture(self, mode=0o400):
+        directory = self.root / "credentials"
+        directory.mkdir(mode=0o700)
+        path = directory / ci.CREDENTIAL_NAME
+        path.write_text("public metadata-only fixture\n")
+        path.chmod(mode)
+        return path
 
     def test_plan_does_not_create_files_or_call_key_tools(self):
         plan = self.provider.plan()
@@ -370,6 +386,109 @@ class ControllerTests(unittest.TestCase):
                 ci.credential_source("identity", Path(path))
         with self.assertRaises(ValueError):
             ci.credential_source("identity\n", Path('/absolute'))
+
+    def test_systemd_credential_acl_accepts_only_the_service_read_grant(self):
+        raw = self.credential_acl()
+        ci._systemd_credential_acl(raw, self.account.pw_uid, 0o440)
+        entries = list(struct.iter_unpack("<HHI", raw[4:]))
+        invalid = [raw[:-1], raw + b"\0", self.credential_acl(version=1)]
+        changes = [(0, (1, 6, 0xFFFFFFFF)), (1, (2, 4, self.account.pw_uid + 1)),
+                   (1, (2, 6, self.account.pw_uid)), (1, (8, 4, self.account.pw_gid)),
+                   (2, (4, 4, 0xFFFFFFFF)), (3, (16, 6, 0xFFFFFFFF)),
+                   (4, (32, 4, 0xFFFFFFFF)), (2, (128, 0, 0xFFFFFFFF)),
+                   (0, (1, 4, 0)), (1, (0x1002, 4, self.account.pw_uid))]
+        for index, replacement in changes:
+            changed = list(entries); changed[index] = replacement
+            invalid.append(self.credential_acl(changed))
+        invalid.append(self.credential_acl([*entries, entries[1]]))
+        for candidate in invalid:
+            with self.subTest(acl=candidate.hex()), self.assertRaises(ValueError):
+                ci._systemd_credential_acl(candidate, self.account.pw_uid, 0o440)
+        with self.assertRaises(ValueError):
+            ci._systemd_credential_acl(raw, self.account.pw_uid, 0o400)
+
+    def test_credential_without_acl_keeps_the_existing_private_mode_guard(self):
+        path = self.credential_fixture()
+        for absent in (errno.ENODATA, errno.ENOTSUP):
+            with patch.object(ci.os, "getxattr", side_effect=OSError(absent, "synthetic no ACL")):
+                for mode in (0o400, 0o600, 0o700):
+                    path.chmod(mode)
+                    ci.check_system_credential(path, self.account.pw_uid)
+                for mode in (0o440, 0o640, 0o644, 0o401):
+                    path.chmod(mode)
+                    with self.subTest(errno=absent, mode=mode), self.assertRaises(ValueError):
+                        ci.check_system_credential(path, self.account.pw_uid)
+
+    def test_credential_acl_metadata_rejects_default_malformed_and_unknown_errors(self):
+        path = self.credential_fixture(0o440)
+        descriptors = []
+        original_open = os.open
+        def capture_open(*args, **kwargs):
+            fd = original_open(*args, **kwargs); descriptors.append(fd); return fd
+        for default, access in ((b"unexpected default ACL", self.credential_acl()), (None, b"invalid"),
+                                (None, b""), (None, OSError(errno.EIO, "synthetic metadata failure")),
+                                (None, OSError("synthetic unknown metadata failure"))):
+            def metadata(_fd, name):
+                value = default if name == "system.posix_acl_default" else access
+                if value is None:
+                    raise OSError(errno.ENODATA, "synthetic absent ACL")
+                if isinstance(value, OSError):
+                    raise value
+                return value
+            with patch.object(ci.os, "open", side_effect=capture_open), patch.object(ci.os, "getxattr", side_effect=metadata):
+                with self.assertRaises((ValueError, OSError)):
+                    ci.check_system_credential(path, self.account.pw_uid)
+        for fd in descriptors:
+            with self.assertRaises(OSError):
+                os.fstat(fd)
+
+    def test_load_accepts_real_acl_metadata_without_reading_fixture_contents(self):
+        private = self.credential_fixture()
+        try:
+            os.setxattr(private, "system.posix_acl_access", self.credential_acl())
+        except OSError as error:
+            if error.errno in (errno.ENOTSUP, errno.EOPNOTSUPP):
+                self.skipTest("Fixture filesystem has no POSIX ACL support")
+            raise
+        self.assertEqual(stat.S_IMODE(private.stat().st_mode), 0o440)
+        self.assertEqual(os.getxattr(private, "system.posix_acl_access"), self.credential_acl())
+        with patch.dict(ci.os.environ, {"CREDENTIALS_DIRECTORY": str(private.parent)}), \
+                patch.object(self.provider, "socket_owned", return_value=True), \
+                patch.object(self.provider, "signature", return_value=True), \
+                patch.object(ci.os, "read", side_effect=AssertionError("Credential bytes read by Python")), \
+                patch.object(Path, "read_bytes", side_effect=AssertionError("Credential bytes read by Python")), \
+                patch.object(Path, "open", side_effect=AssertionError("Credential bytes opened by Python stream")):
+            self.assertTrue(self.provider.load()["loaded"])
+        self.assertEqual([call[0] for call in self.calls], [["/usr/bin/ssh-add", str(private)]])
+
+    def test_credential_metadata_refuses_symlink_hardlinks_and_foreign_owner(self):
+        path = self.credential_fixture()
+        link = self.root / "credential-link"
+        link.symlink_to(path)
+        with self.assertRaises(OSError):
+            ci.check_system_credential(link, self.account.pw_uid)
+        link.unlink(); os.link(path, link)
+        with self.assertRaises(ValueError):
+            ci.check_system_credential(path, self.account.pw_uid)
+        link.unlink()
+        original = os.fstat
+        def foreign(fd):
+            info = original(fd)
+            return SimpleNamespace(st_mode=info.st_mode, st_nlink=info.st_nlink, st_uid=self.account.pw_uid + 1)
+        with patch.object(ci.os, "fstat", side_effect=foreign), self.assertRaises(ValueError):
+            ci.check_system_credential(path, self.account.pw_uid)
+
+    def test_credential_metadata_refuses_path_replacement(self):
+        path = self.credential_fixture()
+        replacement = self.root / "replacement"
+        replacement.write_text("foreign public fixture\n")
+        def metadata(_fd, name):
+            if name == "system.posix_acl_access":
+                os.replace(replacement, path)
+            raise OSError(errno.ENODATA, "synthetic absent ACL")
+        with patch.object(ci.os, "getxattr", side_effect=metadata), self.assertRaisesRegex(ValueError, "identity changed"):
+            ci.check_system_credential(path, self.account.pw_uid)
+        self.assertEqual(path.read_text(), "foreign public fixture\n")
 
     def test_user_parser_closes_connection_when_unref_disconnects(self):
         tree = ast.parse(CREDENTIAL_PARSE_PROGRAM)

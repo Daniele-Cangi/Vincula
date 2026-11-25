@@ -5,12 +5,14 @@ import argparse
 import base64
 from contextlib import ExitStack
 from dataclasses import dataclass
+import errno
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -51,6 +53,50 @@ def credential_source(name, path):
     value = name + ":" + str(path)
     require(all(32 <= ord(c) != 127 for c in value), "Invalid credential source")
     return value.replace("%", "%%")
+
+
+def _credential_xattr(fd, name):
+    try:
+        return os.getxattr(fd, name)
+    except OSError as error:
+        absent = {getattr(errno, key) for key in ("ENODATA", "ENOTSUP", "EOPNOTSUPP") if hasattr(errno, key)}
+        if error.errno not in absent:
+            raise
+        return None
+
+
+def _systemd_credential_acl(raw, uid, mode):
+    # Linux POSIX ACL v2: root's read-only file plus this service UID's read grant.
+    # The visible group bits are the ACL mask, not necessarily group access.
+    require(isinstance(raw, bytes) and len(raw) == 44 and type(uid) is int
+            and 0 <= uid < 0xFFFFFFFF, "Unsupported system credential ACL")
+    version, = struct.unpack_from("<I", raw)
+    entries = tuple(struct.iter_unpack("<HHI", raw[4:]))
+    expected = ((1, 4, 0xFFFFFFFF), (2, 4, uid), (4, 0, 0xFFFFFFFF),
+                (16, 4, 0xFFFFFFFF), (32, 0, 0xFFFFFFFF))
+    require(version == 2 and entries == expected and mode == 0o440,
+            "System credential ACL permits unsupported access")
+
+
+def check_system_credential(path, uid):
+    # Metadata only: never read the credential's contents through this descriptor.
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid in (0, uid),
+                "System credential is not private")
+        require(_credential_xattr(fd, "system.posix_acl_default") is None,
+                "Default ACL is not valid on a system credential")
+        acl = _credential_xattr(fd, "system.posix_acl_access")
+        if acl is None:
+            require(not info.st_mode & 0o077, "System credential is not private")
+        else:
+            _systemd_credential_acl(acl, uid, stat.S_IMODE(info.st_mode))
+        current = path.lstat()
+        require((current.st_dev, current.st_ino) == (info.st_dev, info.st_ino),
+                "System credential identity changed")
+    finally:
+        os.close(fd)
 
 
 @dataclass(frozen=True)
@@ -325,9 +371,7 @@ class Controller:
         directory = os.environ.get("CREDENTIALS_DIRECTORY", "")
         require(directory and Path(directory).is_absolute(), "System credential directory unavailable")
         private = Path(directory) / CREDENTIAL_NAME
-        info = private.lstat()
-        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid in (0, self.account.pw_uid) and not info.st_mode & 0o077,
-                "System credential is not private")
+        check_system_credential(private, self.account.pw_uid)
         deadline = time.monotonic() + 5
         while not self.socket_owned() and time.monotonic() < deadline:
             time.sleep(0.05)
