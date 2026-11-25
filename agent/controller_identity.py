@@ -45,6 +45,14 @@ def unit_word(value, executable=False):
     return '"' + (value.replace("$", "$$") if executable else value) + '"'
 
 
+def credential_source(name, path):
+    require(isinstance(name, str) and name and ":" not in name and "/" not in name
+            and Path(path).is_absolute(), "Invalid credential source")
+    value = name + ":" + str(path)
+    require(all(32 <= ord(c) != 127 for c in value), "Invalid credential source")
+    return value.replace("%", "%%")
+
+
 @dataclass(frozen=True)
 class Paths:
     configuration: Path = Path("/etc/vincula/controller")
@@ -114,7 +122,7 @@ class Controller:
             "[Unit]", "Description=Vincula controller OpenSSH identity", "After=local-fs.target",
             "StartLimitIntervalSec=120", "StartLimitBurst=3", "", "[Service]", "Type=exec",
             "User=" + self.account.pw_name, "RuntimeDirectory=" + runtime, "RuntimeDirectoryMode=0700",
-            "UMask=0077", "LoadCredentialEncrypted=" + unit_word(CREDENTIAL_NAME + ":" + str(self.cipher)),
+            "UMask=0077", "LoadCredentialEncrypted=" + credential_source(CREDENTIAL_NAME, self.cipher),
             "UnsetEnvironment=DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS SSH_AUTH_SOCK",
             "Environment=SSH_ASKPASS_REQUIRE=never",
             "ExecStart=" + " ".join(unit_word(x, True) for x in ("/usr/bin/ssh-agent", "-D", "-a", str(self.socket))),

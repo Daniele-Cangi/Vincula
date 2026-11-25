@@ -2,9 +2,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Controller transactions and isolated OpenSSH; never installs a service or contacts peers."""
 from contextlib import ExitStack
+import ast
+import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -12,8 +16,79 @@ import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+from uuid import uuid4
 
 import controller_identity as ci
+
+
+CREDENTIAL_PARSE_PROGRAM = r'''
+import json,os,sys
+try:import dbus
+except ImportError:
+ print(json.dumps({'skip':'OS Python D-Bus bindings unavailable'}));raise SystemExit(77)
+address=os.environ.get('DBUS_SESSION_BUS_ADDRESS');runtime=os.environ.get('XDG_RUNTIME_DIR')
+if not address or not runtime:
+ print(json.dumps({'skip':'Existing user bus/runtime unavailable'}));raise SystemExit(77)
+try:
+ bus=dbus.bus.BusConnection(address)
+ if not bus.name_has_owner('org.freedesktop.systemd1'):
+  bus.close();print(json.dumps({'skip':'Existing user manager unavailable'}));raise SystemExit(77)
+ manager=dbus.Interface(bus.get_object('org.freedesktop.systemd1','/org/freedesktop/systemd1'),'org.freedesktop.systemd1.Manager')
+except dbus.DBusException:
+ print(json.dumps({'skip':'Existing user manager inaccessible'}));raise SystemExit(77)
+entries=json.load(sys.stdin);refs=[];results=[]
+try:
+ for entry in entries:
+  name=entry['name'];manager.RefUnit(name);refs.append(name)
+  obj=bus.get_object('org.freedesktop.systemd1',manager.GetUnit(name))
+  props=dbus.Interface(obj,'org.freedesktop.DBus.Properties')
+  active=str(props.Get('org.freedesktop.systemd1.Unit','ActiveState'))
+  refused=bool(props.Get('org.freedesktop.systemd1.Unit','RefuseManualStart'))
+  main=int(props.Get('org.freedesktop.systemd1.Service','MainPID'))
+  executed=int(props.Get('org.freedesktop.systemd1.Service','ExecMainStartTimestampMonotonic'))
+  assert active=='inactive' and refused and main==0 and executed==0
+  parsed=[[str(a),str(b)] for a,b in props.Get('org.freedesktop.systemd1.Service','LoadCredentialEncrypted')]
+  results.append({'parsed':parsed,'active':active,'refuse_start':refused,'pid':main,'exec_timestamp':executed})
+finally:
+ try:
+  for name in reversed(refs):manager.UnrefUnit(name)
+ finally:bus.close()
+print(json.dumps({'properties':results}))
+'''
+
+
+def run_credential_parser(cases, environment):
+    if not environment.get('DBUS_SESSION_BUS_ADDRESS') or not environment.get('XDG_RUNTIME_DIR'):
+        return SimpleNamespace(returncode=77, stdout=json.dumps({'skip':'Existing user bus/runtime unavailable'})), True
+    directory = Path(environment['XDG_RUNTIME_DIR']) / 'systemd/user'
+    if not directory.is_dir():
+        return SimpleNamespace(returncode=77, stdout=json.dumps({'skip':'Existing user runtime unit directory unavailable'})), True
+    created = []
+    with ExitStack() as pins:
+        try:
+            for case in cases:
+                assert Path(case['name']).name == case['name']
+                path = directory / case['name']
+                raw = ('[Unit]\nRefuseManualStart=yes\n[Service]\nType=oneshot\nExecStart=/usr/bin/true\n' + case['line'] + '\n').encode()
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                pins.callback(os.close, fd)
+                info = os.fstat(fd)
+                created.append((path, fd, (info.st_dev, info.st_ino), hashlib.sha256(raw).hexdigest()))
+                with os.fdopen(os.dup(fd), 'wb') as stream:
+                    stream.write(raw); stream.flush(); os.fsync(stream.fileno())
+            result = subprocess.run(['/usr/bin/python3', '-I', '-B', '-c', CREDENTIAL_PARSE_PROGRAM],
+                                    input=json.dumps(cases), text=True, capture_output=True, timeout=30, env=environment)
+        finally:
+            for path, fd, identity, wanted in reversed(created):
+                if not os.path.lexists(path):
+                    continue
+                info, pinned = path.lstat(), os.fstat(fd)
+                assert stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_nlink == 1
+                assert (info.st_dev, info.st_ino) == identity == (pinned.st_dev, pinned.st_ino)
+                assert hashlib.sha256(path.read_bytes()).hexdigest() == wanted
+                path.unlink()
+        removed = all(not os.path.lexists(path) for path, *_ in created)
+    return result, removed
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "Linux controller")
@@ -280,6 +355,104 @@ class ControllerTests(unittest.TestCase):
         self.assertIn("RuntimeDirectoryMode=0700", unit)
         self.assertIn("User=tester", unit)
         self.assertNotIn("--user", unit)
+
+    def test_credential_source_is_literal_and_only_escapes_specifier_percent(self):
+        for path in ('/config with spaces/identity.cred', '/config%q/identity.cred',
+                     '/config"quote/identity.cred', '/config\\backslash/identity.cred', '/config$literal/identity.cred'):
+            with self.subTest(path=path):
+                self.assertEqual(ci.credential_source("identity", Path(path)), "identity:" + path.replace("%", "%%"))
+        expected = "LoadCredentialEncrypted=" + ci.CREDENTIAL_NAME + ":" + str(self.provider.cipher)
+        self.assertIn(expected + "\n", self.provider.unit_bytes().decode())
+
+    def test_credential_source_rejects_controls_or_relative_paths(self):
+        for path in ('relative', '/config\nfile', '/config\0file', '/config\tfile', '/config\x7ffile'):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                ci.credential_source("identity", Path(path))
+        with self.assertRaises(ValueError):
+            ci.credential_source("identity\n", Path('/absolute'))
+
+    def test_user_parser_closes_connection_when_unref_disconnects(self):
+        tree = ast.parse(CREDENTIAL_PARSE_PROGRAM)
+        transaction = next(node for node in tree.body if isinstance(node, ast.Try) and node.finalbody)
+        cleanup = ast.Module(body=transaction.finalbody, type_ignores=[])
+        program = compile(cleanup, '<parser-cleanup-fixture>', 'exec')
+        observations = []
+        disconnected = ConnectionError('synthetic user bus disconnected')
+        def unref(_name):
+            observations.append('unref')
+            raise disconnected
+        namespace = {'manager': SimpleNamespace(UnrefUnit=unref),
+                     'bus': SimpleNamespace(close=lambda: observations.append('close')), 'refs': ['fixture.service']}
+        with self.assertRaises(ConnectionError) as raised:
+            exec(program, namespace)
+        self.assertEqual(observations, ['unref', 'close'])
+        self.assertIs(raised.exception, disconnected)
+
+    def test_user_parser_parent_cleans_owned_file_and_closes_pin_after_timeout(self):
+        directory = self.root / 'runtime/systemd/user'
+        directory.mkdir(parents=True)
+        environment = {'XDG_RUNTIME_DIR': str(self.root / 'runtime'), 'DBUS_SESSION_BUS_ADDRESS': 'synthetic-unconnected-address'}
+        for replaced in (False, True):
+            with self.subTest(replaced=replaced):
+                name = 'vincula-credential-parser-' + uuid4().hex + '.service'
+                path, descriptors = directory / name, []
+                open_file = os.open
+                def capture_open(candidate, *args, **kwargs):
+                    descriptor = open_file(candidate, *args, **kwargs)
+                    if Path(candidate) == path:
+                        descriptors.append(descriptor)
+                    return descriptor
+                timeout = subprocess.TimeoutExpired('synthetic parser helper', 30)
+                def helper_timeout(*_args, **_kwargs):
+                    self.assertIn('RefuseManualStart=yes', path.read_text())
+                    self.assertEqual(len(descriptors), 1)
+                    self.assertEqual(os.fstat(descriptors[0]).st_ino, path.stat().st_ino)
+                    if replaced:
+                        foreign = path.with_suffix('.foreign')
+                        foreign.write_text('foreign public fixture')
+                        os.replace(foreign, path)
+                    raise timeout
+                with patch.object(os, 'open', side_effect=capture_open), patch.object(subprocess, 'run', side_effect=helper_timeout):
+                    with self.assertRaises(AssertionError if replaced else subprocess.TimeoutExpired) as raised:
+                        run_credential_parser([{'name': name, 'line': 'LoadCredentialEncrypted=fixture:/nonexistent.cred'}], environment)
+                if replaced:
+                    self.assertEqual(path.read_text(), 'foreign public fixture')
+                    self.assertIs(raised.exception.__context__, timeout)
+                else:
+                    self.assertFalse(os.path.lexists(path))
+                    self.assertIs(raised.exception, timeout)
+                for descriptor in descriptors:
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
+
+
+@unittest.skipUnless(sys.platform.startswith("linux") and Path('/usr/bin/python3').is_file(), "Linux user-manager property parser")
+class CredentialDirectiveParserTests(unittest.TestCase):
+    def test_user_manager_parses_actual_directive_exactly_without_start(self):
+        import pwd
+        owner = pwd.getpwuid(os.getuid())
+        with tempfile.TemporaryDirectory(prefix='vci-property-') as temporary:
+            root = Path(temporary)
+            cases = []
+            for suffix in ('plain', 'spaces %q "quote" \\backslash $literal'):
+                paths = ci.Paths(root / suffix, root / 'units', root / 'loader.py', root / 'run', root, os.getuid())
+                provider = ci.Controller(owner.pw_name, paths=paths, account=owner)
+                line = next(line for line in provider.unit_bytes().decode().splitlines() if line.startswith('LoadCredentialEncrypted='))
+                cases.append({'name':'vincula-credential-parser-'+uuid4().hex+'.service', 'line':line,
+                              'expected_source':str(provider.cipher)})
+            environment = {key: os.environ[key] for key in ('DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR') if key in os.environ}
+            environment.update(PATH='/usr/bin:/bin', LANG='C.UTF-8')
+            result, parent_removed = run_credential_parser(cases, environment)
+            if result.returncode == 77:
+                self.skipTest(json.loads(result.stdout)['skip'])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            proof = json.loads(result.stdout)
+            self.assertTrue(parent_removed)
+            self.assertEqual(len(proof['properties']), len(cases))
+            for case, parsed in zip(cases, proof['properties']):
+                self.assertEqual(parsed['parsed'], [[ci.CREDENTIAL_NAME, case['expected_source']]])
+                self.assertEqual((parsed['active'], parsed['pid'], parsed['exec_timestamp']), ('inactive', 0, 0))
+                self.assertTrue(parsed['refuse_start'])
 
 
 @unittest.skipUnless(sys.platform.startswith("linux") and all(shutil.which(x) for x in ("ssh-keygen", "ssh-agent", "ssh-add")), "OpenSSH Linux tools")
