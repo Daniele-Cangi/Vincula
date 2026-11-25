@@ -4,6 +4,12 @@ L’evoluzione di Vincula usa su ciascun host lo stesso catalogo locale per agen
 
 Il piano parte da `main` dopo la PR #8, commit `b470517`. I collaudi su ASUS Ubuntu, Lenovo Windows e Kali X260 hanno verificato inventario, lavori, trasferimenti e perdita della rete di Kali. La verifica del crash del worker richiede una prova distinta. Le valutazioni del testo allegato vengono confrontate con riproduzioni e misure prima di scegliere la soluzione.
 
+## Core e Desktop separati
+
+Vincula Core comprende MCP locale, worker sui destinatari, connessioni autenticate e policy locali. Un destinatario che riceve lavori non richiede chiavi SSH in uscita, Codex aperto o una sessione grafica. Le credenziali del controller sono gestite dal runtime e protette dal sistema operativo; l’agente indica operazioni e nodi. In `full`, con esecuzione generale abilitata dal proprietario, può utilizzare argv, interpreti e programmi compatibili entro i permessi dell’account, senza preregistrare ogni comando.
+
+Vincula Desktop aggiunge facoltativamente sessione grafica, condivisione di input e appunti e relativi consensi. La sua disponibilità non determina quella dei lavori Core. Il servizio ricevente Linux è nella [PR #21](https://github.com/Daniele-Cangi/Vincula/pull/21); il controller Linux dedicato nella [PR #22](https://github.com/Daniele-Cangi/Vincula/pull/22). Le prove applicate e i limiti di boot rimangono distinti dalle implementazioni.
+
 ## Sequenza e risultati verificabili
 
 | Fase | Risultato | Criterio di completamento |
@@ -71,7 +77,7 @@ Il [piano dei dataset grandi](large-file-transfers.md) separa manifest, prenotaz
 
 ## Stato di avanzamento
 
-Il goal è attivo dal 22 novembre 2026. La fase 1 è completata sulla release `6ac4605`: tre sessioni Codex native hanno eseguito **39 letture MCP riuscite**, tredici da ciascuna origine, con tutti i nodi disponibili e una sola identità locale corretta. Gli audit raccolti dopo tutte le chiamate confermano sei helper corretti, gli stessi worker aggiornati, dati e grant preservati, `ask` e opt-in nativo disabilitato. Il [collaudo delle sessioni](collaudo-sessioni-agenti.md) e il [riepilogo pubblico con hash dei JSONL](collaudi/2026-11-22-mcp-triade.json) distinguono questa prova dalla precedente revisione `b470517`. Codex Windows era stato aggiornato da 0.161 a 0.171. La revisione installata è verificata mediante avvio, hash e ricevute dei processi; il solo stato hardware non la certifica.
+Il goal è attivo dal 22 novembre 2026. Il primo collaudo della fase 1 è stato completato il 22 novembre sulla release `6ac4605`: tre sessioni Codex native hanno eseguito **39 letture MCP riuscite**, tredici da ciascuna origine, con tutti i nodi disponibili e una sola identità locale corretta. Gli audit raccolti dopo tutte le chiamate confermano sei helper corretti, gli stessi worker aggiornati, dati e grant preservati, `ask` e opt-in nativo disabilitato. Il [collaudo delle sessioni](collaudo-sessioni-agenti.md) e il [riepilogo pubblico con hash dei JSONL](collaudi/2026-11-22-mcp-triade.json) distinguono questa prova dalla precedente revisione `b470517`. Codex Windows era stato aggiornato da 0.161 a 0.171. La revisione installata è verificata mediante avvio, hash e ricevute dei processi; il solo stato hardware non la certifica.
 
 Il [benchmark sui tre PC](benchmark-cpu-tre-nodi.md) è completato con dodici casi validi. Il totale mediano distribuito a freddo è 24,637 secondi, contro 20,491 secondi del seriale locale. Il risultato impone di includere località dei dati e costo del coordinamento nella scelta dei nodi. Le modalità `ask` sono conservate e le fixture sono state rimosse.
 
@@ -89,4 +95,8 @@ Il runtime operativo e i sei helper sono stati aggiornati sui tre PC alla revisi
 
 Le icone Ubuntu e Windows puntano alla release installata, indipendente dal checkout di sviluppo. Prima dell’attivazione Windows è stato corretto e verificato l’accesso in lettura e avvio per l’utente non elevato, conservando il codice non scrivibile. Le finestre già aperte non sono state terminate; l’attivazione delle nuove GUI al successivo avvio e il loro collaudo restano verifiche separate.
 
-Il provisioning desktop multinodo, lo scheduler e i trasferimenti per dataset grandi restano incrementi successivi. Ogni incremento viene verificato con test mirati, review e collaudi applicabili prima della pubblicazione.
+Il primo incremento del [flusso «Aggiungi nodo»](node-enrollment.md) implementa export, preview e import di inviti pubblici nelle due GUI e nella CLI locale. L’UUID proviene dal nuovo computer, l’impronta richiede confronto esplicito e le rotte restano proprie dell’origine; il salvataggio è atomico e ripetibile. Il [collaudo degli inviti](collaudo-inviti-nodi.md) copre un quarto UUID sintetico da due origini, Windows nativo e le finestre GTK/WinForms. Non è stato aggiunto un quarto computer reale: il risultato resta `registered`, con SSH, runtime e desktop da verificare.
+
+Il [controller Core Ubuntu](collaudo-core-controller-ubuntu.md) è installato e l’app Codex ricaricata usa il profilo verificato verso tutti e tre i nodi. I destinatari sono ora `full` con esecuzione generale abilitata per scelta esplicita dell’operatore. Il flusso degli inviti conserva i due livelli e non cambia questi permessi. Il test Kali dopo boot senza login grafico richiede ancora collaudo e nuova autorizzazione al riavvio; il provider controller Kali e quello Windows rimangono separati.
+
+Autorizzazione iniziale delle chiavi pubbliche, verifica reale SSH/runtime, provisioning e attivazione del desktop multinodo con input e appunti sui tre PC restano da completare. Lo scheduler e i trasferimenti per dataset grandi sono incrementi successivi. Ogni incremento viene verificato con test mirati, review e collaudi applicabili prima della pubblicazione.

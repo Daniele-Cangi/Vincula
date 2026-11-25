@@ -1,0 +1,111 @@
+{
+  "format_version": 1,
+  "date": "2026-11-25",
+  "parent_commit": "b4b3a8c6688cca947a673c8f9545ab1c1aa38eb2",
+  "scope": "Public invitations and origin-local registration only; isolated fixtures, no production enrollment or desktop activation.",
+  "source_sha256": {
+    "agent/nodes.py": "5e1dcdf37f2d9b28056fefc8e7557f7afc77a60ca629d158447743f33946f7c2",
+    "agent/node_enrollment.py": "af2e4960bac8c1383dfbd38118744f8b26d5721d9c343590a2726652be6e9390",
+    "agent/test_node_enrollment.py": "3f9fdda59e3635cadce21f0f71d282a6a3b5591110cd89d56ae50dfd8cb12e4a",
+    "agent/test_enrollment_cli.py": "4dbccba9f026a71db79d76a3a16dc1e09bf0f040ca50cd77bfb4730d1b6f7f8b",
+    "outputs/Windows Dock/windows-dock.py": "45d77bc097577b879b0b2eb44b3d94134efa8d183289f9927fdf23756d012362",
+    "outputs/Windows Dock/node_catalog.py": "bfe4c2faf3eede0fb0c5fa04a6a2c8621fbac7013984a1d377025872ecae41b0",
+    "outputs/Linux Dock/LinuxDock.cs": "9276d5a879bfa72654be680f1fdce69518b5836f767aabe5bd187e313620c43c",
+    "docs/node-enrollment.md": "1e798678b0e3e5829446cc52dc6f0dc24223bf697eef8563f39eb105616b5320",
+    "docs/catalogo-gui.md": "e28abda087a4ebea9f6ef3afe4e479e748c93f8abe2ba0737e6fe796c214c7cd",
+    "docs/piano-infrastruttura-multinodo.md": "cb79cb4874cf53b88380a323a0cda271ed6e109eccf85914f6d4d39365592d2d",
+    "docs/collaudo-inviti-nodi.md": "45b12bd36339613f43d035ce60d1477579a8674542540cdda2750ccacff3c359",
+    "tools/qa-node-enrollment/check-gtk.py": "0a4fb8ad75c9c6f8c910d6ec6ef0a823558bf45d3c737fa3909ab2fc2e2e0934",
+    "tools/qa-node-enrollment/NativeEnrollmentQa.cs": "0fe3dde7a11f4e801439ea637308af1b11c0bef9c6ffcc14de2fe302fe288e8a"
+  },
+  "validation": {
+    "linux_runtime": {
+      "tests": 350,
+      "skipped": 14,
+      "success": true,
+      "warnings": "DeprecationWarning and ResourceWarning treated as errors"
+    },
+    "benchmark_fixture_tests": 2,
+    "mcp_smoke": "pass isolated legacy and three-node registry",
+    "windows_contract": {
+      "python": "3.14.4",
+      "job_id": "53c91e47-0e33-4514-ae4b-f603d4212827",
+      "tests": 41,
+      "skipped": 3,
+      "exit_code": 0,
+      "native_ntfs_junction": "passed",
+      "log_tail_limited": true
+    },
+    "windows_compile": {
+      "id": "26d41c49-7404-4820-b705-e27eedcdc155",
+      "state": "completed",
+      "exit_code": 0,
+      "manifest_sha256": "779598f262c25d6474ef1810ee361cb0919d4efe9de7084910287a2b92e7d188"
+    },
+    "windows_gui": {
+      "id": "86013828-85bb-4e2d-a8c6-eae007cd099a",
+      "state": "completed",
+      "exit_code": 0,
+      "manifest_sha256": "7c2147da1ec5ad0951a3500b41b6c2ec39d85ae239a79241c0576da8fa8cf62a"
+    },
+    "gtk_gui": {
+      "ok": true,
+      "scope": "temporary registry, hidden owner, offscreen dialog body only",
+      "checks": [
+        "fingerprint gate blocks GUI and direct submit",
+        "canonical preview and endpoint selection",
+        "local agent identity prefill without identity file access",
+        "registered and unchecked state",
+        "labels and buttons have complete Pango allocations",
+        "invalid export cannot open save picker",
+        "validated export preserves local UUID and both endpoints"
+      ],
+      "images": [
+        {
+          "image": "gtk-import-unverified.png",
+          "width": 680,
+          "height": 690
+        },
+        {
+          "image": "gtk-import-verified.png",
+          "width": 680,
+          "height": 690
+        },
+        {
+          "image": "gtk-import-registered.png",
+          "width": 680,
+          "height": 690
+        },
+        {
+          "image": "gtk-export-top.png",
+          "width": 680,
+          "height": 690
+        },
+        {
+          "image": "gtk-export-bottom.png",
+          "width": 680,
+          "height": 690
+        },
+        {
+          "image": "gtk-export-saved.png",
+          "width": 680,
+          "height": 690
+        }
+      ]
+    },
+    "independent_review": "One P2 junction issue fixed and re-reviewed; no open P1/P2 in reviewed scope. Final visual checkbox fix has native regression coverage."
+  },
+  "readiness": {
+    "new_real_computer_added": false,
+    "production_profiles_changed": false,
+    "ssh": "unchecked",
+    "runtime": "unchecked",
+    "desktop": "unchecked"
+  },
+  "limits": [
+    "Native Windows SaveFileDialog was not automated.",
+    "No OS boot without graphical login was certified.",
+    "No Kali reboot was performed.",
+    "Worker/authentication bootstrap, live SSH/runtime checks and multinode desktop activation remain separate increments."
+  ]
+}
