@@ -197,11 +197,61 @@ def edit_document(document, request):
     return document
 
 
+def invitation_json(text):
+    if not isinstance(text, str) or len(text.encode("utf-8")) > 32768:
+        raise ValueError("The public invitation must be UTF-8 JSON up to 32 KiB.")
+
+    def unique_fields(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate public invitation field.")
+            result[key] = value
+        return result
+
+    def invalid_number(_value):
+        raise ValueError("Invalid public invitation number.")
+
+    try:
+        return json.loads(text.removeprefix("\ufeff"), object_pairs_hook=unique_fields,
+                          parse_constant=invalid_number)
+    except RecursionError:
+        raise ValueError("The public invitation is nested too deeply.") from None
+
+
+def enrollment_request(request, path):
+    try:
+        import node_enrollment
+    except ModuleNotFoundError:
+        raise ValueError("The enrollment runtime is incomplete. Update Vincula before importing invitations.") from None
+    action = request["action"]
+    if action == "enrollment_preview":
+        request_fields(request, {"invitation_text"}, {"invitation_text"})
+        invitation = node_enrollment.validate_invitation(invitation_json(request["invitation_text"]))
+        return {"ok": True, "invitation": invitation}
+    if action == "enrollment_export":
+        request_fields(request, {"endpoints", "public_host_key"}, {"endpoints", "public_host_key"})
+        invitation = node_enrollment.create_invitation(path, request["endpoints"], request["public_host_key"])
+        return {"ok": True, "invitation": invitation}
+    fields = {"invitation", "expected_fingerprint", "endpoint_index", "local_connection"}
+    request_fields(request, fields, fields | {"expected_revision"})
+    try:
+        return node_enrollment.import_invitation(
+            path, request["invitation"], expected_revision=request["expected_revision"],
+            expected_fingerprint=request["expected_fingerprint"], endpoint_index=request["endpoint_index"],
+            local_connection=request["local_connection"])
+    except node_enrollment.EnrollmentConflict as error:
+        # A CLI __main__ and an imported nodes module have distinct exception classes.
+        raise ConflictError(str(error)) from None
+
+
 @node_registry.synchronized
 def execute(request, path):
     if not isinstance(request, dict) or not isinstance(request.get("action"), str):
         raise ValueError("Specify a JSON object with an action.")
     path = Path(path)
+    if request["action"] in {"enrollment_preview", "enrollment_export", "enrollment_import"}:
+        return enrollment_request(request, path)
     if request["action"] == "list":
         request_fields(request, set(), set())
         return snapshot(path)

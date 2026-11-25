@@ -1,0 +1,158 @@
+{
+  "format_version": 1,
+  "date": "2026-11-25",
+  "parent_commit": "b4b3a8c6688cca947a673c8f9545ab1c1aa38eb2",
+  "scope": "Public invitations and origin-local registration only; isolated fixtures, no production enrollment or desktop activation.",
+  "source_sha256": {
+    "agent/nodes.py": "5e1dcdf37f2d9b28056fefc8e7557f7afc77a60ca629d158447743f33946f7c2",
+    "agent/node_enrollment.py": "524b73040ee4e9f1ff32aed1ee96eb105c536660e330c7b1851690008b3c23f3",
+    "agent/test_node_enrollment.py": "dae943f605e1d6153ada6e81466438a28db4dca04f1323892c9c80fbdab63af4",
+    "agent/test_enrollment_cli.py": "0a09adcb2dba987cbf8f1b78eea17c9f5a5669d59f160b7ba7df008f08103820",
+    "outputs/Windows Dock/windows-dock.py": "45d77bc097577b879b0b2eb44b3d94134efa8d183289f9927fdf23756d012362",
+    "outputs/Windows Dock/node_catalog.py": "bfe4c2faf3eede0fb0c5fa04a6a2c8621fbac7013984a1d377025872ecae41b0",
+    "outputs/Linux Dock/LinuxDock.cs": "9276d5a879bfa72654be680f1fdce69518b5836f767aabe5bd187e313620c43c",
+    "docs/node-enrollment.md": "a0329d18e5611bc24b66653c082bbed375b5827b87c49aaf4061c5f5e101bcc6",
+    "docs/catalogo-gui.md": "e28abda087a4ebea9f6ef3afe4e479e748c93f8abe2ba0737e6fe796c214c7cd",
+    "docs/piano-infrastruttura-multinodo.md": "cb79cb4874cf53b88380a323a0cda271ed6e109eccf85914f6d4d39365592d2d",
+    "docs/collaudo-inviti-nodi.md": "79227a18d16db85e00153467d8037b82d061cc1557b312c92639d6f4022ad69a",
+    "tools/qa-node-enrollment/check-gtk.py": "0a4fb8ad75c9c6f8c910d6ec6ef0a823558bf45d3c737fa3909ab2fc2e2e0934",
+    "tools/qa-node-enrollment/NativeEnrollmentQa.cs": "0fe3dde7a11f4e801439ea637308af1b11c0bef9c6ffcc14de2fe302fe288e8a"
+  },
+  "validation": {
+    "linux_runtime": {
+      "tests": 354,
+      "skipped": 15,
+      "success": true,
+      "warnings": "DeprecationWarning and ResourceWarning treated as errors",
+      "source_commit": "67ed05b2a154ed9e564089148885f12accc6860d",
+      "scope": "Full functional snapshot; final maintenance-only helper extraction also passed 28 targeted tests before/after. Hosted matrix revalidates the final published source."
+    },
+    "benchmark_fixture_tests": 2,
+    "mcp_smoke": "pass isolated legacy and three-node registry",
+    "windows_contract": {
+      "python": "3.14.7",
+      "job_id": "74e2df2b-cf02-49af-bd56-f37ab59f5183",
+      "tests": 45,
+      "skipped": 4,
+      "skipped_cases": [
+        [
+          "test_cleanup_preserves_pin_referenced_through_a_real_directory_alias (test_node_enrollment.NodeEnrollmentTests.test_cleanup_preserves_pin_referenced_through_a_real_directory_alias)",
+          "The Windows account cannot create symlinks."
+        ],
+        [
+          "test_explicit_local_agent_route_uses_public_identity_only (test_node_enrollment.NodeEnrollmentTests.test_explicit_local_agent_route_uses_public_identity_only)",
+          "Explicit identity_agent is Linux-only"
+        ],
+        [
+          "test_symlink_pin_and_directory_are_rejected_without_following_them (test_node_enrollment.NodeEnrollmentTests.test_symlink_pin_and_directory_are_rejected_without_following_them)",
+          "The Windows account cannot create symlinks."
+        ],
+        [
+          "test_registry_override_preserves_a_file_symlink (test_nodes.NodeEditingTests.test_registry_override_preserves_a_file_symlink)",
+          "The Windows account cannot create symlinks."
+        ]
+      ],
+      "exit_code": 0,
+      "native_ntfs_junction": "passed",
+      "native_temp_8_3_roundtrip": "passed",
+      "log_tail_limited": false,
+      "manifest_sha256": "fa65bd2a244087d81244b691e11f512a22fa83d06f5621bda06126c54ad2ce17"
+    },
+    "windows_compile": {
+      "id": "26d41c49-7404-4820-b705-e27eedcdc155",
+      "state": "completed",
+      "exit_code": 0,
+      "manifest_sha256": "779598f262c25d6474ef1810ee361cb0919d4efe9de7084910287a2b92e7d188"
+    },
+    "windows_gui": {
+      "id": "86013828-85bb-4e2d-a8c6-eae007cd099a",
+      "state": "completed",
+      "exit_code": 0,
+      "manifest_sha256": "7c2147da1ec5ad0951a3500b41b6c2ec39d85ae239a79241c0576da8fa8cf62a",
+      "runtime_enrollment_sha256": "af2e4960bac8c1383dfbd38118744f8b26d5721d9c343590a2726652be6e9390",
+      "scope": "Unchanged final UI build, normal registration flow. Subsequent cleanup-only backend delta tested separately in final native contract suite."
+    },
+    "gtk_gui": {
+      "ok": true,
+      "scope": "temporary registry, hidden owner, offscreen dialog body only",
+      "checks": [
+        "fingerprint gate blocks GUI and direct submit",
+        "canonical preview and endpoint selection",
+        "local agent identity prefill without identity file access",
+        "registered and unchecked state",
+        "labels and buttons have complete Pango allocations",
+        "invalid export cannot open save picker",
+        "validated export preserves local UUID and both endpoints"
+      ],
+      "images": [
+        {
+          "image": "gtk-import-unverified.png",
+          "width": 680,
+          "height": 690
+        },
+        {
+          "image": "gtk-import-verified.png",
+          "width": 680,
+          "height": 690
+        },
+        {
+          "image": "gtk-import-registered.png",
+          "width": 680,
+          "height": 690
+        },
+        {
+          "image": "gtk-export-top.png",
+          "width": 680,
+          "height": 690
+        },
+        {
+          "image": "gtk-export-bottom.png",
+          "width": 680,
+          "height": 690
+        },
+        {
+          "image": "gtk-export-saved.png",
+          "width": 680,
+          "height": 690
+        }
+      ]
+    },
+    "independent_review": "Junction P2 and conservative cleanup/path probing correction independently re-reviewed; CLI TEMP regression reviewed. Prior automated executable-mode finding corrected; hosted checks/review rerun on corrected commit.",
+    "initial_hosted_run": {
+      "id": 45657292428,
+      "ubuntu": "2/2 success",
+      "windows": "2/2 failed in CLI fixture TEMP path; corrected with physical fixture path and native 8.3 regression."
+    },
+    "hosted_functional_commit": {
+      "sha": "67ed05b2a154ed9e564089148885f12accc6860d",
+      "run": 45658824876,
+      "jobs": "4/4 success",
+      "sonar": "gate passed, 5 maintenance issues then corrected",
+      "codex": "no major issues; comment7168744806"
+    },
+    "final_maintenance_delta": {
+      "changes": "Remove redundant exception/import, extract unchanged initial validation checks, precompute exception-test arguments.",
+      "targeted_tests": 28,
+      "targeted_skipped": 1,
+      "native_windows_tests": 45,
+      "independent_ast_review": "same check order before path/route/lock and unchanged remaining import statements",
+      "automatic_final_head_checks": "to be run on publication"
+    }
+  },
+  "readiness": {
+    "new_real_computer_added": false,
+    "production_profiles_changed": false,
+    "ssh": "unchecked",
+    "runtime": "unchecked",
+    "desktop": "unchecked"
+  },
+  "limits": [
+    "Native Windows SaveFileDialog was not automated.",
+    "No OS boot without graphical login was certified.",
+    "No Kali reboot was performed.",
+    "Worker/authentication bootstrap, live SSH/runtime checks and multinode desktop activation remain separate increments."
+  ],
+  "source_git_modes": {
+    "outputs/Windows Dock/windows-dock.py": "100755"
+  }
+}

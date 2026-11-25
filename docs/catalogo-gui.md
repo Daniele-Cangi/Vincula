@@ -2,7 +2,7 @@
 
 La scheda **Nodi** legge e modifica il registro comune di Vincula. Il salvataggio aggiorna l’identità e il percorso SSH del computer; non collauda la connessione. **Layout desktop e prerequisiti** configura il gruppo e mostra l’anteprima descritta sotto. Le altre schede continuano a usare il profilo legacy a due PC.
 
-Il pannello mostra nome, famiglia, UUID e descrizione del collegamento. **Aggiungi**, **Modifica** e **Rimuovi** usano il CLI JSON `agent/nodes.py`. Il modulo contiene UUID, nome, famiglia, tipo di collegamento, indirizzo, porta, utente, file identità, file known_hosts e rete. Per aggiungere un computer remoto usa il suo UUID Vincula verificato. L’UUID di un nodo già registrato è immutabile. I campi non esposti dal modulo, inclusi alias e indirizzo di bind, vengono conservati.
+Il pannello mostra nome, famiglia, UUID e descrizione del collegamento. **Aggiungi**, **Modifica** e **Rimuovi** usano il CLI JSON `agent/nodes.py`. Il modulo contiene UUID, nome, famiglia, tipo di collegamento, indirizzo, porta, utente, file identità, file known_hosts e rete. Per aggiungere un computer remoto usa il suo UUID Vincula verificato. L’UUID di un nodo già registrato è immutabile. I campi non esposti dal modulo, inclusi gli alias, vengono conservati. Su Linux il modulo espone anche `identity_agent` e indirizzo di bind, conservando la rotta Core quando si modifica nome o indirizzo.
 
 Ogni modifica invia la revisione letta con `expected_revision`. Quando un altro client aggiorna il registro, la GUI segnala il conflitto e propone di aggiornare l’elenco e riaprire il modulo. Il runtime protegge il nodo locale e i riferimenti del layout desktop durante la rimozione.
 
@@ -21,7 +21,7 @@ La ricerca automatica usa la cartella dell’app, la radice della checkout ricav
 
 `VINCULA_PYTHON` può indicare il percorso di un interprete Python dedicato. Il CLI del catalogo usa soltanto la libreria standard. Il registro segue `VINCULA_NODE_REGISTRY` se impostata, altrimenti i percorsi descritti in `registro-nodi.md`.
 
-Per una distribuzione minima del pannello si possono copiare `nodes.py`, `node_registry.py` e `desktop_layout.py` in una cartella `agent` accanto all’app. Il runtime completo condiviso con MCP è il percorso di installazione raccomandato per gli incrementi successivi.
+Per una distribuzione minima del pannello si possono copiare `nodes.py`, `node_registry.py` e `desktop_layout.py` in una cartella `agent` accanto all’app. Le azioni sugli inviti richiedono anche `node_enrollment.py`; se manca, viene richiesto di aggiornare il runtime, mentre il catalogo manuale resta compatibile. Il runtime completo condiviso con MCP è il percorso di installazione raccomandato per gli incrementi successivi.
 
 ## Distribuzione delle GUI
 

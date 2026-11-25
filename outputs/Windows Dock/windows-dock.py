@@ -230,12 +230,14 @@ class NodeEditor(Gtk.Window):
         field("port", "Porta SSH", ssh.get("port", 22))
         field("user", "Utente SSH", ssh.get("user", ""))
         field("identity_file", "Chiave SSH su questo PC", ssh.get("identity_file", ""))
+        field("identity_agent", "Socket agent SSH locale (facoltativo)", ssh.get("identity_agent", ""))
+        field("bind_address", "Indirizzo locale di partenza (facoltativo)", ssh.get("bind_address", ""))
         field("known_hosts_file", "known_hosts su questo PC", ssh.get("known_hosts_file", ""))
         field("network", "Rete", ssh.get("network", ""))
         self.fields["id"].set_tooltip_text("Per un computer remoto usa il suo UUID Vincula verificato.")
         if not self.local and node is None:
             self.fields["id"].set_placeholder_text("UUID verificato del computer remoto")
-        self.fields["identity_file"].set_tooltip_text("Percorso assoluto della chiave presente su questo PC.")
+        self.fields["identity_file"].set_tooltip_text("Percorso assoluto dell’identità su questo PC; con un socket agent usa il selettore pubblico .pub.")
         self.fields["known_hosts_file"].set_tooltip_text("Percorso assoluto del file con la chiave host verificata.")
         self.route.connect("changed", lambda *_args: self.update_route())
         self.update_route()
@@ -250,7 +252,7 @@ class NodeEditor(Gtk.Window):
 
     def update_route(self):
         explicit = self.route.get_active_id() == "ssh"
-        for key in ("host", "port", "user", "identity_file", "known_hosts_file", "network"):
+        for key in ("host", "port", "user", "identity_file", "identity_agent", "bind_address", "known_hosts_file", "network"):
             self.fields[key].set_sensitive(explicit)
 
     def ssh_fields(self):
@@ -258,11 +260,12 @@ class NodeEditor(Gtk.Window):
         ssh.update({key: self.fields[key].get_text().strip()
                     for key in ("host", "user", "identity_file", "known_hosts_file")})
         ssh["port"] = int(self.fields["port"].get_text())
-        network = self.fields["network"].get_text().strip()
-        if network:
-            ssh["network"] = network
-        else:
-            ssh.pop("network", None)
+        for key in ("network", "identity_agent", "bind_address"):
+            value = self.fields[key].get_text().strip()
+            if value:
+                ssh[key] = value
+            else:
+                ssh.pop(key, None)
         return ssh
 
     def request_payload(self):
@@ -306,6 +309,180 @@ class NodeEditor(Gtk.Window):
         self.form.set_sensitive(True)
         self.save_button.set_sensitive(True)
         self.status.set_text(message)
+
+
+class InvitationEditor(Gtk.Window):
+    """Public enrollment documents and credentials belonging to this computer."""
+
+    def __init__(self, owner, invitation=None):
+        super().__init__(title="Importa invito" if invitation else "Esporta invito")
+        self.owner, self.invitation = owner, invitation
+        self.revision = owner.nodes_snapshot["revision"]
+        self.saving = False
+        self.fields, self.endpoints = {}, []
+        self.get_style_context().add_class("dock")
+        self.set_transient_for(owner)
+        self.set_destroy_with_parent(True)
+        self.set_default_size(680, 690)
+        self.connect("delete-event", lambda *_: self.saving)
+        self.connect("destroy", lambda *_: setattr(owner, "invitation_editor", None))
+        body = vertical(12)
+        body.set_border_width(18)
+        self.add(body)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        self.form = vertical(10)
+        scroll.add(self.form)
+        add(body, scroll, True)
+        registry = owner.nodes_snapshot["registry"]
+        if invitation:
+            node, key = invitation["node"], invitation["ssh_host_key"]
+            self.note(f'{node["label"]} · {node["family"]}\nUUID {node["id"]}\n'
+                      f'Impronta host SSH\n{key["fingerprint"]}')
+            self.endpoint = Gtk.ComboBoxText()
+            for index, endpoint in enumerate(invitation["endpoints"]):
+                self.endpoint.append(str(index), f'{endpoint["user"]}@{endpoint["host"]}:{endpoint["port"]}'
+                                     f' · {endpoint.get("network", "")}')
+            self.endpoint.set_active(0)
+            self.endpoint.get_cells()[0].set_property("ellipsize", Pango.EllipsizeMode.END)
+            self.endpoint.get_cells()[0].set_property("max-width-chars", 60)
+            add(self.form, label("Indirizzo da usare da questo PC"))
+            add(self.form, self.endpoint)
+            identities = {tuple(node.get("ssh", {}).get(key, "") for key in
+                                ("identity_file", "identity_agent", "bind_address"))
+                          for node in registry["nodes"] if node.get("ssh", {}).get("identity_file")}
+            identity = next(iter(identities)) if len(identities) == 1 else ("", "", "")
+            self.field("identity_file", "Identità SSH locale (percorso, contenuto mai letto)", identity[0], browse=True)
+            self.field("identity_agent", "Socket agent locale (facoltativo)", identity[1])
+            self.field("bind_address", "Indirizzo locale di partenza (facoltativo)", identity[2])
+            self.note("Con un socket agent usa il selettore pubblico .pub della tua identità. "
+                      "La chiave pubblica di questa origine deve essere autorizzata sul nuovo PC.")
+            self.verified = Gtk.CheckButton(label="Ho confrontato l’impronta sul nuovo PC")
+            self.verified.get_child().set_line_wrap(True)
+            self.verified.get_child().set_max_width_chars(55)
+            self.verified.connect("toggled", lambda *_: self.submit_button.set_sensitive(self.verified.get_active()))
+            add(self.form, self.verified)
+        else:
+            local = next(node for node in registry["nodes"] if node["id"] == registry["local"])
+            self.note(f'Invito pubblico di {local["label"]}\nUUID persistente {local["id"]}\n'
+                      "Indica gli indirizzi raggiungibili e la chiave host pubblica del listener SSH effettivo.")
+            self.endpoint_box = vertical(12)
+            add(self.form, self.endpoint_box)
+            self.add_endpoint()
+            add(self.form, action_button("Aggiungi indirizzo", lambda *_: self.add_endpoint()))
+            self.field("public_host_key", "Chiave host SSH pubblica (.pub)", browse=True, public=True)
+            self.note("Solo dati pubblici. Non esporta credenziali, non configura SSH, worker o desktop.")
+        self.message = label("La registrazione lascia SSH, runtime e desktop da verificare.", "muted")
+        self.message.set_line_wrap(True)
+        add(body, self.message)
+        actions = Gtk.Box(spacing=9)
+        add(actions, action_button("Chiudi", lambda *_: self.close()))
+        self.submit_button = action_button("Registra nodo" if invitation else "Genera e salva invito", self.submit, True)
+        self.submit_button.set_sensitive(invitation is None)
+        add(actions, self.submit_button)
+        add(body, actions)
+
+    def note(self, text):
+        widget = label(text, "muted")
+        widget.set_line_wrap(True)
+        widget.set_selectable(True)
+        add(self.form, widget)
+
+    def field(self, key, caption, value="", *, browse=False, public=False):
+        add(self.form, label(caption))
+        row = Gtk.Box(spacing=8)
+        entry = Gtk.Entry(text=value)
+        add(row, entry, True)
+        if browse:
+            def choose(*_):
+                dialog = Gtk.FileChooserNative.new(caption, self, Gtk.FileChooserAction.OPEN, "Seleziona", "Annulla")
+                if public:
+                    file_filter = Gtk.FileFilter()
+                    file_filter.set_name("Chiavi pubbliche SSH (*.pub)")
+                    file_filter.add_pattern("*.pub")
+                    dialog.add_filter(file_filter)
+                if dialog.run() == Gtk.ResponseType.ACCEPT:
+                    entry.set_text(dialog.get_filename())
+                dialog.destroy()
+            add(row, action_button("Sfoglia…", choose))
+        add(self.form, row)
+        self.fields[key] = entry
+
+    def add_endpoint(self):
+        group = card(f"Indirizzo {len(self.endpoints) + 1}")
+        grid = Gtk.Grid(column_spacing=10, row_spacing=7)
+        fields = {}
+        for index, (key, caption, default) in enumerate((("host", "Host / IP", ""), ("user", "Utente SSH", ""),
+                                                       ("port", "Porta", "22"), ("network", "Rete", ""))):
+            grid.attach(label(caption), 0, index, 1, 1)
+            entry = Gtk.Entry(text=default)
+            entry.set_hexpand(True)
+            grid.attach(entry, 1, index, 1, 1)
+            fields[key] = entry
+        add(group, grid)
+        add(self.endpoint_box, group)
+        self.endpoints.append(fields)
+        group.show_all()
+
+    def submit(self, *_):
+        if self.saving or self.owner.nodes_busy:
+            return
+        try:
+            if self.invitation:
+                if not self.verified.get_active():
+                    return
+                connection = {key: entry.get_text().strip() for key, entry in self.fields.items() if entry.get_text().strip()}
+                if not connection.get("identity_file"):
+                    raise ValueError("Indica il percorso dell’identità SSH locale.")
+                payload = {"action": "enrollment_import", "invitation": self.invitation,
+                           "expected_revision": self.revision, "expected_fingerprint": self.invitation["ssh_host_key"]["fingerprint"],
+                           "endpoint_index": self.endpoint.get_active(), "local_connection": connection}
+            else:
+                endpoints = []
+                for fields in self.endpoints:
+                    endpoint = {key: entry.get_text().strip() for key, entry in fields.items()}
+                    endpoint["port"] = int(endpoint["port"])
+                    endpoints.append(endpoint)
+                public_key = node_catalog.read_public_text(self.fields["public_host_key"].get_text(), 8192, host_key=True)
+                payload = {"action": "enrollment_export", "endpoints": endpoints, "public_host_key": public_key}
+        except (OSError, ValueError, node_catalog.CatalogError) as error:
+            self.message.set_text(str(error))
+            return
+        self.saving = True
+        self.form.set_sensitive(False)
+        self.submit_button.set_sensitive(False)
+        self.message.set_text("Validazione dell’invito…")
+        self.owner.catalog_request(payload, self.finished, self.failed)
+
+    def failed(self, error):
+        self.saving = False
+        self.form.set_sensitive(True)
+        self.submit_button.set_sensitive(not self.invitation or self.verified.get_active())
+        self.message.set_text(error)
+
+    def finished(self, reply):
+        self.saving = False
+        if self.invitation:
+            steps = reply.get("next_steps", [])
+            details = "\n".join(str(step) for step in steps) if isinstance(steps, list) else str(steps)
+            self.message.set_text("Nodo registrato. SSH, runtime e desktop NON verificati.\n" + details)
+            self.owner.nodes_status.set_text("Nodo registrato; collegamento, runtime e desktop da verificare.")
+            return
+        dialog = Gtk.FileChooserNative.new("Salva invito pubblico", self, Gtk.FileChooserAction.SAVE, "Salva", "Annulla")
+        dialog.set_current_name("vincula-invito.json")
+        dialog.set_do_overwrite_confirmation(True)
+        try:
+            if dialog.run() == Gtk.ResponseType.ACCEPT:
+                Path(dialog.get_filename()).write_text(json.dumps(reply["invitation"], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                self.message.set_text("Invito pubblico salvato. Confronta l’impronta sul PC che lo importerà.")
+            else:
+                self.message.set_text("Invito validato; salvataggio annullato.")
+        except OSError as error:
+            self.message.set_text("Impossibile salvare l’invito: " + str(error))
+        finally:
+            dialog.destroy()
+            self.form.set_sensitive(True)
+            self.submit_button.set_sensitive(True)
 
 
 class DesktopEditor(Gtk.Window):
@@ -438,6 +615,7 @@ class DockWindow(Gtk.ApplicationWindow):
         self.nodes_snapshot = None
         self.node_editor = None
         self.desktop_editor = None
+        self.invitation_editor = None
         try:
             self.set_icon_from_file(str(Path(__file__).with_name("windows-dock-icon.png")))
         except GLib.Error:
@@ -502,6 +680,12 @@ class DockWindow(Gtk.ApplicationWindow):
         for button in (self.node_add, self.node_edit, self.node_remove, self.node_refresh):
             add(actions, button)
         add(page, actions)
+        invitations = Gtk.Box(spacing=8)
+        self.node_import = action_button("Importa invito", self.import_invitation)
+        self.node_export = action_button("Esporta invito", lambda *_: self.edit_invitation())
+        add(invitations, self.node_import)
+        add(invitations, self.node_export)
+        add(page, invitations)
         self.node_desktop = action_button("Layout desktop e prerequisiti", lambda *_: self.edit_desktop())
         add(page, self.node_desktop)
         guide = label("Catalogo e layout: le altre schede usano ancora il profilo a due PC.", "muted")
@@ -529,6 +713,8 @@ class DockWindow(Gtk.ApplicationWindow):
         self.node_refresh.set_sensitive(not self.nodes_busy)
         self.node_list.set_sensitive(not self.nodes_busy)
         self.node_desktop.set_sensitive(available and registry is not None)
+        self.node_import.set_sensitive(available and registry is not None)
+        self.node_export.set_sensitive(available and registry is not None)
         self.node_add.set_label("Registra questo PC" if available and registry is None else "Aggiungi")
 
     def show_catalog(self, reply):
@@ -576,7 +762,10 @@ class DockWindow(Gtk.ApplicationWindow):
             if failure:
                 failure(error)
         else:
-            self.show_catalog(reply)
+            if "registry" in reply:
+                self.show_catalog(reply)
+            else:
+                self.nodes_status.set_text("Invito pubblico validato.")
             if success:
                 success(reply)
         self.catalog_buttons()
@@ -591,6 +780,37 @@ class DockWindow(Gtk.ApplicationWindow):
             return
         self.node_editor = NodeEditor(self, node)
         self.node_editor.show_all()
+
+    def import_invitation(self, *_):
+        if self.nodes_busy or not self.nodes_snapshot or not self.nodes_snapshot["registry"]:
+            return
+        if self.invitation_editor:
+            self.invitation_editor.present()
+            return
+        dialog = Gtk.FileChooserNative.new("Apri invito pubblico Vincula", self, Gtk.FileChooserAction.OPEN, "Apri", "Annulla")
+        file_filter = Gtk.FileFilter()
+        file_filter.set_name("Inviti JSON (*.json)")
+        file_filter.add_pattern("*.json")
+        dialog.add_filter(file_filter)
+        path = dialog.get_filename() if dialog.run() == Gtk.ResponseType.ACCEPT else None
+        dialog.destroy()
+        if path:
+            try:
+                raw = node_catalog.read_public_text(path, 32768)
+            except (OSError, node_catalog.CatalogError) as error:
+                self.nodes_status.set_text(str(error))
+                return
+            self.catalog_request({"action": "enrollment_preview", "invitation_text": raw},
+                                 lambda reply: self.edit_invitation(reply["invitation"]))
+
+    def edit_invitation(self, invitation=None):
+        if self.nodes_busy or not self.nodes_snapshot or not self.nodes_snapshot["registry"]:
+            return
+        if self.invitation_editor:
+            self.invitation_editor.present()
+            return
+        self.invitation_editor = InvitationEditor(self, invitation)
+        self.invitation_editor.show_all()
 
     def edit_desktop(self):
         if self.nodes_busy or self.nodes_snapshot is None or self.nodes_snapshot["registry"] is None:

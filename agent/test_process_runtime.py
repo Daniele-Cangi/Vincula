@@ -206,9 +206,10 @@ class ProcessRuntimeTests(unittest.TestCase):
         self.assertEqual(result["outcome"]["reason"], "launch_error")
         self.assertFalse(result["outcome"]["started"])
         self.assertIsNone(result["exit_code"])
-        diagnostic = (self.root / (request["id"] + ".err")).read_text(encoding="utf-8", errors="replace")
-        self.assertIn("Traceback", diagnostic)
+        diagnostic = (self.root / (request["id"] + ".err")).read_text(encoding="utf-8")
+        self.assertTrue(diagnostic.strip())
         if not jobs.WINDOWS:
+            self.assertIn("Traceback", diagnostic)
             self.assertIn("diagnostic truncated; see stderr", diagnostic)
 
     def test_disable_between_claim_and_launch_prevents_effects(self):

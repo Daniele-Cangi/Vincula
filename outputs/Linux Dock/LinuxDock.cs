@@ -633,7 +633,7 @@ df -h -x tmpfs -x devtmpfs -x squashfs --output=target,used,avail,pcent"));
 
 internal static class NodeCatalog
 {
-    private static string RuntimeScript()
+    private static string RuntimeScript(bool enrollment)
     {
         string configured = Environment.GetEnvironmentVariable("VINCULA_RUNTIME");
         string app = AppDomain.CurrentDomain.BaseDirectory;
@@ -647,7 +647,11 @@ internal static class NodeCatalog
             string candidate = Path.Combine(root, "agent", "nodes.py");
             if (File.Exists(candidate) && File.Exists(Path.Combine(root, "agent", "node_registry.py"))
                 && File.Exists(Path.Combine(root, "agent", "desktop_layout.py")))
+            {
+                if (enrollment && !File.Exists(Path.Combine(root, "agent", "node_enrollment.py")))
+                    throw new IOException("Aggiorna il runtime Vincula: gli inviti richiedono agent/node_enrollment.py. Il catalogo manuale resta disponibile.");
                 return candidate;
+            }
         }
         throw new IOException("Runtime dei nodi incompleto. Installa nodes.py, node_registry.py e desktop_layout.py "
             + "nella cartella agent dell’app oppure imposta VINCULA_RUNTIME alla radice di Vincula.");
@@ -690,13 +694,40 @@ internal static class NodeCatalog
         catch (UnauthorizedAccessException) { return false; }
     }
 
+    internal static string ReadPublicText(string path, int limit, bool hostKey = false)
+    {
+        if (hostKey && !String.Equals(Path.GetExtension(path), ".pub", StringComparison.OrdinalIgnoreCase))
+            throw new IOException("Seleziona esclusivamente la chiave host pubblica con estensione .pub.");
+        FileAttributes attributes = File.GetAttributes(path);
+        if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory | FileAttributes.Device)) != 0)
+            throw new IOException("Seleziona un file pubblico regolare, senza collegamenti.");
+        using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            if (stream.Length > limit)
+                throw new IOException("Il file pubblico supera il limite di " + (limit / 1024) + " KiB.");
+            var bytes = new byte[limit + 1];
+            int count = 0, received;
+            while (count < bytes.Length && (received = stream.Read(bytes, count, bytes.Length - count)) > 0)
+                count += received;
+            if (count > limit)
+                throw new IOException("Il file pubblico supera il limite di " + (limit / 1024) + " KiB.");
+            string value;
+            try { value = new UTF8Encoding(false, true).GetString(bytes, 0, count); }
+            catch (DecoderFallbackException) { throw new IOException("Il file pubblico deve essere UTF-8."); }
+            if (hostKey && !value.StartsWith("ssh-ed25519 ", StringComparison.Ordinal))
+                throw new IOException("Il file selezionato non contiene una chiave SSH pubblica Ed25519.");
+            return hostKey ? value.TrimEnd('\r', '\n') : value;
+        }
+    }
+
     internal static Dictionary<string, object> Request(Dictionary<string, object> request)
     {
         var json = new JavaScriptSerializer();
+        string action = Text(request, "action");
         string interpreter = Environment.GetEnvironmentVariable("VINCULA_PYTHON");
         bool launcher = String.IsNullOrWhiteSpace(interpreter);
         var info = new ProcessStartInfo(launcher ? "py.exe" : interpreter,
-            (launcher ? "-3 " : "") + "\"" + RuntimeScript() + "\"") {
+            (launcher ? "-3 " : "") + "\"" + RuntimeScript(action.StartsWith("enrollment_", StringComparison.Ordinal)) + "\"") {
             UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
             StandardOutputEncoding = new UTF8Encoding(false), StandardErrorEncoding = new UTF8Encoding(false)
@@ -728,7 +759,10 @@ internal static class NodeCatalog
                     throw new IOException("Il catalogo è cambiato. Aggiorna l’elenco e riapri il modulo prima di salvare.");
                 throw new IOException("Catalogo non aggiornato. " + Text(detail, "message", "Errore del runtime."));
             }
-            if (process.ExitCode != 0 || !reply.ContainsKey("registry") || !reply.ContainsKey("revision"))
+            bool invitationReply = action == "enrollment_export" || action == "enrollment_preview";
+            bool complete = invitationReply ? reply.ContainsKey("invitation") && reply["invitation"] is Dictionary<string, object>
+                : reply.ContainsKey("registry") && reply.ContainsKey("revision");
+            if (process.ExitCode != 0 || !complete)
                 throw new IOException("Risposta del runtime incompleta.");
             return reply;
         }
@@ -768,10 +802,11 @@ internal sealed class DockWindow : Form
     private Dictionary<string, object> nodesSnapshot;
     private readonly ListView nodeList = new ListView();
     private readonly Label nodesStatus = new Label();
-    private Button nodeAdd, nodeEdit, nodeRemove, nodeRefresh, nodeDesktop;
+    private Button nodeAdd, nodeEdit, nodeRemove, nodeRefresh, nodeDesktop, nodeImport, nodeExport;
     private readonly TabPage nodesPage;
     private NodeEditor nodeEditor;
     private DesktopEditor desktopEditor;
+    private InvitationEditor invitationEditor;
     private readonly Button desktopButton;
     private readonly Button inputHeaderButton;
     private readonly ComboBox inputSide = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList };
@@ -1082,10 +1117,11 @@ internal sealed class DockWindow : Form
     private TabPage BuildNodes()
     {
         var page = Page("Nodi");
-        var content = PageLayout(page, 4);
+        var content = PageLayout(page, 5);
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
         content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 43));
+        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 78));
         nodesStatus.Text = "Aggiorna il catalogo per leggere i computer registrati.";
         nodesStatus.Dock = DockStyle.Fill;
@@ -1106,13 +1142,18 @@ internal sealed class DockWindow : Form
         nodeList.Columns.Add("Collegamento", 145);
         nodeList.SelectedIndexChanged += delegate { SetCatalogButtons(); };
         content.Controls.Add(nodeList, 0, 1);
-        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true, AutoSize = true };
         nodeAdd = ActionButton("Aggiungi", () => EditNode(null));
         nodeEdit = ActionButton("Modifica", () => EditNode(SelectedNode()), false);
         nodeRemove = ActionButton("Rimuovi", RemoveNode, false);
         nodeRefresh = ActionButton("Aggiorna", () => StartCatalog(new Dictionary<string, object> { { "action", "list" } }), false);
         actions.Controls.AddRange(new Control[] { nodeAdd, nodeEdit, nodeRemove, nodeRefresh });
         content.Controls.Add(actions, 0, 2);
+        var invitations = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true, AutoSize = true };
+        nodeImport = ActionButton("Importa invito", ImportInvitation, false);
+        nodeExport = ActionButton("Esporta invito", () => EditInvitation(null), false);
+        invitations.Controls.AddRange(new Control[] { nodeImport, nodeExport });
+        content.Controls.Add(invitations, 0, 3);
         var desktopActions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
         desktopActions.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
         desktopActions.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -1121,7 +1162,7 @@ internal sealed class DockWindow : Form
         desktopActions.Controls.Add(nodeDesktop, 0, 0);
         desktopActions.Controls.Add(new Label { Text = "Catalogo e layout: le altre schede usano ancora il profilo a due PC.", Dock = DockStyle.Fill,
             ForeColor = Muted, TextAlign = ContentAlignment.MiddleLeft }, 0, 1);
-        content.Controls.Add(desktopActions, 0, 3);
+        content.Controls.Add(desktopActions, 0, 4);
         SetCatalogButtons();
         return page;
     }
@@ -1149,6 +1190,8 @@ internal sealed class DockWindow : Form
         nodeList.Enabled = !nodesBusy;
         if (nodeDesktop != null)
             nodeDesktop.Enabled = available && registry != null;
+        if (nodeImport != null)
+            nodeImport.Enabled = nodeExport.Enabled = available && registry != null;
     }
 
     private void ShowCatalog(Dictionary<string, object> reply)
@@ -1184,7 +1227,8 @@ internal sealed class DockWindow : Form
         nodesStatus.Text = nodeList.Items.Count + " computer nel catalogo.";
     }
 
-    private async void StartCatalog(Dictionary<string, object> request, Action saved = null, Action<string> failed = null)
+    private async void StartCatalog(Dictionary<string, object> request, Action saved = null, Action<string> failed = null,
+        Action<Dictionary<string, object>> received = null)
     {
         if (nodesBusy)
             return;
@@ -1195,9 +1239,15 @@ internal sealed class DockWindow : Form
         try
         {
             var reply = await Task.Run(() => NodeCatalog.Request(request));
-            ShowCatalog(reply);
+            if (reply.ContainsKey("registry"))
+                ShowCatalog(reply);
+            else
+                nodesStatus.Text = "Invito pubblico validato.";
+            // Callbacks can open a dialog, but no second request may start until finally.
             if (saved != null)
                 saved();
+            if (received != null)
+                received(reply);
         }
         catch (Exception error)
         {
@@ -1228,6 +1278,47 @@ internal sealed class DockWindow : Form
         nodeEditor.Show(this);
     }
 
+    private void ImportInvitation()
+    {
+        if (nodesBusy || nodesSnapshot == null || nodesSnapshot["registry"] == null)
+            return;
+        if (invitationEditor != null)
+        {
+            invitationEditor.Activate();
+            return;
+        }
+        try
+        {
+            using (var dialog = new OpenFileDialog { Filter = "Inviti JSON (*.json)|*.json", Title = "Apri invito pubblico Vincula" })
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK)
+                    return;
+                string raw = NodeCatalog.ReadPublicText(dialog.FileName, 32768);
+                StartCatalog(new Dictionary<string, object> { { "action", "enrollment_preview" }, { "invitation_text", raw } },
+                    received: reply => EditInvitation(NodeCatalog.Map(reply["invitation"])));
+            }
+        }
+        catch (Exception error)
+        {
+            nodesStatus.Text = error.Message;
+            nodesStatus.ForeColor = Danger;
+        }
+    }
+
+    private void EditInvitation(Dictionary<string, object> invitation)
+    {
+        if (nodesSnapshot == null || nodesSnapshot["registry"] == null)
+            return;
+        if (invitationEditor != null)
+        {
+            invitationEditor.Activate();
+            return;
+        }
+        invitationEditor = new InvitationEditor(this, invitation);
+        invitationEditor.FormClosed += delegate { invitationEditor = null; };
+        invitationEditor.Show(this);
+    }
+
     private void RemoveNode()
     {
         var node = SelectedNode();
@@ -1251,6 +1342,257 @@ internal sealed class DockWindow : Form
         desktopEditor = new DesktopEditor(this);
         desktopEditor.FormClosed += delegate { desktopEditor = null; };
         desktopEditor.Show(this);
+    }
+
+    private sealed class InvitationEditor : Form
+    {
+        private readonly DockWindow owner;
+        private readonly Dictionary<string, object> invitation;
+        private readonly object revision;
+        private readonly Dictionary<string, TextBox> fields = new Dictionary<string, TextBox>();
+        private readonly List<Dictionary<string, TextBox>> endpoints = new List<Dictionary<string, TextBox>>();
+        private readonly TableLayoutPanel form = new TableLayoutPanel();
+        private readonly TableLayoutPanel endpointForm = new TableLayoutPanel();
+        private readonly ComboBox endpoint = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Top };
+        private readonly CheckBox verified = new DockCheckBox { Text = "Ho confrontato l’impronta sul nuovo PC", AutoSize = true,
+            Padding = new Padding(0, 0, 12, 0) };
+        private readonly TextBox message = ConsoleBox();
+        private readonly Button submit;
+        private bool saving;
+
+        internal InvitationEditor(DockWindow parent, Dictionary<string, object> document)
+        {
+            owner = parent;
+            invitation = document;
+            revision = parent.nodesSnapshot["revision"];
+            Text = document == null ? "Esporta invito" : "Importa invito";
+            BackColor = Canvas;
+            ForeColor = Ink;
+            Font = parent.Font;
+            AutoScaleMode = AutoScaleMode.Font;
+            MinimumSize = new Size(540, 500);
+            ClientSize = new Size(700, 740);
+            StartPosition = FormStartPosition.CenterParent;
+            var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(16) };
+            body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            body.RowStyles.Add(new RowStyle(SizeType.Absolute, 106));
+            body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            Controls.Add(body);
+            var viewport = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+            form.Dock = DockStyle.Top;
+            form.AutoSize = true;
+            form.ColumnCount = 1;
+            form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            viewport.Controls.Add(form);
+            body.Controls.Add(viewport, 0, 0);
+            var registry = NodeCatalog.Map(parent.nodesSnapshot["registry"]);
+            if (document != null)
+            {
+                var node = NodeCatalog.Map(document["node"]);
+                var key = NodeCatalog.Map(document["ssh_host_key"]);
+                Note(NodeCatalog.Text(node, "label") + " · " + NodeCatalog.Text(node, "family")
+                    + "\r\nUUID " + NodeCatalog.Text(node, "id") + "\r\nImpronta host SSH\r\n" + NodeCatalog.Text(key, "fingerprint"), 124);
+                endpoint.BackColor = Inset;
+                endpoint.ForeColor = Ink;
+                endpoint.FlatStyle = FlatStyle.Flat;
+                foreach (object item in NodeCatalog.Items(document["endpoints"]))
+                {
+                    var route = NodeCatalog.Map(item);
+                    endpoint.Items.Add(NodeCatalog.Text(route, "user") + "@" + NodeCatalog.Text(route, "host")
+                        + ":" + NodeCatalog.Text(route, "port") + " · " + NodeCatalog.Text(route, "network"));
+                }
+                endpoint.SelectedIndex = 0;
+                AddControl(new Label { Text = "Indirizzo da usare da questo PC", AutoSize = true });
+                AddControl(endpoint);
+                var identities = new List<string[]>();
+                foreach (object item in NodeCatalog.Items(registry["nodes"]))
+                {
+                    var nodeEntry = NodeCatalog.Map(item);
+                    if (!nodeEntry.ContainsKey("ssh"))
+                        continue;
+                    var ssh = NodeCatalog.Map(nodeEntry["ssh"]);
+                    string identity = NodeCatalog.Text(ssh, "identity_file");
+                    string bind = NodeCatalog.Text(ssh, "bind_address");
+                    if (identity.Length != 0 && !identities.Any(pair => pair[0] == identity && pair[1] == bind))
+                        identities.Add(new[] { identity, bind });
+                }
+                AddField("identity_file", "Identità SSH su questo PC (solo percorso)", identities.Count == 1 ? identities[0][0] : "", true);
+                AddField("bind_address", "Indirizzo locale di partenza (facoltativo)", identities.Count == 1 ? identities[0][1] : "");
+                Note("La chiave pubblica di questa origine deve essere già autorizzata sul nuovo PC. Il contenuto dell’identità locale non viene letto. L’agent esplicito non è supportato su Windows.", 92);
+                verified.MaximumSize = new Size(540, 0);
+                verified.CheckedChanged += delegate { submit.Enabled = verified.Checked && !saving; };
+                AddControl(verified);
+            }
+            else
+            {
+                var local = NodeCatalog.Items(registry["nodes"]).Select(NodeCatalog.Map)
+                    .First(node => NodeCatalog.Text(node, "id") == NodeCatalog.Text(registry, "local"));
+                Note("Invito pubblico di " + NodeCatalog.Text(local, "label") + "\r\nUUID persistente " + NodeCatalog.Text(local, "id")
+                    + "\r\nIndica indirizzi raggiungibili e chiave host pubblica del listener SSH effettivo.", 114);
+                endpointForm.Dock = DockStyle.Top;
+                endpointForm.AutoSize = true;
+                endpointForm.ColumnCount = 1;
+                endpointForm.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+                AddControl(endpointForm);
+                AddEndpoint();
+                AddControl(ActionButton("Aggiungi indirizzo", AddEndpoint, false));
+                AddField("public_host_key", "Chiave host SSH pubblica (.pub)", "", true, true);
+                Note("Solo dati pubblici. Non esporta credenziali e non configura SSH, worker o desktop.", 72);
+            }
+            message.WordWrap = true;
+            message.Font = parent.Font;
+            message.Text = "La registrazione lascia SSH, runtime e desktop da verificare.";
+            body.Controls.Add(message, 0, 1);
+            var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = true };
+            actions.Controls.Add(ActionButton("Chiudi", Close, false));
+            submit = ActionButton(document == null ? "Genera e salva invito" : "Registra nodo", Submit);
+            submit.Enabled = document == null;
+            actions.Controls.Add(submit);
+            body.Controls.Add(actions, 0, 2);
+            FormClosing += delegate(object sender, FormClosingEventArgs args) { args.Cancel = saving; };
+        }
+
+        private void AddControl(Control control)
+        {
+            int row = form.RowCount++;
+            form.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            control.Margin = new Padding(0, 0, 0, 9);
+            form.Controls.Add(control, 0, row);
+        }
+
+        private void Note(string text, int height)
+        {
+            var note = ConsoleBox();
+            note.Font = owner.Font;
+            note.Text = text;
+            note.WordWrap = true;
+            note.ForeColor = Muted;
+            note.MinimumSize = new Size(0, height);
+            note.Height = height;
+            AddControl(note);
+        }
+
+        private void AddField(string key, string caption, string value, bool browse = false, bool publicKey = false)
+        {
+            var entry = new TextBox { Text = value };
+            fields[key] = entry;
+            Action choose = delegate {
+                using (var dialog = new OpenFileDialog { Title = caption,
+                    Filter = publicKey ? "Chiavi pubbliche SSH (*.pub)|*.pub" : "Tutti i file (*.*)|*.*" })
+                    if (dialog.ShowDialog(this) == DialogResult.OK)
+                        entry.Text = dialog.FileName;
+            };
+            AddControl(Field(caption, entry, browse ? choose : null));
+        }
+
+        private void AddEndpoint()
+        {
+            var group = new GroupBox { Text = "Indirizzo " + (endpoints.Count + 1), Dock = DockStyle.Top,
+                AutoSize = true, ForeColor = Ink, BackColor = Surface, Padding = new Padding(10) };
+            var grid = new TableLayoutPanel { ColumnCount = 1, Dock = DockStyle.Top, AutoSize = true };
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            var entries = new Dictionary<string, TextBox>();
+            string[] keys = { "host", "user", "port", "network" };
+            string[] labels = { "Host / IP", "Utente SSH", "Porta", "Rete" };
+            for (int index = 0; index < keys.Length; index++)
+            {
+                var entry = new TextBox { Text = keys[index] == "port" ? "22" : "" };
+                entries[keys[index]] = entry;
+                grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                grid.Controls.Add(Field(labels[index], entry), 0, index);
+            }
+            group.Controls.Add(grid);
+            int row = endpointForm.RowCount++;
+            endpointForm.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            endpointForm.Controls.Add(group, 0, row);
+            endpoints.Add(entries);
+        }
+
+        private void Submit()
+        {
+            if (saving || owner.nodesBusy)
+                return;
+            try
+            {
+                Dictionary<string, object> payload;
+                if (invitation != null)
+                {
+                    if (!verified.Checked)
+                        return;
+                    if (String.IsNullOrWhiteSpace(fields["identity_file"].Text))
+                        throw new IOException("Indica il percorso dell’identità SSH locale.");
+                    var connection = new Dictionary<string, object>();
+                    foreach (var field in fields)
+                        if (!String.IsNullOrWhiteSpace(field.Value.Text))
+                            connection[field.Key] = field.Value.Text.Trim();
+                    payload = new Dictionary<string, object> { { "action", "enrollment_import" }, { "invitation", invitation },
+                        { "expected_revision", revision }, { "expected_fingerprint", NodeCatalog.Map(invitation["ssh_host_key"])["fingerprint"] },
+                        { "endpoint_index", endpoint.SelectedIndex }, { "local_connection", connection } };
+                }
+                else
+                {
+                    var routes = new List<object>();
+                    foreach (var entries in endpoints)
+                    {
+                        int port;
+                        if (!Int32.TryParse(entries["port"].Text, out port))
+                            throw new IOException("La porta SSH deve essere un numero intero.");
+                        routes.Add(new Dictionary<string, object> { { "host", entries["host"].Text.Trim() },
+                            { "user", entries["user"].Text.Trim() }, { "port", port }, { "network", entries["network"].Text.Trim() } });
+                    }
+                    string key = NodeCatalog.ReadPublicText(fields["public_host_key"].Text, 8192, true);
+                    payload = new Dictionary<string, object> { { "action", "enrollment_export" }, { "endpoints", routes }, { "public_host_key", key } };
+                }
+                saving = true;
+                form.Enabled = submit.Enabled = false;
+                message.Text = "Validazione dell’invito…";
+                owner.StartCatalog(payload, failed: Fail, received: Finish);
+            }
+            catch (Exception error) { Fail(error.Message); }
+        }
+
+        private void Fail(string error)
+        {
+            saving = false;
+            form.Enabled = true;
+            submit.Enabled = invitation == null || verified.Checked;
+            message.Text = error;
+        }
+
+        private void Finish(Dictionary<string, object> reply)
+        {
+            saving = false;
+            if (invitation != null)
+            {
+                object steps;
+                string details = "";
+                if (reply.TryGetValue("next_steps", out steps) && steps is object[])
+                    details = String.Join(Environment.NewLine, ((object[])steps).Select(Convert.ToString));
+                message.Text = "Nodo registrato. SSH, runtime e desktop NON verificati.\r\n"
+                    + details;
+                owner.nodesStatus.Text = "Nodo registrato; collegamento, runtime e desktop da verificare.";
+                return;
+            }
+            try
+            {
+                using (var dialog = new SaveFileDialog { Filter = "Invito JSON (*.json)|*.json", FileName = "vincula-invito.json",
+                    Title = "Salva invito pubblico", OverwritePrompt = true })
+                {
+                    if (dialog.ShowDialog(this) != DialogResult.OK)
+                    {
+                        message.Text = "Invito validato; salvataggio annullato.";
+                        return;
+                    }
+                    File.WriteAllText(dialog.FileName, new JavaScriptSerializer().Serialize(reply["invitation"]), new UTF8Encoding(false));
+                    message.Text = "Invito pubblico salvato. Confronta l’impronta sul PC che lo importerà.";
+                }
+            }
+            catch (Exception error) { message.Text = "Impossibile salvare l’invito: " + error.Message; }
+            finally
+            {
+                form.Enabled = submit.Enabled = true;
+            }
+        }
     }
 
     private sealed class DesktopEditor : Form
