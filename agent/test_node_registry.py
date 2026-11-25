@@ -6,6 +6,8 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 from subprocess import TimeoutExpired
 from tempfile import TemporaryDirectory
 import unittest
@@ -102,6 +104,65 @@ class NodeRegistryTests(unittest.TestCase):
                 server.copy_staged(source, destination, "from", "to", dict(expected, sha256="0" * 64))
             self.assertEqual(calls, [(self.windows, "from", False)])
         self.assertEqual(list(self.root.glob("relay-*")), [])
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux controller identity agent")
+    def test_explicit_agent_selects_public_file_without_requiring_socket_as_file(self):
+        public, known = self.root / "identity.pub", self.root / "hosts"
+        public.write_text("public fixture"); known.write_text("host fixture")
+        socket = self.root / "private service dir" / "agent.sock"
+        route = node_registry.ssh_route({"host": "192.0.2.30", "user": "worker",
+                                        "identity_file": str(public), "known_hosts_file": str(known),
+                                        "identity_agent": str(socket)}, "/dev/null", self.kali)
+        self.assertEqual(route.required_files, (public, known))
+        self.assertTrue(route.configured())
+        self.assertFalse(socket.exists())
+        self.assertIn(f'IdentityAgent="{socket}"', route.options)
+        self.assertEqual(route.options[route.options.index("-i") + 1], str(public))
+        self.assertIn("IdentitiesOnly=yes", server.node_ssh.OPTIONS)
+        self.assertIn("ForwardAgent=no", server.node_ssh.OPTIONS)
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux literal socket paths")
+    def test_explicit_agent_rejects_nonliteral_socket_and_private_identity(self):
+        values = {"host": "192.0.2.30", "user": "worker", "identity_file": str(self.root / "identity.pub"),
+                  "known_hosts_file": str(self.root / "hosts")}
+        for socket in (None, "relative.sock", "/run/$AGENT", "/run/%u/agent.sock", "/run/~/agent.sock", "/run/a\nb", "/run/a\tb"):
+            with self.subTest(socket=socket), self.assertRaises(ValueError):
+                node_registry.ssh_route(dict(values, identity_agent=socket), "/dev/null", self.kali)
+        values["identity_file"] = str(self.root / "private-key")
+        with self.assertRaisesRegex(ValueError, r"\.pub"):
+            node_registry.ssh_route(dict(values, identity_agent="/run/service/agent.sock"), "/dev/null", self.kali)
+        values["identity_file"] = str(self.root / "bad\tidentity.pub")
+        with self.assertRaises(ValueError):
+            node_registry.ssh_route(dict(values, identity_agent="/run/service/agent.sock"), "/dev/null", self.kali)
+        self.assertIsNotNone(node_registry.ssh_route(values, "/dev/null", self.kali))
+
+    @unittest.skipUnless(sys.platform == "linux" and shutil.which("ssh"), "Native OpenSSH configuration parser")
+    def test_native_ssh_config_round_trips_explicit_socket_without_network(self):
+        public, known = self.root / "identity.pub", self.root / "hosts"
+        public.write_text("public fixture"); known.write_text("host fixture")
+        environment = {"PATH": "/usr/bin:/bin", "HOME": str(self.root), "LANG": "C", "SSH_AUTH_SOCK": "/wrong/desktop/agent.sock"}
+        for name in ("service with spaces", "service\\with spaces"):
+            socket = self.root / name / "agent.sock"
+            route = node_registry.ssh_route({"host": "192.0.2.30", "user": "worker",
+                                            "identity_file": str(public), "known_hosts_file": str(known),
+                                            "identity_agent": str(socket)}, "/dev/null", self.kali)
+            with self.subTest(socket=str(socket)):
+                result = subprocess.run([shutil.which("ssh"), "-G", *server.node_ssh.OPTIONS, *route.options, route.destination],
+                                        env=environment, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                settings = {key: value for key, separator, value in (line.partition(" ") for line in result.stdout.splitlines()) if separator}
+                self.assertEqual(settings.get("identityagent"), str(socket))
+                self.assertEqual(settings.get("identitiesonly"), "yes")
+                self.assertEqual(settings.get("forwardagent"), "no")
+
+    def test_windows_legacy_route_unchanged_and_linux_agent_route_rejected(self):
+        values = {"host": "192.0.2.30", "user": "worker", "identity_file": str(self.root / "identity.pub"),
+                  "known_hosts_file": str(self.root / "hosts")}
+        with patch.object(node_registry.sys, "platform", "win32"):
+            legacy = node_registry.ssh_route(values, "NUL", self.kali)
+            self.assertFalse(any("IdentityAgent=" in value for value in legacy.options))
+            with self.assertRaisesRegex(ValueError, "Linux controller"):
+                node_registry.ssh_route(dict(values, identity_agent=str(self.root / "agent.sock")), "NUL", self.kali)
 
     def test_capability_plans_support_three_nodes_and_resolve_aliases(self):
         request = {"capability_id": "example.run", "parts": [

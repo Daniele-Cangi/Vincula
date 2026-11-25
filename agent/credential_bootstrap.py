@@ -46,6 +46,13 @@ def literal_path(value):
     return Path(value)
 
 
+def managed_path(value):
+    path = literal_path(value)
+    if any(c in value for c in ('"', '%', '$', '~')) or any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise BootstrapError('invalid_config', 'Managed SSH identity paths must be absolute literal paths.')
+    return path
+
+
 def private_directory(path):
     try:
         item = path.lstat()
@@ -119,6 +126,17 @@ def identity_profile(entry, config):
     return profile
 
 
+def selected_identity(profile):
+    identity = literal_path(profile.get('identity_file'))
+    if 'identity_agent' not in profile:
+        return (str(identity), None), {'identity': identity, 'public': Path(str(identity) + '.pub'), 'nodes': []}
+    identity = managed_path(profile.get('identity_file'))
+    agent = managed_path(profile['identity_agent'])
+    if identity.suffix != '.pub':
+        raise BootstrapError('invalid_config', 'An explicit SSH agent requires a .pub identity file.')
+    return (str(identity), str(agent)), {'public': identity, 'identity_agent': agent, 'nodes': []}
+
+
 def credentials(config):
     document = load_json(literal_path(config['registry']))
     if not isinstance(document, dict) or not isinstance(document.get('nodes'), list) or not 1 <= len(document['nodes']) <= 64:
@@ -132,9 +150,8 @@ def credentials(config):
         profile = identity_profile(entry, config)
         if profile is None:
             continue
-        identity = literal_path(profile.get('identity_file'))
-        key = str(identity)
-        selected.setdefault(key, {'identity': identity, 'public': Path(key + '.pub'), 'nodes': []})['nodes'].append(node_id)
+        key, value = selected_identity(profile)
+        selected.setdefault(key, value)['nodes'].append(node_id)
     if local not in identifiers:
         raise BootstrapError('invalid_registry', 'The local UUID is not registered.')
     return list(selected.values())
@@ -328,9 +345,11 @@ def agent_socket(config, environment, *, activate=False):
 
 def key_metadata(key):
     # Do not open/read the private file. Only OpenSSH receives its filename.
-    for name in ('identity', 'public'):
+    managed = 'identity_agent' in key
+    for name in ('public',) if managed else ('identity', 'public'):
         item = key[name].lstat()
-        if not stat.S_ISREG(item.st_mode) or item.st_uid != os.getuid():
+        owners = (0, os.getuid()) if managed else (os.getuid(),)
+        if not stat.S_ISREG(item.st_mode) or item.st_uid not in owners:
             raise BootstrapError('key_invalid', 'SSH key files must be regular files owned by this user.')
         if name == 'identity' and stat.S_IMODE(item.st_mode) & 0o077:
             raise BootstrapError('key_invalid', 'Private key permissions allow access by other users.')
@@ -485,8 +504,7 @@ def unlock_credentials(config, selected_env, directory, missing, automatic):
     return True, code
 
 
-def prepare(config, environment, directory, *, unlock=False, automatic=False):
-    keys = credentials(config)
+def prepare_legacy(config, keys, environment, directory, *, unlock=False, automatic=False):
     if not keys:
         return result('no_credentials_configured')
     socket = agent_socket(config, environment, activate=unlock)
@@ -512,24 +530,84 @@ def prepare(config, environment, directory, *, unlock=False, automatic=False):
     return result('unlock_timeout' if code is None else 'unlock_incomplete', keys=states)
 
 
+def managed_signs(key, environment):
+    candidate = key['identity_agent']
+    directory, item = candidate.parent.lstat(), candidate.lstat()
+    if (not stat.S_ISDIR(directory.st_mode) or directory.st_uid != os.getuid() or directory.st_mode & 0o077
+            or not stat.S_ISSOCK(item.st_mode) or item.st_uid != os.getuid()):
+        raise BootstrapError('agent_invalid', 'The configured service socket or its directory is invalid.')
+    selected = {k: v for k, v in environment.items() if k not in {
+        'DISPLAY', 'WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'SSH_ASKPASS', 'SSH_AUTH_SOCK'}}
+    selected.update(SSH_AUTH_SOCK=str(candidate), SSH_ASKPASS_REQUIRE='never')
+    code, _ = command([SSH_ADD, '-l'], selected, 5)
+    if code not in (0, 1):
+        raise BootstrapError('agent_missing', 'The configured service agent does not answer.')
+    return signs(key, selected)
+
+
+def managed_states(keys, environment):
+    states = []
+    for key in keys:
+        state = {'node_ids': key['nodes'], 'provider': 'explicit-agent', 'public_file_sha256': None}
+        try:
+            state['public_file_sha256'] = key_metadata(key)
+            state['state'] = 'ready' if managed_signs(key, environment) else 'key_locked'
+        except BootstrapError as error:
+            state['state'] = error.code
+        except FileNotFoundError:
+            state['state'] = 'agent_missing' if state['public_file_sha256'] else 'key_invalid'
+        except (OSError, ValueError, TypeError, KeyError):
+            state['state'] = 'local_input_error'
+        states.append(state)
+    return states
+
+
+def merge_managed(value, states):
+    if not states:
+        return value
+    previous = value['keys'] if value is not None else []
+    if value is not None and not value['credentials_ready']:
+        return dict(value, keys=[*previous, *states])
+    failure = next((state['state'] for state in states if state['state'] != 'ready'), None)
+    return result(failure or 'ready', ready=failure is None, keys=[*previous, *states])
+
+
+def credential_selection(config):
+    try:
+        return credentials(config), None
+    except (BootstrapError, OSError, ValueError, TypeError, KeyError) as error:
+        # Report under the existing desktop lock so a malformed registry also
+        # replaces a previous ready status, as it did before managed routes.
+        return [], error
+
+
 def run(config_path, environment, *, unlock=False, automatic=False):
     if sys.platform != 'linux':
-        return result('unsupported', message='This bootstrap supports Linux desktop sessions only.')
+        return result('unsupported', message='This bootstrap supports Linux SSH-agent credentials only.')
+    managed = []
     try:
         config = read_config(config_path)
+        keys, input_error = credential_selection(config)
+        managed = managed_states([key for key in keys if 'identity_agent' in key], environment)
+        legacy = [key for key in keys if 'identity_agent' not in key]
+        if managed and not legacy:
+            return dict(merge_managed(None, managed), state_persisted=False)
         with state_lock(environment) as directory:
             try:
-                value = prepare(config, environment, directory, unlock=unlock, automatic=automatic)
+                if input_error is not None:
+                    raise input_error
+                value = prepare_legacy(config, legacy, environment, directory, unlock=unlock, automatic=automatic)
             except BootstrapError as error:
                 value = result(error.code, message=str(error))
             except (OSError, ValueError, TypeError, KeyError):
                 value = result('local_input_error', message='A local key, registry or desktop input could not be read.')
+            value = merge_managed(value, managed)
             write_state(directory / 'status.json', value)
             return value
     except BootstrapError as error:
-        return result(error.code, message=str(error))
+        return merge_managed(result(error.code, message=str(error)), managed)
     except (OSError, ValueError, TypeError, KeyError):
-        return result('local_input_error', message='A local profile, key metadata or runtime input could not be read.')
+        return merge_managed(result('local_input_error', message='A local profile, key metadata or runtime input could not be read.'), managed)
 
 
 def desktop_quote(value):

@@ -199,7 +199,7 @@ def host_address(host):
 
 def ssh_route(data, empty_config, node_id):
     if not isinstance(data, dict) or data.keys() - {
-        "host", "user", "port", "identity_file", "known_hosts_file", "bind_address", "network",
+        "host", "user", "port", "identity_file", "identity_agent", "known_hosts_file", "bind_address", "network",
     }:
         raise ValueError("Invalid SSH route fields.")
     host = host_address(data.get("host"))
@@ -217,6 +217,14 @@ def ssh_route(data, empty_config, node_id):
                "-o", f'UserKnownHostsFile="{known}"', "-o", f"GlobalKnownHostsFile={empty_config}",
                "-o", f"HostKeyAlias=vincula-{node_id}",
                "-o", "HostKeyAlgorithms=ssh-ed25519", "-o", "UpdateHostKeys=no"]
+    if "identity_agent" in data:
+        if sys.platform != "linux":
+            raise ValueError("Explicit identity_agent routes currently require a Linux controller.")
+        agent = operator_path(data["identity_agent"])
+        if any(ord(c) < 32 or ord(c) == 127 for c in str(agent) + str(identity)) or identity.suffix != ".pub":
+            raise ValueError("An explicit SSH agent requires a literal socket path and a .pub identity file.")
+        quoted_agent = str(agent).replace("\\", "\\\\")
+        options += ["-o", f'IdentityAgent="{quoted_agent}"']
     if data.get("bind_address") is not None:
         options += ["-o", f"BindAddress={ip_address(data['bind_address'])}"]
     return Route(host, tuple(options), (identity, known), network)
