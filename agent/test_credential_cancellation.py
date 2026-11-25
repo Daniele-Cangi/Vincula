@@ -92,7 +92,9 @@ def slow_stop(process):
     else:
         original_stop(process)
 
-def synthetic_prepare(_config,_environment,directory,**_options):
+legacy_fixture={'identity':root/'unused-private','public':root/'unused-public','nodes':['fixture']}
+def synthetic_prepare(_config,keys,_environment,directory,**_options):
+    assert keys==[legacy_fixture], 'fixture did not reach the legacy preparation boundary'
     bootstrap.write_state(directory/'automatic-fixture.json',{'automatic':True})
     bootstrap.command([sys.executable,'-I','-B','-c',helper],environment,10)
     raise AssertionError('cancellation did not interrupt the synthetic helper')
@@ -105,7 +107,8 @@ fixture_reaped=False
 try:
     with patch.dict(os.environ,environment,clear=True), \
          patch.object(sys,'argv',['synthetic-cli','--config',str(config),'--action','unlock','--automatic']), \
-         patch.object(bootstrap,'prepare',side_effect=synthetic_prepare), \
+         patch.object(bootstrap,'credentials',return_value=[legacy_fixture]), \
+         patch.object(bootstrap,'prepare_legacy',side_effect=synthetic_prepare), \
          patch.object(bootstrap,'stop_helper',side_effect=slow_stop), \
          patch.object(bootstrap.subprocess,'Popen',side_effect=tracked_popen):
         try:code=bootstrap.main()

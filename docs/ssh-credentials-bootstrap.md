@@ -1,6 +1,6 @@
-# Credenziali SSH dopo il login
+# Credenziali SSH locali
 
-`agent/credential_bootstrap.py` prepara le credenziali nell’agente SSH locale. Non apre connessioni, modifica indirizzi o abilita funzioni remote. È un componente Linux standalone, separato dalla release MCP installata: può essere distribuito in una propria directory versionata senza cambiare il runtime immutabile.
+`agent/credential_bootstrap.py` prepara le credenziali desktop legacy e verifica le identità gestite dal sistema nel loro agente SSH esplicito. Non apre connessioni, modifica indirizzi o abilita funzioni remote. È un componente Linux standalone, separato dalla release MCP installata: può essere distribuito in una propria directory versionata senza cambiare il runtime immutabile.
 
 La CLI legge le `identity_file` dei nodi remoti dal registro dell’origine. Non contiene UUID dei PC. Per una voce `legacy_route` serve una corrispondenza nel profilo locale; quel nome non viene interpretato come percorso, comando o programma da importare. I profili e i percorsi non si copiano fra PC.
 
@@ -24,7 +24,29 @@ Esempio di profilo locale, da adattare e salvare con proprietario dell’utente 
 
 Il modo `user-manager` richiede `/usr/bin/busctl` con supporto JSON: legge la proprietà D-Bus [`Manager.Environment`](https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.systemd1.html) tramite [`busctl get-property --json=short`](https://www.freedesktop.org/software/systemd/man/latest/busctl.html). L’array di stringhe conserva il percorso letterale, inclusi spazi, Unicode, virgolette e caratteri speciali della shell. Il codice non interpreta né esegue la rappresentazione shell di `systemctl show-environment`; risultati malformati o più socket selezionati vengono rifiutati senza pubblicare l’ambiente.
 
-Le chiavi private vengono soltanto controllate nei metadati: file regolari, dello stesso utente, senza accesso di altri utenti. Il codice legge solo la `.pub`; il caricamento è affidato a `/usr/bin/ssh-add` con argomenti separati e al prompt locale selezionato: askpass grafico standard oppure terminale esplicitamente abilitato. Non legge, esporta o salva passphrase e non modifica il formato, la cifratura o i permessi delle chiavi.
+Per le route legacy le chiavi private vengono soltanto controllate nei metadati: file regolari, dello stesso utente, senza accesso di altri utenti. Il codice legge solo la `.pub`; il caricamento è affidato a `/usr/bin/ssh-add` con argomenti separati e al prompt locale selezionato: askpass grafico standard oppure terminale esplicitamente abilitato. Non legge, esporta o salva passphrase e non modifica il formato, la cifratura o i permessi delle chiavi.
+
+## Identità gestita con socket esplicito
+
+Su un controller Linux una route `ssh` del [registro](registro-nodi.md) può selezionare un agente di servizio già predisposto:
+
+```json
+{
+  "host": "192.0.2.30",
+  "user": "vincula",
+  "identity_file": "/etc/vincula/controller/1000/identity.pub",
+  "identity_agent": "/run/vincula-identity-1000/agent.sock",
+  "known_hosts_file": "/home/utente/.ssh/vincula_known_hosts"
+}
+```
+
+`1000` è un UID di esempio da sostituire con quello dell’account controller scelto. I percorsi sono locali all’origine, assoluti e letterali; `identity_file` deve indicare un `.pub`. Il client usa quel pubblico per selezionare la chiave già nell’agente e passa `IdentityAgent` esplicito: il socket prevale sul `SSH_AUTH_SOCK` ereditato dal desktop. Restano `IdentitiesOnly=yes`, host pin e `ForwardAgent=no`. Non viene offerta una chiave da un altro agente se il servizio manca. Questa opzione è attualmente supportata dal controller Linux; Windows conserva le route precedenti e rifiuta il nuovo campo. [Contratto OpenSSH per IdentityFile e IdentityAgent](https://man.openbsd.org/ssh_config)
+
+Il registro considera file richiesti soltanto il pubblico e known_hosts. La presenza o assenza del socket non viene valutata con `.is_file()`: una route può essere configurata anche se l’agente è fermo; autenticazione e disponibilità restano da verificare. Il bootstrap accetta un pubblico root-owned o dello stesso UID, regolare e non scrivibile da group/other. Il socket deve essere reale, dello stesso UID e nella propria directory privata `0700`; symlink e directory condivise sono rifiutati. Il provisioning è descritto separatamente nel [provider di identità controller](controller-identity.md).
+
+Per queste identità, sia `status` sia `unlock` eseguono soltanto la verifica con `ssh-add -T` del pubblico nel socket indicato, senza aggiungere `.pub` al nome. Non controllano metadati di un privato, non caricano file con `ssh-add`, non aprono popup o TTY e non installano, attivano o riavviano servizi. Un agente fermo/corrotto o una firma mancante produce non-ready; non avviene un fallback al desktop. La deduplicazione considera la coppia pubblico/socket, quindi lo stesso pubblico in due agenti riceve due verifiche distinte.
+
+Quando tutte le route sono gestite, non servono GUI, bus utente o `XDG_RUNTIME_DIR`: la CLI restituisce l’osservazione JSON datata con `state_persisted=false`, senza scrivere lo stato desktop. In un registro misto il flusso di sblocco e il lock desktop riguardano soltanto le route legacy; il risultato aggrega anche gli stati gestiti, identificati da `provider=explicit-agent`. La readiness complessiva richiede tutte le firme. Gli errori legacy non nascondono le osservazioni sulle identità gestite. Il provisioning OS, l’enrollment del pubblico sui destinatari e le policy ask/full sono separati da questa verifica.
 
 ## Uso e risultati
 
@@ -33,9 +55,9 @@ python3 -I -B /percorso/credential_bootstrap.py --config /percorso/credentials.j
 python3 -I -B /percorso/credential_bootstrap.py --config /percorso/credentials.json --action unlock
 ```
 
-`status` non richiede lo sblocco. `unlock` chiede l’input solo se una chiave configurata non firma. Se tutte firmano, riesce anche senza askpass, TTY o sessione grafica. Il campo `credentials_ready` significa soltanto che queste chiavi firmano nel socket selezionato al momento del controllo: non certifica rete, policy del destinatario, stato MCP, versione del worker o desktop.
+`status` non richiede lo sblocco. Per le route legacy, `unlock` chiede l’input solo se una chiave configurata non firma. Se tutte firmano, riesce anche senza askpass, TTY o sessione grafica. Il campo `credentials_ready` significa soltanto che queste chiavi firmano nel socket selezionato al momento del controllo: non certifica rete, policy del destinatario, stato MCP, versione del worker o desktop.
 
-I codici distinguono `agent_missing`, `agent_invalid`, `key_locked`, `key_invalid`, `graphical_session_missing`, `terminal_missing`, `unsupported`, `unlock_incomplete`, `unlock_timeout`, `busy` ed errori di input. `key_locked` significa che la chiave non può firmare attraverso quell’agente: non dimostra da solo che il privato sia cifrato. Lo stato dell’ultima richiesta viene scritto atomicamente in `$XDG_RUNTIME_DIR/vincula-credentials/status.json`, modo `0600`, sotto lock; è una misura datata, non una garanzia persistente. La verifica e il modo askpass producono solo un JSON sanitizzato; niente ambiente completo o contenuti delle chiavi. Nel modo terminale `ssh-add` usa direttamente i tre flussi TTY per il proprio prompt e i messaggi standard, poi la CLI stampa il JSON finale: per un consumatore automatico usare `status`, che non legge dal terminale.
+I codici distinguono `agent_missing`, `agent_invalid`, `key_locked`, `key_invalid`, `graphical_session_missing`, `terminal_missing`, `unsupported`, `unlock_incomplete`, `unlock_timeout`, `busy` ed errori di input. `key_locked` significa che la chiave non può firmare attraverso quell’agente: non dimostra da solo che il privato sia cifrato. Per richieste con route legacy, lo stato viene scritto atomicamente in `$XDG_RUNTIME_DIR/vincula-credentials/status.json`, modo `0600`, sotto lock; è una misura datata, non una garanzia persistente. La verifica e il modo askpass producono solo un JSON sanitizzato; niente ambiente completo o contenuti delle chiavi. Nel modo terminale `ssh-add` usa direttamente i tre flussi TTY per il proprio prompt e i messaggi standard, poi la CLI stampa il JSON finale: per un consumatore automatico usare `status`, che non legge dal terminale.
 
 L’avvio automatico aggiunge `--automatic` a `unlock`. Verifica con `loginctl show-session` il `XDG_SESSION_ID`, oppure usa `auto` quando la variabile manca: ID reale, stesso UID, tipo X11/Wayland, sessione locale e stato active/online. Se non può identificarla, non apre popup automatici; l’invocazione esplicita resta disponibile. Registra il tentativo **prima** del popup. Cancellazione, timeout o errore non provocano un altro popup automatico nello stesso login; un invio esplicito può riprovare. Un solo processo può chiedere lo sblocco alla volta. In modo askpass un timeout termina il gruppo di processi posseduto dal comando, incluso il suo prompt. In modo terminale termina soltanto il figlio `ssh-add`, mai il gruppo condiviso con il terminale. Prima del caricamento salva gli attributi termios del terminale di controllo e li ripristina in `finally` su successo, timeout, interruzione o errore: la terminazione forzata del figlio non lascia ECHO disabilitato. Questo controllo non legge input o passphrase. Durante un’interruzione il cleanup controlla se `Popen.wait` ha già raccolto il leader: in quel caso non invia segnali al suo vecchio PID/PGID, che potrebbe essere stato riutilizzato. La CLI gestisce anche SIGTERM, SIGHUP e SIGINT: registra il primo segnale e annulla l’attesa entro circa 100 ms, dopo aver acquisito il figlio. Termina e raccoglie soltanto gli helper posseduti, ripristina il terminale e rilascia il lock prima di uscire con codice `128 + segnale`; segnali ripetuti non interrompono il cleanup. SIGKILL non consente alcun cleanup applicativo. Il login seguente può eseguire un nuovo tentativo; le firme vengono comunque ricontrollate.
 

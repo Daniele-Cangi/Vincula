@@ -92,6 +92,161 @@ class CredentialBootstrapTests(unittest.TestCase):
         self.profile['askpass'] = str(self.askpass)
         self.save_config()
 
+    def configure_managed(self):
+        directory = self.root / 'service'
+        directory.mkdir(mode=0o700)
+        self.service_socket = directory / 'agent.sock'
+        service = socket.socket(socket.AF_UNIX)
+        self.addCleanup(service.close)
+        service.bind(str(self.service_socket))
+        self.document['nodes'][1]['ssh'] = {'identity_file': str(self.public), 'identity_agent': str(self.service_socket)}
+        self.registry.write_text(json.dumps(self.document))
+
+    def test_managed_headless_checks_only_exact_public_and_socket_without_prompt(self):
+        self.configure_managed()
+        self.loaded = True
+        self.identity.unlink()
+        self.environment = {'SSH_AUTH_SOCK': '/wrong/desktop/socket', 'SSH_CONNECTION': 'headless fixture'}
+        original = Path.lstat
+        def no_private_stat(path):
+            if path in (self.identity, Path(str(self.public) + '.pub')):
+                self.fail('Managed identity attempted private metadata or .pub.pub')
+            return original(path)
+        with patch.object(Path, 'lstat', no_private_stat), \
+                patch.object(bootstrap, 'state_lock', side_effect=AssertionError('No desktop runtime required')), \
+                patch.object(bootstrap, 'graphical_askpass', side_effect=AssertionError('No popup')):
+            value = self.run_bootstrap(unlock=True, automatic=True)
+        self.assertTrue(value['credentials_ready'])
+        self.assertFalse(value['state_persisted'])
+        self.assertEqual(value['keys'][0]['provider'], 'explicit-agent')
+        self.assertEqual([c[0] for c in self.calls], [[bootstrap.SSH_ADD, '-l'], [bootstrap.SSH_ADD, '-T', str(self.public)]])
+        self.assertTrue(all(c[1]['SSH_AUTH_SOCK'] == str(self.service_socket) and c[1]['SSH_ASKPASS_REQUIRE'] == 'never' for c in self.calls))
+        self.assertFalse(self.load_calls)
+
+    def test_managed_unlock_never_loads_public_as_private_or_uses_desktop(self):
+        self.configure_managed()
+        self.enable_askpass()
+        self.environment['SSH_AUTH_SOCK'] = str(self.runtime / 'openssh_agent')
+        value = self.run_bootstrap(unlock=True, automatic=True)
+        self.assertEqual(value['code'], 'key_locked')
+        self.assertFalse(value['credentials_ready'])
+        self.assertFalse(self.load_calls)
+        self.assertTrue(all(c[1]['SSH_AUTH_SOCK'] == str(self.service_socket) for c in self.calls))
+        self.assertTrue(all('DISPLAY' not in c[1] and 'DBUS_SESSION_BUS_ADDRESS' not in c[1] and 'SSH_ASKPASS' not in c[1] for c in self.calls))
+
+    def test_managed_stopped_socket_does_not_fallback_to_working_desktop(self):
+        self.configure_managed()
+        self.service_socket.unlink()
+        self.loaded = True
+        value = self.run_bootstrap(unlock=True)
+        self.assertEqual(value['code'], 'agent_missing')
+        self.assertFalse(value['credentials_ready'])
+        self.assertFalse(self.calls)
+
+    def test_managed_corrupt_agent_is_not_ready_and_raw_output_is_hidden(self):
+        self.configure_managed()
+        self.environment.clear()
+        with patch.object(bootstrap, 'command', return_value=(42, b'sensitive fixture diagnostic')) as command:
+            value = bootstrap.run(self.config, self.environment, unlock=True)
+        self.assertEqual(value['code'], 'agent_missing')
+        self.assertFalse(value['credentials_ready'])
+        self.assertNotIn('sensitive fixture', json.dumps(value))
+        self.assertEqual(command.call_count, 1)
+        self.assertEqual(command.call_args.args[1]['SSH_AUTH_SOCK'], str(self.service_socket))
+
+    def test_managed_invalid_configuration_does_not_try_another_provider(self):
+        self.configure_managed()
+        route = self.document['nodes'][1]['ssh']
+        for name, value in (('identity_agent', None), ('identity_agent', '/run/$SOCK'),
+                            ('identity_agent', 'relative'), ('identity_file', str(self.identity))):
+            original = dict(route)
+            route[name] = value
+            self.registry.write_text(json.dumps(self.document))
+            with self.subTest(name=name, value=value):
+                self.assertEqual(self.run_bootstrap(unlock=True)['code'], 'invalid_config')
+            route.clear(); route.update(original)
+        self.assertFalse(self.calls)
+
+    def test_managed_invalid_public_is_reported_without_loading_or_prompt(self):
+        self.configure_managed()
+        self.public.write_text('ssh-ed25519 not-base64\n')
+        value = self.run_bootstrap(unlock=True)
+        self.assertEqual(value['keys'][0]['state'], 'public_key_invalid')
+        self.assertFalse(value['credentials_ready'])
+        self.assertFalse(self.calls)
+
+    def test_managed_socket_symlink_or_shared_directory_is_rejected(self):
+        self.configure_managed()
+        self.service_socket.parent.chmod(0o755)
+        self.assertEqual(self.run_bootstrap()['code'], 'agent_invalid')
+        self.service_socket.parent.chmod(0o700)
+        self.service_socket.unlink()
+        self.service_socket.symlink_to(self.runtime / 'openssh_agent')
+        self.assertEqual(self.run_bootstrap()['code'], 'agent_invalid')
+        self.assertFalse(self.calls)
+
+    def test_managed_root_owned_public_is_supported_and_private_is_not_read(self):
+        from types import SimpleNamespace
+        self.configure_managed()
+        self.loaded = True
+        original = Path.lstat
+        def owner_metadata(path):
+            info = original(path)
+            return SimpleNamespace(st_mode=info.st_mode, st_uid=0) if path == self.public else info
+        with patch.object(Path, 'lstat', owner_metadata):
+            self.assertTrue(self.run_bootstrap()['credentials_ready'])
+        self.assertFalse(self.load_calls)
+
+    def test_managed_deduplication_uses_both_public_and_agent(self):
+        self.configure_managed()
+        self.document['nodes'].extend([
+            {'id': self.other, 'ssh': dict(self.document['nodes'][1]['ssh'])},
+            {'id': str(uuid4()), 'ssh': {'identity_file': str(self.public), 'identity_agent': str(self.runtime / 'openssh_agent')}}])
+        self.registry.write_text(json.dumps(self.document))
+        def selected_signatures(argv, environment, timeout):
+            self.calls.append((list(argv), dict(environment), timeout))
+            return (0 if environment['SSH_AUTH_SOCK'] == str(self.service_socket) else 1), b''
+        with patch.object(bootstrap, 'command', side_effect=selected_signatures):
+            value = bootstrap.run(self.config, {})
+        self.assertFalse(value['credentials_ready'])
+        self.assertEqual(len(value['keys']), 2)
+        self.assertEqual(value['keys'][0]['node_ids'], [self.peer, self.other])
+        self.assertEqual([s['state'] for s in value['keys']], ['ready', 'key_locked'])
+
+    def test_mixed_managed_and_legacy_unlock_only_loads_legacy_private(self):
+        self.configure_managed()
+        managed = dict(self.document['nodes'][1]['ssh'])
+        self.document['nodes'][1]['ssh'] = {'identity_file': str(self.identity)}
+        self.document['nodes'].append({'id': self.other, 'ssh': managed})
+        self.registry.write_text(json.dumps(self.document))
+        self.enable_askpass()
+        helper = self.helper
+        def mixed_helper(argv, environment, timeout):
+            if environment.get('SSH_AUTH_SOCK') == str(self.service_socket):
+                self.calls.append((list(argv), dict(environment), timeout))
+                return 0, b''
+            return helper(argv, environment, timeout)
+        with patch.object(bootstrap, 'command', side_effect=mixed_helper):
+            value = bootstrap.run(self.config, self.environment, unlock=True)
+        self.assertTrue(value['credentials_ready'])
+        self.assertEqual(len(value['keys']), 2)
+        self.assertEqual([entry[0] for entry in self.load_calls], [[bootstrap.SSH_ADD, str(self.identity)]])
+        self.assertEqual(self.load_calls[0][1]['SSH_AUTH_SOCK'], str(self.runtime / 'openssh_agent'))
+        persisted = json.loads((self.runtime / 'vincula-credentials/status.json').read_text())
+        self.assertEqual(persisted['keys'], value['keys'])
+
+    def test_mixed_headless_preserves_managed_observation_and_legacy_error(self):
+        self.configure_managed()
+        self.document['nodes'].append({'id': self.other, 'ssh': {'identity_file': str(self.identity)}})
+        self.registry.write_text(json.dumps(self.document))
+        self.loaded = True
+        self.environment = {}
+        value = self.run_bootstrap()
+        self.assertFalse(value['credentials_ready'])
+        self.assertEqual(value['code'], 'invalid_config')
+        self.assertEqual(value['keys'][0]['state'], 'ready')
+        self.assertEqual(value['keys'][0]['provider'], 'explicit-agent')
+
     def test_status_uses_configured_agent_and_requires_a_signature_without_prompt(self):
         self.environment['SSH_AUTH_SOCK'] = '/wrong/inherited/socket'
         value = self.run_bootstrap()
@@ -377,6 +532,18 @@ class CredentialBootstrapTests(unittest.TestCase):
         status = json.loads((self.runtime / 'vincula-credentials/status.json').read_text())
         self.assertFalse(status['credentials_ready'])
         self.assertEqual(status['code'], 'local_input_error')
+
+    def test_invalid_registry_replaces_previous_ready_status_without_prompt(self):
+        self.loaded = True
+        self.assertTrue(self.run_bootstrap()['credentials_ready'])
+        self.document['nodes'][1]['id'] = 'invalid-uuid'
+        self.registry.write_text(json.dumps(self.document))
+        value = self.run_bootstrap(unlock=True)
+        self.assertEqual(value['code'], 'invalid_registry')
+        status = json.loads((self.runtime / 'vincula-credentials/status.json').read_text())
+        self.assertFalse(status['credentials_ready'])
+        self.assertEqual(status['code'], 'invalid_registry')
+        self.assertFalse(self.load_calls)
 
     def test_timeout_kills_owned_prompt_group_before_reaping_and_hides_output(self):
         with patch.object(bootstrap.subprocess, 'Popen') as popen, patch.object(bootstrap.os, 'killpg') as kill:
