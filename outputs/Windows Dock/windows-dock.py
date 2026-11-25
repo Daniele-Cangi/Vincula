@@ -24,6 +24,9 @@ import windows_ssh as windows
 from remote_desktop import share_input, show_windows
 
 
+NODE_CHECK_LABEL = "Verifica nodo"
+
+
 STYLE = b"""
 window.dock, .dock viewport, .dock scrolledwindow { background-color: #0a111a; color: #e8f2f8; }
 .dock label { color: #e8f2f8; }
@@ -311,6 +314,158 @@ class NodeEditor(Gtk.Window):
         self.status.set_text(message)
 
 
+class NodeCheckEditor(Gtk.Window):
+    CHECKS = (("ssh", "SSH autenticato"), ("identity", "UUID persistente"), ("helper", "Helper su disco"),
+              ("policy", "Permessi osservati"), ("worker", "Worker autonomo"), ("desktop", "Desktop"))
+
+    def __init__(self, owner, node):
+        super().__init__(title=NODE_CHECK_LABEL)
+        self.owner, self.node_id = owner, node["id"]
+        self.alive, self.running = True, False
+        self.request_revision = None
+        self.origin_id = None
+        self.values = {}
+        self.get_style_context().add_class("dock")
+        self.set_transient_for(owner)
+        self.set_destroy_with_parent(True)
+        self.set_default_size(680, 610)
+        self.connect("destroy", self.closed)
+        body = vertical(12)
+        body.set_border_width(18)
+        self.add(body)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        content = vertical(12)
+        scroll.add(content)
+        add(body, scroll, True)
+        identity = label(f'{node["label"]}\nUUID {self.node_id}', "muted")
+        identity.set_line_wrap(True)
+        identity.set_selectable(True)
+        add(content, identity)
+        for key, caption in self.CHECKS:
+            row = card(caption)
+            value = label("Non verificato")
+            value.set_line_wrap(True)
+            value.set_selectable(True)
+            add(row, value)
+            add(content, row)
+            self.values[key] = value
+        self.metadata = label("Nessuna verifica eseguita.", "muted")
+        self.metadata.set_line_wrap(True)
+        self.metadata.set_selectable(True)
+        add(content, self.metadata)
+        self.message = label("La presenza dell’helper non prova l’avvio del servizio.\n"
+                             "Worker senza sessione grafica e desktop richiedono collaudi separati.", "muted")
+        self.message.set_line_wrap(True)
+        add(body, self.message)
+        actions = Gtk.Box(spacing=8)
+        add(actions, action_button("Chiudi", lambda *_: self.close()))
+        self.check_button = action_button(NODE_CHECK_LABEL, self.submit, True)
+        add(actions, self.check_button)
+        add(body, actions)
+
+    def closed(self, *_):
+        self.alive = False
+        if self.owner.node_check_editor is self:
+            self.owner.node_check_editor = None
+
+    @staticmethod
+    def description(name, check):
+        state = check.get("state")
+        if check.get("reason") == "termination_unconfirmed":
+            return "Arresto della verifica non confermato"
+        descriptions = {
+            ("ssh", "authenticated"): "Autenticazione SSH riuscita",
+            ("ssh", "failed"): "Autenticazione o collegamento SSH non riusciti",
+            ("identity", "match"): "UUID persistente corrispondente",
+            ("identity", "mismatch"): "UUID diverso: identità del nodo non confermata",
+            ("identity", "ambiguous"): "Identità ambigua: verifica la configurazione del destinatario",
+            ("identity", "unavailable"): "UUID persistente non disponibile",
+            ("helper", "compatible_on_disk"): "Helper compatibile su disco; avvio del servizio non provato",
+            ("helper", "missing"): "Helper non presente",
+            ("helper", "unverified"): "Compatibilità dell’helper non verificata",
+            ("worker", "unverified"): "Servizio autonomo non verificato",
+            ("desktop", "unchecked"): "Consensi e sessione desktop non verificati",
+        }
+        if name == "ssh" and check.get("reason") == "local_node":
+            return "Nodo locale: SSH non necessario"
+        if name == "ssh" and check.get("reason") == "legacy_route_requires_explicit":
+            return "Profilo precedente: configura una rotta SSH esplicita"
+        if name == "policy" and state == "observed":
+            mode = {"full": "Accesso completo", "ask": "Richiede approvazione"}.get(check.get("mode"), "Profilo non riconosciuto")
+            native = check.get("native_enabled")
+            if native is True:
+                execution = "abilitata"
+            elif native is False:
+                execution = "disabilitata"
+            else:
+                execution = "non verificata"
+            return f"{mode}; esecuzione generale {execution}"
+        return descriptions.get((name, state), "Non verificato")
+
+    def submit(self, *_):
+        if not self.alive or self.running:
+            return
+        if self.owner.nodes_busy:
+            self.message.set_text("Attendi il completamento dell’operazione sul catalogo.")
+            return
+        snapshot = self.owner.nodes_snapshot
+        registry = snapshot.get("registry") if snapshot else None
+        if not registry or not any(node["id"] == self.node_id for node in registry["nodes"]):
+            self.message.set_text("Il nodo non è più nel catalogo. Aggiorna l’elenco.")
+            return
+        self.request_revision, self.origin_id = snapshot["revision"], registry["local"]
+        self.running = True
+        self.check_button.set_sensitive(False)
+        for value in self.values.values():
+            value.set_text("In attesa della verifica")
+        self.metadata.set_text(f"Revisione richiesta {self.request_revision[:12]}")
+        self.message.set_text("Verifica in corso. Puoi chiudere questa finestra; lo stop della condivisione resta disponibile.")
+        self.owner.catalog_request({"action": "enrollment_check", "node_id": self.node_id,
+                                    "expected_revision": self.request_revision}, self.finished, self.failed)
+
+    def failed(self, error):
+        if not self.alive:
+            return
+        self.running = False
+        self.check_button.set_sensitive(True)
+        for value in self.values.values():
+            value.set_text("Verifica non conclusa")
+        if isinstance(error, str) and "75 secondi" in error:
+            self.message.set_text("La verifica non ha risposto entro 75 secondi. Riprova; i permessi restano invariati.")
+        elif isinstance(error, str) and ("node_probe.py" in error or "node_enrollment.py" in error):
+            self.message.set_text("Aggiorna il runtime Vincula per abilitare la verifica del nodo. Il catalogo manuale resta disponibile.")
+        else:
+            self.message.set_text("Verifica non conclusa. Il catalogo può essere cambiato oppure il runtime richiede un aggiornamento. "
+                                  "Aggiorna l’elenco e riprova; i permessi restano invariati.")
+
+    def finished(self, reply):
+        if not self.alive:
+            return
+        result = reply.get("node_check", {})
+        if (not isinstance(result, dict) or result.get("node_id") != self.node_id or result.get("origin_id") != self.origin_id
+                or result.get("revision") != self.request_revision or reply.get("revision") != self.request_revision):
+            self.failed(None)
+            return
+        self.running = False
+        self.check_button.set_sensitive(True)
+        checks = result.get("checks", {})
+        if not isinstance(checks, dict) or any(not isinstance(checks.get(key), dict) for key, _ in self.CHECKS):
+            self.failed(None)
+            return
+        for key, _caption in self.CHECKS:
+            self.values[key].set_text(self.description(key, checks.get(key, {})))
+        try:
+            checked_at = datetime.fromisoformat(result["checked_at"].replace("Z", "+00:00")).astimezone().strftime("%d/%m/%Y %H:%M:%S")
+        except (KeyError, TypeError, ValueError, AttributeError):
+            checked_at = "Data non disponibile"
+        digest = result.get("route_digest", "")
+        route = digest[:12] if isinstance(digest, str) and len(digest) == 64 and all(c in "0123456789abcdef" for c in digest) else "non disponibile"
+        self.metadata.set_text(f"Revisione {self.request_revision[:12]} · Rotta {route}\nVerificato il {checked_at}")
+        self.message.set_text("Resoconto di questa identità e rotta. Permessi invariati.\n"
+                              "Helper su disco, servizio autonomo e desktop sono verifiche distinte.")
+
+
 class InvitationEditor(Gtk.Window):
     """Public enrollment documents and credentials belonging to this computer."""
 
@@ -380,6 +535,10 @@ class InvitationEditor(Gtk.Window):
         self.submit_button = action_button("Registra nodo" if invitation else "Genera e salva invito", self.submit, True)
         self.submit_button.set_sensitive(invitation is None)
         add(actions, self.submit_button)
+        if invitation:
+            self.node_check_button = action_button(NODE_CHECK_LABEL, lambda *_: owner.edit_node_check(invitation["node"]["id"]))
+            self.node_check_button.set_sensitive(False)
+            add(actions, self.node_check_button)
         add(body, actions)
 
     def note(self, text):
@@ -467,6 +626,7 @@ class InvitationEditor(Gtk.Window):
             details = "\n".join(str(step) for step in steps) if isinstance(steps, list) else str(steps)
             self.message.set_text("Nodo registrato. SSH, runtime e desktop NON verificati.\n" + details)
             self.owner.nodes_status.set_text("Nodo registrato; collegamento, runtime e desktop da verificare.")
+            self.node_check_button.set_sensitive(True)
             return
         dialog = Gtk.FileChooserNative.new("Salva invito pubblico", self, Gtk.FileChooserAction.SAVE, "Salva", "Annulla")
         dialog.set_current_name("vincula-invito.json")
@@ -616,6 +776,7 @@ class DockWindow(Gtk.ApplicationWindow):
         self.node_editor = None
         self.desktop_editor = None
         self.invitation_editor = None
+        self.node_check_editor = None
         try:
             self.set_icon_from_file(str(Path(__file__).with_name("windows-dock-icon.png")))
         except GLib.Error:
@@ -683,8 +844,10 @@ class DockWindow(Gtk.ApplicationWindow):
         invitations = Gtk.Box(spacing=8)
         self.node_import = action_button("Importa invito", self.import_invitation)
         self.node_export = action_button("Esporta invito", lambda *_: self.edit_invitation())
+        self.node_check = action_button(NODE_CHECK_LABEL, lambda *_: self.edit_node_check())
         add(invitations, self.node_import)
         add(invitations, self.node_export)
+        add(invitations, self.node_check)
         add(page, invitations)
         self.node_desktop = action_button("Layout desktop e prerequisiti", lambda *_: self.edit_desktop())
         add(page, self.node_desktop)
@@ -715,6 +878,7 @@ class DockWindow(Gtk.ApplicationWindow):
         self.node_desktop.set_sensitive(available and registry is not None)
         self.node_import.set_sensitive(available and registry is not None)
         self.node_export.set_sensitive(available and registry is not None)
+        self.node_check.set_sensitive(available and registry is not None and selected is not None)
         self.node_add.set_label("Registra questo PC" if available and registry is None else "Aggiungi")
 
     def show_catalog(self, reply):
@@ -811,6 +975,24 @@ class DockWindow(Gtk.ApplicationWindow):
             return
         self.invitation_editor = InvitationEditor(self, invitation)
         self.invitation_editor.show_all()
+
+    def edit_node_check(self, node_id=None):
+        if self.nodes_busy or not self.nodes_snapshot or not self.nodes_snapshot["registry"]:
+            return
+        registry = self.nodes_snapshot["registry"]
+        node = next((item for item in registry["nodes"] if item["id"] == node_id), None) if node_id else self.selected_node()
+        if node is None:
+            self.nodes_status.set_text("Seleziona un computer con UUID persistente nel catalogo.")
+            return
+        if self.node_check_editor:
+            if self.node_check_editor.node_id == node["id"]:
+                self.node_check_editor.present()
+                self.node_check_editor.submit()
+                return
+            self.node_check_editor.destroy()
+        self.node_check_editor = NodeCheckEditor(self, node)
+        self.node_check_editor.show_all()
+        self.node_check_editor.submit()
 
     def edit_desktop(self):
         if self.nodes_busy or self.nodes_snapshot is None or self.nodes_snapshot["registry"] is None:

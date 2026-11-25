@@ -633,7 +633,7 @@ df -h -x tmpfs -x devtmpfs -x squashfs --output=target,used,avail,pcent"));
 
 internal static class NodeCatalog
 {
-    private static string RuntimeScript(bool enrollment)
+    private static string RuntimeScript(bool enrollment, bool nodeCheck)
     {
         string configured = Environment.GetEnvironmentVariable("VINCULA_RUNTIME");
         string app = AppDomain.CurrentDomain.BaseDirectory;
@@ -650,6 +650,8 @@ internal static class NodeCatalog
             {
                 if (enrollment && !File.Exists(Path.Combine(root, "agent", "node_enrollment.py")))
                     throw new IOException("Aggiorna il runtime Vincula: gli inviti richiedono agent/node_enrollment.py. Il catalogo manuale resta disponibile.");
+                if (nodeCheck && !File.Exists(Path.Combine(root, "agent", "node_probe.py")))
+                    throw new IOException("Aggiorna il runtime Vincula: la verifica del nodo richiede agent/node_probe.py. Il catalogo manuale resta disponibile.");
                 return candidate;
             }
         }
@@ -727,7 +729,7 @@ internal static class NodeCatalog
         string interpreter = Environment.GetEnvironmentVariable("VINCULA_PYTHON");
         bool launcher = String.IsNullOrWhiteSpace(interpreter);
         var info = new ProcessStartInfo(launcher ? "py.exe" : interpreter,
-            (launcher ? "-3 " : "") + "\"" + RuntimeScript(action.StartsWith("enrollment_", StringComparison.Ordinal)) + "\"") {
+            (launcher ? "-3 " : "") + "\"" + RuntimeScript(action.StartsWith("enrollment_", StringComparison.Ordinal), action == "enrollment_check") + "\"") {
             UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
             StandardOutputEncoding = new UTF8Encoding(false), StandardErrorEncoding = new UTF8Encoding(false)
@@ -740,10 +742,11 @@ internal static class NodeCatalog
                 match => "\\u" + ((int)match.Value[0]).ToString("x4"));
             process.StandardInput.Write(payload);
             process.StandardInput.Close();
-            if (!process.WaitForExit(15000))
+            int timeout = action == "enrollment_check" ? 75 : 15;
+            if (!process.WaitForExit(timeout * 1000))
             {
                 process.Kill();
-                throw new IOException("Il catalogo non ha risposto entro 15 secondi. Aggiorna l’elenco per verificarne lo stato.");
+                throw new IOException("Il runtime non ha risposto entro " + timeout + " secondi. Aggiorna l’elenco per verificarne lo stato.");
             }
             if (!Task.WaitAll(new Task[] { stdout, stderr }, 1000))
                 throw new IOException("Risposta del runtime incompleta.");
@@ -756,7 +759,11 @@ internal static class NodeCatalog
                 object error;
                 var detail = reply.TryGetValue("error", out error) ? Map(error) : new Dictionary<string, object>();
                 if (Text(detail, "code") == "conflict")
+                {
+                    if (action == "enrollment_check")
+                        throw new IOException("Il catalogo, la rotta o la chiave host sono cambiati. Aggiorna l’elenco e ripeti la verifica.");
                     throw new IOException("Il catalogo è cambiato. Aggiorna l’elenco e riapri il modulo prima di salvare.");
+                }
                 throw new IOException("Catalogo non aggiornato. " + Text(detail, "message", "Errore del runtime."));
             }
             bool invitationReply = action == "enrollment_export" || action == "enrollment_preview";
@@ -802,11 +809,12 @@ internal sealed class DockWindow : Form
     private Dictionary<string, object> nodesSnapshot;
     private readonly ListView nodeList = new ListView();
     private readonly Label nodesStatus = new Label();
-    private Button nodeAdd, nodeEdit, nodeRemove, nodeRefresh, nodeDesktop, nodeImport, nodeExport;
+    private Button nodeAdd, nodeEdit, nodeRemove, nodeRefresh, nodeDesktop, nodeImport, nodeExport, nodeCheck;
     private readonly TabPage nodesPage;
     private NodeEditor nodeEditor;
     private DesktopEditor desktopEditor;
     private InvitationEditor invitationEditor;
+    private NodeCheckEditor nodeCheckEditor;
     private readonly Button desktopButton;
     private readonly Button inputHeaderButton;
     private readonly ComboBox inputSide = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList };
@@ -1152,7 +1160,8 @@ internal sealed class DockWindow : Form
         var invitations = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true, AutoSize = true };
         nodeImport = ActionButton("Importa invito", ImportInvitation, false);
         nodeExport = ActionButton("Esporta invito", () => EditInvitation(null), false);
-        invitations.Controls.AddRange(new Control[] { nodeImport, nodeExport });
+        nodeCheck = ActionButton("Verifica nodo", () => EditNodeCheck(null), false);
+        invitations.Controls.AddRange(new Control[] { nodeImport, nodeExport, nodeCheck });
         content.Controls.Add(invitations, 0, 3);
         var desktopActions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
         desktopActions.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
@@ -1192,6 +1201,8 @@ internal sealed class DockWindow : Form
             nodeDesktop.Enabled = available && registry != null;
         if (nodeImport != null)
             nodeImport.Enabled = nodeExport.Enabled = available && registry != null;
+        if (nodeCheck != null)
+            nodeCheck.Enabled = available && registry != null && selected != null;
     }
 
     private void ShowCatalog(Dictionary<string, object> reply)
@@ -1319,6 +1330,34 @@ internal sealed class DockWindow : Form
         invitationEditor.Show(this);
     }
 
+    private void EditNodeCheck(string nodeId)
+    {
+        if (nodesBusy || nodesSnapshot == null || nodesSnapshot["registry"] == null)
+            return;
+        var registry = NodeCatalog.Map(nodesSnapshot["registry"]);
+        var node = nodeId == null ? SelectedNode() : NodeCatalog.Items(registry["nodes"]).Select(NodeCatalog.Map)
+            .FirstOrDefault(item => NodeCatalog.Text(item, "id") == nodeId);
+        if (node == null)
+        {
+            nodesStatus.Text = "Seleziona un computer con UUID persistente nel catalogo.";
+            return;
+        }
+        if (nodeCheckEditor != null && !nodeCheckEditor.IsDisposed)
+        {
+            if (nodeCheckEditor.NodeId == NodeCatalog.Text(node, "id"))
+            {
+                nodeCheckEditor.Activate();
+                nodeCheckEditor.Submit();
+                return;
+            }
+            nodeCheckEditor.Close();
+        }
+        nodeCheckEditor = new NodeCheckEditor(this, node);
+        nodeCheckEditor.FormClosed += delegate { nodeCheckEditor = null; };
+        nodeCheckEditor.Show(this);
+        nodeCheckEditor.Submit();
+    }
+
     private void RemoveNode()
     {
         var node = SelectedNode();
@@ -1344,6 +1383,187 @@ internal sealed class DockWindow : Form
         desktopEditor.Show(this);
     }
 
+    private sealed class NodeCheckEditor : Form
+    {
+        private readonly DockWindow owner;
+        private readonly string nodeId;
+        internal string NodeId { get { return nodeId; } }
+        private string requestRevision, originId;
+        private bool running;
+        private readonly Dictionary<string, Label> values = new Dictionary<string, Label>();
+        private readonly TextBox metadata = ConsoleBox();
+        private readonly Label message = new Label { AutoSize = true, Dock = DockStyle.Fill, MaximumSize = new Size(620, 0) };
+        private readonly Button checkButton;
+
+        internal NodeCheckEditor(DockWindow parent, Dictionary<string, object> node)
+        {
+            owner = parent;
+            nodeId = NodeCatalog.Text(node, "id");
+            Text = "Verifica nodo";
+            BackColor = Canvas;
+            ForeColor = Ink;
+            Font = parent.Font;
+            AutoScaleMode = AutoScaleMode.Font;
+            MinimumSize = new Size(540, 450);
+            ClientSize = new Size(700, 670);
+            StartPosition = FormStartPosition.CenterParent;
+            var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(16) };
+            body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            Controls.Add(body);
+            var viewport = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+            var form = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1 };
+            form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            viewport.Controls.Add(form);
+            body.Controls.Add(viewport, 0, 0);
+            var identity = ConsoleBox();
+            identity.Text = NodeCatalog.Text(node, "label") + "\r\nUUID " + nodeId;
+            identity.WordWrap = true;
+            identity.Font = parent.Font;
+            identity.MinimumSize = new Size(0, 70);
+            form.Controls.Add(identity, 0, 0);
+            form.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            string[] keys = { "ssh", "identity", "helper", "policy", "worker", "desktop" };
+            string[] captions = { "SSH autenticato", "UUID persistente", "Helper su disco", "Permessi osservati", "Worker autonomo", "Desktop" };
+            for (int index = 0; index < keys.Length; index++)
+            {
+                var card = new TableLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, ColumnCount = 1,
+                    BackColor = Surface, Padding = new Padding(10), Margin = new Padding(0, 0, 0, 8) };
+                card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+                card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                card.Controls.Add(new Label { Text = captions[index], AutoSize = true, ForeColor = Muted }, 0, 0);
+                var value = new Label { Text = "Non verificato", AutoSize = true, Dock = DockStyle.Fill, MaximumSize = new Size(620, 0) };
+                values[keys[index]] = value;
+                card.Controls.Add(value, 0, 1);
+                form.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                form.Controls.Add(card, 0, index + 1);
+            }
+            metadata.Text = "Nessuna verifica eseguita.";
+            metadata.Font = parent.Font;
+            metadata.WordWrap = true;
+            metadata.MinimumSize = new Size(0, 80);
+            form.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            form.Controls.Add(metadata, 0, 7);
+            message.Text = "La presenza dell’helper non prova l’avvio del servizio. Worker senza sessione grafica e desktop richiedono collaudi separati.";
+            message.ForeColor = Muted;
+            body.Controls.Add(message, 0, 1);
+            var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
+            actions.Controls.Add(ActionButton("Chiudi", Close, false));
+            checkButton = ActionButton("Verifica nodo", Submit);
+            actions.Controls.Add(checkButton);
+            body.Controls.Add(actions, 0, 2);
+        }
+
+        private static string Description(string name, Dictionary<string, object> check)
+        {
+            string state = NodeCatalog.Text(check, "state"), reason = NodeCatalog.Text(check, "reason");
+            if (reason == "termination_unconfirmed") return "Arresto della verifica non confermato";
+            if (name == "ssh")
+            {
+                if (reason == "local_node") return "Nodo locale: SSH non necessario";
+                if (reason == "legacy_route_requires_explicit") return "Profilo precedente: configura una rotta SSH esplicita";
+                if (state == "authenticated") return "Autenticazione SSH riuscita";
+                if (state == "failed") return "Autenticazione o collegamento SSH non riusciti";
+            }
+            if (name == "identity")
+            {
+                if (state == "match") return "UUID persistente corrispondente";
+                if (state == "mismatch") return "UUID diverso: identità del nodo non confermata";
+                if (state == "ambiguous") return "Identità ambigua: verifica la configurazione del destinatario";
+                if (state == "unavailable") return "UUID persistente non disponibile";
+            }
+            if (name == "helper")
+            {
+                if (state == "compatible_on_disk") return "Helper compatibile su disco; avvio del servizio non provato";
+                if (state == "missing") return "Helper non presente";
+                if (state == "unverified") return "Compatibilità dell’helper non verificata";
+            }
+            if (name == "policy" && state == "observed")
+            {
+                string mode = NodeCatalog.Text(check, "mode");
+                string profile = mode == "full" ? "Accesso completo" : mode == "ask" ? "Richiede approvazione" : "Profilo non riconosciuto";
+                object enabled;
+                string native = check.TryGetValue("native_enabled", out enabled) && enabled is bool
+                    ? ((bool)enabled ? "abilitata" : "disabilitata") : "non verificata";
+                return profile + "; esecuzione generale " + native;
+            }
+            if (name == "worker" && state == "unverified") return "Servizio autonomo non verificato";
+            if (name == "desktop" && state == "unchecked") return "Consensi e sessione desktop non verificati";
+            return "Non verificato";
+        }
+
+        internal void Submit()
+        {
+            if (IsDisposed || Disposing || running)
+                return;
+            if (owner.nodesBusy)
+            {
+                message.Text = "Attendi il completamento dell’operazione sul catalogo.";
+                return;
+            }
+            var snapshot = owner.nodesSnapshot;
+            var registry = snapshot == null || snapshot["registry"] == null ? null : NodeCatalog.Map(snapshot["registry"]);
+            if (registry == null || !NodeCatalog.Items(registry["nodes"]).Select(NodeCatalog.Map).Any(node => NodeCatalog.Text(node, "id") == nodeId))
+            {
+                message.Text = "Il nodo non è più nel catalogo. Aggiorna l’elenco.";
+                return;
+            }
+            requestRevision = NodeCatalog.Text(snapshot, "revision");
+            originId = NodeCatalog.Text(registry, "local");
+            running = true;
+            checkButton.Enabled = false;
+            foreach (var value in values.Values)
+                value.Text = "In attesa della verifica";
+            metadata.Text = "Revisione richiesta " + requestRevision.Substring(0, Math.Min(12, requestRevision.Length));
+            message.Text = "Verifica in corso. Puoi chiudere questa finestra; lo stop della condivisione resta disponibile.";
+            owner.StartCatalog(new Dictionary<string, object> { { "action", "enrollment_check" }, { "node_id", nodeId },
+                { "expected_revision", requestRevision } }, failed: Failed, received: Finished);
+        }
+
+        private void Failed(string error)
+        {
+            if (IsDisposed || Disposing) return;
+            running = false;
+            checkButton.Enabled = true;
+            foreach (var value in values.Values)
+                value.Text = "Verifica non conclusa";
+            if (error != null && error.Contains("75 secondi"))
+                message.Text = "La verifica non ha risposto entro 75 secondi. Riprova; i permessi restano invariati.";
+            else if (error != null && (error.Contains("node_probe.py") || error.Contains("node_enrollment.py")))
+                message.Text = "Aggiorna il runtime Vincula per abilitare la verifica del nodo. Il catalogo manuale resta disponibile.";
+            else
+                message.Text = "Verifica non conclusa. Il catalogo può essere cambiato oppure il runtime richiede un aggiornamento. Aggiorna l’elenco e riprova; i permessi restano invariati.";
+        }
+
+        private void Finished(Dictionary<string, object> reply)
+        {
+            if (IsDisposed || Disposing) return;
+            var result = reply.ContainsKey("node_check") ? NodeCatalog.Map(reply["node_check"]) : new Dictionary<string, object>();
+            if (NodeCatalog.Text(result, "node_id") != nodeId || NodeCatalog.Text(result, "origin_id") != originId
+                || NodeCatalog.Text(result, "revision") != requestRevision || NodeCatalog.Text(reply, "revision") != requestRevision)
+            {
+                Failed(null);
+                return;
+            }
+            var checks = NodeCatalog.Map(result["checks"]);
+            foreach (var entry in values)
+                entry.Value.Text = Description(entry.Key, checks.ContainsKey(entry.Key) ? NodeCatalog.Map(checks[entry.Key]) : new Dictionary<string, object>());
+            DateTimeOffset date;
+            string checkedAt = DateTimeOffset.TryParse(NodeCatalog.Text(result, "checked_at"), out date)
+                ? date.ToLocalTime().ToString("dd/MM/yyyy HH:mm:ss") : "Data non disponibile";
+            string digest = NodeCatalog.Text(result, "route_digest");
+            string route = digest.Length == 64 && digest.All(character => character >= '0' && character <= '9' || character >= 'a' && character <= 'f')
+                ? digest.Substring(0, 12) : "non disponibile";
+            metadata.Text = "Revisione " + requestRevision.Substring(0, Math.Min(12, requestRevision.Length))
+                + " · Rotta " + route + "\r\nVerificato il " + checkedAt;
+            running = false;
+            checkButton.Enabled = true;
+            message.Text = "Resoconto di questa identità e rotta. Permessi invariati. Helper su disco, servizio autonomo e desktop sono verifiche distinte.";
+        }
+    }
+
     private sealed class InvitationEditor : Form
     {
         private readonly DockWindow owner;
@@ -1358,6 +1578,7 @@ internal sealed class DockWindow : Form
             Padding = new Padding(0, 0, 12, 0) };
         private readonly TextBox message = ConsoleBox();
         private readonly Button submit;
+        private readonly Button nodeCheck;
         private bool saving;
 
         internal InvitationEditor(DockWindow parent, Dictionary<string, object> document)
@@ -1448,6 +1669,12 @@ internal sealed class DockWindow : Form
             submit = ActionButton(document == null ? "Genera e salva invito" : "Registra nodo", Submit);
             submit.Enabled = document == null;
             actions.Controls.Add(submit);
+            if (document != null)
+            {
+                nodeCheck = ActionButton("Verifica nodo", () => parent.EditNodeCheck(NodeCatalog.Text(NodeCatalog.Map(document["node"]), "id")), false);
+                nodeCheck.Enabled = false;
+                actions.Controls.Add(nodeCheck);
+            }
             body.Controls.Add(actions, 0, 2);
             FormClosing += delegate(object sender, FormClosingEventArgs args) { args.Cancel = saving; };
         }
@@ -1571,6 +1798,7 @@ internal sealed class DockWindow : Form
                 message.Text = "Nodo registrato. SSH, runtime e desktop NON verificati.\r\n"
                     + details;
                 owner.nodesStatus.Text = "Nodo registrato; collegamento, runtime e desktop da verificare.";
+                nodeCheck.Enabled = true;
                 return;
             }
             try

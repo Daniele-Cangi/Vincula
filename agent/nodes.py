@@ -219,6 +219,20 @@ def invitation_json(text):
         raise ValueError("The public invitation is nested too deeply.") from None
 
 
+def node_check_request(request, path):
+    request_fields(request, {"node_id"}, {"node_id", "expected_revision"})
+    try:
+        import node_enrollment
+        import node_probe
+    except ModuleNotFoundError:
+        raise ValueError("The node-check runtime is incomplete. Update Vincula before checking nodes.") from None
+    try:
+        return node_probe.check_node(path, node_id=request["node_id"],
+                                     expected_revision=request["expected_revision"])
+    except node_enrollment.EnrollmentConflict as error:
+        raise ConflictError(str(error)) from None
+
+
 def enrollment_request(request, path):
     try:
         import node_enrollment
@@ -245,8 +259,32 @@ def enrollment_request(request, path):
         raise ConflictError(str(error)) from None
 
 
-@node_registry.synchronized
+def desktop_preview_request(request, path):
+    request_fields(request, {"desktop"}, set())
+    before = snapshot(path)
+    if "expected_revision" in request and request["expected_revision"] != before["revision"]:
+        raise ConflictError("The node registry changed. Reload it before previewing this layout.")
+    if before["registry"] is None:
+        raise ValueError("Register this computer before configuring the desktop group.")
+    candidate = deepcopy(before["registry"])
+    if "desktop" in request:
+        candidate["desktop"] = request["desktop"]
+    before["desktop_preview"] = desktop_layout.preview(validate(candidate))
+    return before
+
+
 def execute(request, path):
+    # A network observation owns its short snapshot locks, never the outer
+    # process-wide Windows mutex. Local edits retain their original guard.
+    if not isinstance(request, dict) or not isinstance(request.get("action"), str):
+        raise ValueError("Specify a JSON object with an action.")
+    if request["action"] == "enrollment_check":
+        return node_check_request(request, Path(path))
+    return _execute_locked(request, Path(path))
+
+
+@node_registry.synchronized
+def _execute_locked(request, path):
     if not isinstance(request, dict) or not isinstance(request.get("action"), str):
         raise ValueError("Specify a JSON object with an action.")
     path = Path(path)
@@ -256,17 +294,7 @@ def execute(request, path):
         request_fields(request, set(), set())
         return snapshot(path)
     if request["action"] == "desktop_preview":
-        request_fields(request, {"desktop"}, set())
-        before = snapshot(path)
-        if "expected_revision" in request and request["expected_revision"] != before["revision"]:
-            raise ConflictError("The node registry changed. Reload it before previewing this layout.")
-        if before["registry"] is None:
-            raise ValueError("Register this computer before configuring the desktop group.")
-        candidate = deepcopy(before["registry"])
-        if "desktop" in request:
-            candidate["desktop"] = request["desktop"]
-        before["desktop_preview"] = desktop_layout.preview(validate(candidate))
-        return before
+        return desktop_preview_request(request, path)
     if request["action"] not in {"add", "update", "remove", "desktop"}:
         raise ValueError("Unknown node operation.")
     with edit_lock(path):
@@ -285,8 +313,7 @@ def main():
     parser.parse_args()
     try:
         request = json.load(sys.stdin)
-        with node_registry.registry_guard():
-            result = execute(request, registry_path())
+        result = execute(request, registry_path())
     except ConflictError as error:
         result = {"ok": False, "error": {"code": "conflict", "message": str(error)}}
     except (ValueError, TypeError, KeyError, UnicodeError) as error:

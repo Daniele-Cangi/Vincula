@@ -1,0 +1,659 @@
+{
+  "format_version": 1,
+  "date": "2026-11-25",
+  "parent_commit": "de4e3c789994fb8255a0755e184e75428ef6bfda",
+  "scope": "Read-only authenticated observations through explicit SSH routes, local JSON CLI and optional desktop dialogs. No worker/desktop readiness attestation or production deployment.",
+  "source_sha256": {
+    "agent/nodes.py": "4c213333988896663101fb3bc5e7db4453030dea1752227eea68468d7e02dc20",
+    "agent/node_probe.py": "edce8a9dd38a3c7dbf2a7310dadb0dd80b803c8b027982ef79913c1cec0c32d8",
+    "agent/test_node_probe.py": "93c997bc3bdfdcee9770524b12aa896472275434ad7d793fe8ea6e7fada13a22",
+    "agent/test_node_check_cli.py": "2e85e7bc58897c1689ae4bca48ee632d80f94a4122473cc290a44a7120e30690",
+    "outputs/Windows Dock/windows-dock.py": "932490bac95d7fd68edc1b10fa1dbe677f969badd7e579d879e8dfd6745ea522",
+    "outputs/Windows Dock/node_catalog.py": "10b417e44f292e95078ec8c1792e7d85f825341b72e83dfa8053229cae993c8b",
+    "outputs/Linux Dock/LinuxDock.cs": "2d086be83f07322bc435498dda39a2bbb91b13480d9113754ab3a32e27b8663b",
+    "docs/node-enrollment.md": "c064eb0b6ae53b951a5d999fe73a702f4b5b3f98dcecc51fc6c19c397d0fa9e9",
+    "docs/catalogo-gui.md": "93805304496737e476957f8984fe84db965418ea9ce626e69c90de8446e8e809",
+    "docs/collaudo-verifica-nodi.md": "49760378133f5e056460a32f76158746afb00fc61107993e4caf0d339b2a3d67",
+    "tools/qa-node-check/check-gtk.py": "c3e3330149922a517ba8a53fe8808a5c213c04f31e0f17f71e479f0dbe8480f1",
+    "tools/qa-node-check/NativeNodeCheckQa.cs": "84fdd4b9603d42ea2f541d40e9f3566e1cee189632f10aeb1c886c6cb82a5559",
+    "tools/qa-node-check/README.md": "6da702a8ea2dd5aef209f979ecae7e426538eb1529981c9b4cc525ba9d17bdd2",
+    "docs/piano-infrastruttura-multinodo.md": "912a4927713bd93f0292dc78c2ed3cc98f618a902911d2b3f18a29dc54597bde"
+  },
+  "validation": {
+    "linux_runtime": {
+      "tests": 385,
+      "skipped": 15,
+      "success": true,
+      "seconds": 58.741,
+      "warnings": "DeprecationWarning and ResourceWarning treated as errors",
+      "source_commit": "8f0d8e1d7132265c5f3f99714429b152955990d1"
+    },
+    "benchmark_tests": 2,
+    "mcp_smoke": "pass isolated legacy and three-node catalogs",
+    "windows_contract": {
+      "id": "5851c289-f1ef-4f01-b765-de68b9fc84c8",
+      "state": "completed",
+      "exit_code": 0,
+      "outcome": {
+        "runtime_protocol_version": 1,
+        "state": "completed",
+        "program_exit_code": 0,
+        "reason": "exit",
+        "started": true
+      },
+      "manifest_sha256": "cf116b4f19ded53b8a1bda5f5d05fd37f1b1ecc27fd0d460f1ba48cd683cde76",
+      "python": "3.14.7",
+      "tests": 48,
+      "skipped": 3,
+      "fixture_correction": "write_bytes preserves explicit UTF-8/LF, assertions and product unchanged",
+      "source_commit": "8f0d8e1d7132265c5f3f99714429b152955990d1"
+    },
+    "windows_compile": {
+      "id": "45b495b4-a458-4ec2-9b79-692fc8bf8044",
+      "state": "completed",
+      "exit_code": 0,
+      "outcome": {
+        "runtime_protocol_version": 1,
+        "state": "completed",
+        "program_exit_code": 0,
+        "reason": "exit",
+        "started": true
+      },
+      "manifest_sha256": "526188b1b96c33610b0faf31837561e7bab447d4fb307550cd7f71cd87fe8e4e"
+    },
+    "windows_gui": {
+      "id": "80af0769-e81e-4bdd-a61b-90348a2fd676",
+      "state": "completed",
+      "exit_code": 0,
+      "outcome": {
+        "runtime_protocol_version": 1,
+        "state": "completed",
+        "program_exit_code": 0,
+        "reason": "exit",
+        "started": true
+      },
+      "manifest_sha256": "ef99354ebc56ce28e7398153d201478ed844116414ec9836ddee6d7d1156ff16",
+      "harness_sha256": "84fdd4b9603d42ea2f541d40e9f3566e1cee189632f10aeb1c886c6cb82a5559",
+      "mode": "isolated synthetic runtime, transparent offscreen dialogs, real STA Application.Run",
+      "sharing_stop": "during synthetic check plus simulated transfer, not real sharing or SFTP",
+      "production_modified": false,
+      "cleanup_errors": []
+    },
+    "gtk_mock": {
+      "ok": true,
+      "mode": "mock",
+      "network": "none",
+      "checks": [
+        "typed six-state report and policy full remain observations",
+        "UUID/origin/revision binding rejects stale replies",
+        "postimport button binds imported UUID",
+        "timeout and runtime update messages",
+        "private diagnostics omitted",
+        "asynchronous check plus transfer flag cannot block Stop",
+        "late callback after dialog destruction ignored",
+        "offscreen labels, metadata and disabled button allocations complete"
+      ],
+      "source_commit": "8f0d8e1d7132265c5f3f99714429b152955990d1"
+    },
+    "gtk_real_local": {
+      "ok": true,
+      "mode": "real_local",
+      "network": "none; local UUID only, no SSH route",
+      "checks": {
+        "ssh": {
+          "state": "unchecked",
+          "reason": "local_node"
+        },
+        "identity": {
+          "state": "match"
+        },
+        "helper": {
+          "state": "compatible_on_disk",
+          "protocol_version": 1
+        },
+        "policy": {
+          "state": "observed",
+          "mode": "full",
+          "native_enabled": true
+        },
+        "worker": {
+          "state": "unverified"
+        },
+        "desktop": {
+          "state": "unchecked"
+        }
+      },
+      "fixture_policy_and_files_unchanged": true,
+      "source_commit": "8f0d8e1d7132265c5f3f99714429b152955990d1"
+    },
+    "maintenance": {
+      "base_commit": "8f0d8e1d7132265c5f3f99714429b152955990d1",
+      "scope": "Seven maintenance findings, independent AST/delta review found no P1/P2; no suppressions or policy changes.",
+      "linux_probe": {
+        "tests": 25,
+        "success": true,
+        "warnings": "all warnings treated as errors"
+      },
+      "linux_cli_contracts": {
+        "tests": 23,
+        "skipped": 3,
+        "success": true,
+        "warnings": "DeprecationWarning and ResourceWarning treated as errors"
+      },
+      "windows_contract": {
+        "id": "4c9b536f-43cc-40e7-b22b-22650c21f8f7",
+        "state": "completed",
+        "exit_code": 0,
+        "outcome": {
+          "runtime_protocol_version": 1,
+          "state": "completed",
+          "program_exit_code": 0,
+          "reason": "exit",
+          "started": true
+        },
+        "manifest_sha256": "aa7e0f219142058db64d2ac818cf3245060f9902382e878e93bc627275867420"
+      },
+      "windows_tests": 48,
+      "windows_skipped": 3,
+      "gtk_mock": {
+        "ok": true,
+        "mode": "mock",
+        "network": "none",
+        "checks": [
+          "typed six-state report and policy full remain observations",
+          "UUID/origin/revision binding rejects stale replies",
+          "postimport button binds imported UUID",
+          "timeout and runtime update messages",
+          "private diagnostics omitted",
+          "asynchronous check plus transfer flag cannot block Stop",
+          "late callback after dialog destruction ignored",
+          "offscreen labels, metadata and disabled button allocations complete"
+        ]
+      },
+      "gtk_real_local": {
+        "ok": true,
+        "mode": "real_local",
+        "network": "none; local UUID only, no SSH route",
+        "checks": {
+          "ssh": {
+            "state": "unchecked",
+            "reason": "local_node"
+          },
+          "identity": {
+            "state": "match"
+          },
+          "helper": {
+            "state": "compatible_on_disk",
+            "protocol_version": 1
+          },
+          "policy": {
+            "state": "observed",
+            "mode": "full",
+            "native_enabled": true
+          },
+          "worker": {
+            "state": "unverified"
+          },
+          "desktop": {
+            "state": "unchecked"
+          }
+        },
+        "fixture_policy_and_files_unchanged": true
+      },
+      "gtk_equivalence_cases": {
+        "descriptions": 8624,
+        "bridge_responses": 48,
+        "runtime_selection": 7
+      },
+      "csharp_source_unchanged": true,
+      "native_gui_harness_unchanged": true,
+      "hosted_ci_initial": {
+        "run_id": 45681385971,
+        "commit": "8f0d8e1d7132265c5f3f99714429b152955990d1",
+        "jobs_successful": 4
+      },
+      "final_hosted_and_automatic_review": "reported separately against the updated commit; initial green checks are not transferred"
+    }
+  },
+  "real_checks": {
+    "ubuntu_initial": {
+      "origin_id": "0d97d16f-1624-4467-b834-f0592a4d29ab",
+      "registry_sha256_before_after": "7d556c2379504d648ccb7598cd5e6e213c09e0a3a44cbeaaf914600686f15695",
+      "production_registry_unchanged": true,
+      "policy_modified": false,
+      "reports": [
+        {
+          "node_id": "0d97d16f-1624-4467-b834-f0592a4d29ab",
+          "origin_id": "0d97d16f-1624-4467-b834-f0592a4d29ab",
+          "revision": "7d556c2379504d648ccb7598cd5e6e213c09e0a3a44cbeaaf914600686f15695",
+          "route_digest": "6b6b33f9283149458533541781cac075dbf0442b6e657d91501a681a9cd9876f",
+          "host_pin_sha256": null,
+          "checked_at": "2026-11-25T18:21:03.784636+00:00",
+          "elapsed_seconds": 0.129,
+          "checks": {
+            "ssh": {
+              "state": "unchecked",
+              "reason": "local_node"
+            },
+            "identity": {
+              "state": "match"
+            },
+            "helper": {
+              "state": "compatible_on_disk",
+              "protocol_version": 1
+            },
+            "policy": {
+              "state": "observed",
+              "mode": "full",
+              "native_enabled": true
+            },
+            "worker": {
+              "state": "unverified"
+            },
+            "desktop": {
+              "state": "unchecked"
+            }
+          }
+        },
+        {
+          "node_id": "a197f389-14b2-4716-86a2-70314e2ee4e2",
+          "origin_id": "0d97d16f-1624-4467-b834-f0592a4d29ab",
+          "revision": "7d556c2379504d648ccb7598cd5e6e213c09e0a3a44cbeaaf914600686f15695",
+          "route_digest": "a6199d6da10e81b836ad910ad85451d47073fa3bd80b2b47ad7351e430aae1fe",
+          "host_pin_sha256": "3f447e23269948b4660f2e88c6195dbc4fc6120688bc6190983edbbf1c76f269",
+          "checked_at": "2026-11-25T18:21:04.473157+00:00",
+          "elapsed_seconds": 0.414,
+          "checks": {
+            "ssh": {
+              "state": "authenticated"
+            },
+            "identity": {
+              "state": "match"
+            },
+            "helper": {
+              "state": "compatible_on_disk",
+              "protocol_version": 1
+            },
+            "policy": {
+              "state": "observed",
+              "mode": "full",
+              "native_enabled": true
+            },
+            "worker": {
+              "state": "unverified"
+            },
+            "desktop": {
+              "state": "unchecked"
+            }
+          }
+        },
+        {
+          "node_id": "12365c6d-f1c3-41ad-a4cb-458363b2fae5",
+          "origin_id": "0d97d16f-1624-4467-b834-f0592a4d29ab",
+          "revision": "7d556c2379504d648ccb7598cd5e6e213c09e0a3a44cbeaaf914600686f15695",
+          "route_digest": "79d03c1bd6c27ea1aa8c83876c067b73c3d2aed505b2c57ef86c555a9452912c",
+          "host_pin_sha256": "3f447e23269948b4660f2e88c6195dbc4fc6120688bc6190983edbbf1c76f269",
+          "checked_at": "2026-11-25T18:21:10.700393+00:00",
+          "elapsed_seconds": 6.025,
+          "checks": {
+            "ssh": {
+              "state": "failed",
+              "reason": "probe_failed"
+            },
+            "identity": {
+              "state": "unchecked"
+            },
+            "helper": {
+              "state": "unchecked"
+            },
+            "policy": {
+              "state": "unchecked"
+            },
+            "worker": {
+              "state": "unverified"
+            },
+            "desktop": {
+              "state": "unchecked"
+            }
+          }
+        }
+      ],
+      "source_backend_sha256": "a7719ef9bb3fb7cf1c12d15801d04e774fbee97de0857e8f9faa354b55265f52"
+    },
+    "ubuntu_reconnected": {
+      "origin_id": "0d97d16f-1624-4467-b834-f0592a4d29ab",
+      "registry_sha256_before_after": "7d556c2379504d648ccb7598cd5e6e213c09e0a3a44cbeaaf914600686f15695",
+      "production_registry_unchanged": true,
+      "policy_modified": false,
+      "reports": [
+        {
+          "node_id": "0d97d16f-1624-4467-b834-f0592a4d29ab",
+          "origin_id": "0d97d16f-1624-4467-b834-f0592a4d29ab",
+          "revision": "7d556c2379504d648ccb7598cd5e6e213c09e0a3a44cbeaaf914600686f15695",
+          "route_digest": "6b6b33f9283149458533541781cac075dbf0442b6e657d91501a681a9cd9876f",
+          "host_pin_sha256": null,
+          "checked_at": "2026-11-25T18:51:33.659636+00:00",
+          "elapsed_seconds": 0.13,
+          "checks": {
+            "ssh": {
+              "state": "unchecked",
+              "reason": "local_node"
+            },
+            "identity": {
+              "state": "match"
+            },
+            "helper": {
+              "state": "compatible_on_disk",
+              "protocol_version": 1
+            },
+            "policy": {
+              "state": "observed",
+              "mode": "full",
+              "native_enabled": true
+            },
+            "worker": {
+              "state": "unverified"
+            },
+            "desktop": {
+              "state": "unchecked"
+            }
+          }
+        },
+        {
+          "node_id": "a197f389-14b2-4716-86a2-70314e2ee4e2",
+          "origin_id": "0d97d16f-1624-4467-b834-f0592a4d29ab",
+          "revision": "7d556c2379504d648ccb7598cd5e6e213c09e0a3a44cbeaaf914600686f15695",
+          "route_digest": "a6199d6da10e81b836ad910ad85451d47073fa3bd80b2b47ad7351e430aae1fe",
+          "host_pin_sha256": "3f447e23269948b4660f2e88c6195dbc4fc6120688bc6190983edbbf1c76f269",
+          "checked_at": "2026-11-25T18:51:34.249027+00:00",
+          "elapsed_seconds": 0.388,
+          "checks": {
+            "ssh": {
+              "state": "authenticated"
+            },
+            "identity": {
+              "state": "match"
+            },
+            "helper": {
+              "state": "compatible_on_disk",
+              "protocol_version": 1
+            },
+            "policy": {
+              "state": "observed",
+              "mode": "full",
+              "native_enabled": true
+            },
+            "worker": {
+              "state": "unverified"
+            },
+            "desktop": {
+              "state": "unchecked"
+            }
+          }
+        },
+        {
+          "node_id": "12365c6d-f1c3-41ad-a4cb-458363b2fae5",
+          "origin_id": "0d97d16f-1624-4467-b834-f0592a4d29ab",
+          "revision": "7d556c2379504d648ccb7598cd5e6e213c09e0a3a44cbeaaf914600686f15695",
+          "route_digest": "79d03c1bd6c27ea1aa8c83876c067b73c3d2aed505b2c57ef86c555a9452912c",
+          "host_pin_sha256": "3f447e23269948b4660f2e88c6195dbc4fc6120688bc6190983edbbf1c76f269",
+          "checked_at": "2026-11-25T18:51:37.283171+00:00",
+          "elapsed_seconds": 2.844,
+          "checks": {
+            "ssh": {
+              "state": "authenticated"
+            },
+            "identity": {
+              "state": "match"
+            },
+            "helper": {
+              "state": "compatible_on_disk",
+              "protocol_version": 1
+            },
+            "policy": {
+              "state": "observed",
+              "mode": "full",
+              "native_enabled": true
+            },
+            "worker": {
+              "state": "unverified"
+            },
+            "desktop": {
+              "state": "unchecked"
+            }
+          }
+        }
+      ],
+      "source_backend_sha256": "a7719ef9bb3fb7cf1c12d15801d04e774fbee97de0857e8f9faa354b55265f52"
+    },
+    "windows_initial": {
+      "origin_id": "a197f389-14b2-4716-86a2-70314e2ee4e2",
+      "registry_sha256_before_after": "0460796c9979765ba45d7a1f8283b239bdddd9f85f98f95895d6dc0f170e4664",
+      "production_registry_unchanged": true,
+      "policy_modified": false,
+      "reports": [
+        {
+          "node_id": "0d97d16f-1624-4467-b834-f0592a4d29ab",
+          "origin_id": "a197f389-14b2-4716-86a2-70314e2ee4e2",
+          "revision": "0460796c9979765ba45d7a1f8283b239bdddd9f85f98f95895d6dc0f170e4664",
+          "route_digest": "9b253f906aaa4dff5e1ec2b6cbb37d57080bacfa28a395768d79cc8b0dabf3a8",
+          "host_pin_sha256": null,
+          "checked_at": "2026-11-25T18:41:02.497769+00:00",
+          "elapsed_seconds": 0.001,
+          "checks": {
+            "ssh": {
+              "state": "unchecked",
+              "reason": "legacy_route_requires_explicit"
+            },
+            "identity": {
+              "state": "unchecked"
+            },
+            "helper": {
+              "state": "unchecked"
+            },
+            "policy": {
+              "state": "unchecked"
+            },
+            "worker": {
+              "state": "unverified"
+            },
+            "desktop": {
+              "state": "unchecked"
+            }
+          }
+        },
+        {
+          "node_id": "a197f389-14b2-4716-86a2-70314e2ee4e2",
+          "origin_id": "a197f389-14b2-4716-86a2-70314e2ee4e2",
+          "revision": "0460796c9979765ba45d7a1f8283b239bdddd9f85f98f95895d6dc0f170e4664",
+          "route_digest": "8a603bf7b4d5612b8491f9cf62f3c5aa7124dd6ec4f8c95201759ec2fef4933f",
+          "host_pin_sha256": null,
+          "checked_at": "2026-11-25T18:41:02.835986+00:00",
+          "elapsed_seconds": 0.16,
+          "checks": {
+            "ssh": {
+              "state": "unchecked",
+              "reason": "local_node"
+            },
+            "identity": {
+              "state": "match"
+            },
+            "helper": {
+              "state": "compatible_on_disk",
+              "protocol_version": 1
+            },
+            "policy": {
+              "state": "observed",
+              "mode": "full",
+              "native_enabled": true
+            },
+            "worker": {
+              "state": "unverified"
+            },
+            "desktop": {
+              "state": "unchecked"
+            }
+          }
+        },
+        {
+          "node_id": "12365c6d-f1c3-41ad-a4cb-458363b2fae5",
+          "origin_id": "a197f389-14b2-4716-86a2-70314e2ee4e2",
+          "revision": "0460796c9979765ba45d7a1f8283b239bdddd9f85f98f95895d6dc0f170e4664",
+          "route_digest": "af17a4052abd95aa2f4a39df295aab927dfe4b49d9c56f8448b049453bcb2074",
+          "host_pin_sha256": "bf5aa50dc3436849a050315bbe165485f25b456590b668b753d0e2a59276f1e4",
+          "checked_at": "2026-11-25T18:41:09.120361+00:00",
+          "elapsed_seconds": 6.047,
+          "checks": {
+            "ssh": {
+              "state": "failed",
+              "reason": "probe_failed"
+            },
+            "identity": {
+              "state": "unchecked"
+            },
+            "helper": {
+              "state": "unchecked"
+            },
+            "policy": {
+              "state": "unchecked"
+            },
+            "worker": {
+              "state": "unverified"
+            },
+            "desktop": {
+              "state": "unchecked"
+            }
+          }
+        }
+      ],
+      "source_backend_sha256": "a7719ef9bb3fb7cf1c12d15801d04e774fbee97de0857e8f9faa354b55265f52"
+    },
+    "windows_reconnected": {
+      "origin_id": "a197f389-14b2-4716-86a2-70314e2ee4e2",
+      "registry_sha256_before_after": "0460796c9979765ba45d7a1f8283b239bdddd9f85f98f95895d6dc0f170e4664",
+      "production_registry_unchanged": true,
+      "policy_modified": false,
+      "reports": [
+        {
+          "node_id": "0d97d16f-1624-4467-b834-f0592a4d29ab",
+          "origin_id": "a197f389-14b2-4716-86a2-70314e2ee4e2",
+          "revision": "0460796c9979765ba45d7a1f8283b239bdddd9f85f98f95895d6dc0f170e4664",
+          "route_digest": "9b253f906aaa4dff5e1ec2b6cbb37d57080bacfa28a395768d79cc8b0dabf3a8",
+          "host_pin_sha256": null,
+          "checked_at": "2026-11-25T18:51:34.827508+00:00",
+          "elapsed_seconds": 0.001,
+          "checks": {
+            "ssh": {
+              "state": "unchecked",
+              "reason": "legacy_route_requires_explicit"
+            },
+            "identity": {
+              "state": "unchecked"
+            },
+            "helper": {
+              "state": "unchecked"
+            },
+            "policy": {
+              "state": "unchecked"
+            },
+            "worker": {
+              "state": "unverified"
+            },
+            "desktop": {
+              "state": "unchecked"
+            }
+          }
+        },
+        {
+          "node_id": "a197f389-14b2-4716-86a2-70314e2ee4e2",
+          "origin_id": "a197f389-14b2-4716-86a2-70314e2ee4e2",
+          "revision": "0460796c9979765ba45d7a1f8283b239bdddd9f85f98f95895d6dc0f170e4664",
+          "route_digest": "8a603bf7b4d5612b8491f9cf62f3c5aa7124dd6ec4f8c95201759ec2fef4933f",
+          "host_pin_sha256": null,
+          "checked_at": "2026-11-25T18:51:35.150752+00:00",
+          "elapsed_seconds": 0.163,
+          "checks": {
+            "ssh": {
+              "state": "unchecked",
+              "reason": "local_node"
+            },
+            "identity": {
+              "state": "match"
+            },
+            "helper": {
+              "state": "compatible_on_disk",
+              "protocol_version": 1
+            },
+            "policy": {
+              "state": "observed",
+              "mode": "full",
+              "native_enabled": true
+            },
+            "worker": {
+              "state": "unverified"
+            },
+            "desktop": {
+              "state": "unchecked"
+            }
+          }
+        },
+        {
+          "node_id": "12365c6d-f1c3-41ad-a4cb-458363b2fae5",
+          "origin_id": "a197f389-14b2-4716-86a2-70314e2ee4e2",
+          "revision": "0460796c9979765ba45d7a1f8283b239bdddd9f85f98f95895d6dc0f170e4664",
+          "route_digest": "af17a4052abd95aa2f4a39df295aab927dfe4b49d9c56f8448b049453bcb2074",
+          "host_pin_sha256": "bf5aa50dc3436849a050315bbe165485f25b456590b668b753d0e2a59276f1e4",
+          "checked_at": "2026-11-25T18:51:41.360233+00:00",
+          "elapsed_seconds": 6.056,
+          "checks": {
+            "ssh": {
+              "state": "failed",
+              "reason": "probe_failed"
+            },
+            "identity": {
+              "state": "unchecked"
+            },
+            "helper": {
+              "state": "unchecked"
+            },
+            "policy": {
+              "state": "unchecked"
+            },
+            "worker": {
+              "state": "unverified"
+            },
+            "desktop": {
+              "state": "unchecked"
+            }
+          }
+        }
+      ],
+      "source_backend_sha256": "a7719ef9bb3fb7cf1c12d15801d04e774fbee97de0857e8f9faa354b55265f52"
+    }
+  },
+  "operational_postboot": {
+    "kali_boot_id": "6681a602-552e-432d-b052-591899560938",
+    "operator_rebooted": true,
+    "ubuntu_origin_job": {
+      "job_id": "3a251579-4955-4ad5-9121-9895a1fd7104",
+      "exit_code": 0,
+      "uid": 1000,
+      "cgroup": "0::/system.slice/vincula-core-worker.service"
+    },
+    "service_active_seconds": {
+      "core": 29.553044,
+      "ssh": 36.497093,
+      "x11_session": 49.401996
+    },
+    "graphical_user_session_observed": true,
+    "strict_no_graphical_login_boot_passed": false,
+    "windows_native_outer_job": "2e57decf-9834-4fc5-b7e3-489e2388dcac",
+    "windows_native_oracle_passed": false,
+    "windows_native_failure": "two get_process_execution_info connection failures; no execute_process call",
+    "kali_subnet_route_missing": true,
+    "network_reapply": "prepared, pending operator OS authentication and checkpoint; no repair claimed"
+  },
+  "production_deployment": false,
+  "permission_policy_modified": false,
+  "review": "Independent source/CLI, fixture/docs delta and harness reviews found no P1/P2 in their recorded snapshots. Hosted checks and automatic review are separate."
+}

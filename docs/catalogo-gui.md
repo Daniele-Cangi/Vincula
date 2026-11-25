@@ -37,7 +37,26 @@ Quando il registro manca, la scheda mostra il profilo a due PC e offre **Registr
 
 Un profilo SSH legacy di un nodo già registrato rimane selezionabile nel modulo. Per passare a un percorso esplicito si sceglie **SSH esplicito** e si compilano i campi. **Da configurare** rimuove il percorso del nodo dal registro.
 
-Il modulo manuale non completa ancora l’[enrollment verificato](node-enrollment.md): importazione dell’invito, confronto dell’impronta, verifica dell’identità sul peer e abilitazione delle funzioni appartengono al passo successivo.
+Per gli [inviti pubblici](node-enrollment.md), **Esporta invito** conserva l’UUID del computer e la sua chiave host pubblica; **Importa invito** richiede il confronto indipendente dell’impronta e una rotta propria di questa origine. Il modulo manuale resta disponibile. La registrazione non autorizza la chiave dell’origine sul destinatario e non attiva automaticamente worker o desktop.
+
+## Verifica del nodo
+
+**Verifica nodo**, nella scheda Nodi e nel risultato dell’importazione, apre una finestra modeless e interroga il nodo selezionato. La verifica parte solo dopo l’azione esplicita; il costruttore della finestra non apre connessioni. Il risultato è vincolato agli UUID dell’origine e del destinatario e alla revisione richiesta. La finestra mostra l’UUID del nodo, la revisione del catalogo, il digest della rotta e la data dell’osservazione.
+
+| Controllo | Cosa dimostra |
+| --- | --- |
+| SSH | Autenticazione sulla rotta esplicita con il pin host configurato. Sul nodo locale non è applicabile. |
+| Identità | Corrispondenza dell’UUID persistente letto nei cataloghi del destinatario. Cataloghi discordanti o illeggibili restano espliciti. |
+| Helper | Compatibilità dei byte di sei file installati con quelli del runtime di verifica. Non certifica il processo worker attivo. |
+| Permessi | Policy `ask`/`full` e opt-in all’esecuzione generale osservati in sola lettura, se gli helper sono compatibili. |
+| Worker | Rimane **Servizio autonomo non verificato**: serve un collaudo separato. |
+| Desktop | Rimane non verificato: include motore, TLS, sessione, consenso, input e appunti. |
+
+La verifica non cambia registro, credenziali o permessi e non avvia lavori sul destinatario. Una modifica concorrente a catalogo, rotta o pin invalida il risultato; aggiorna l’elenco e ripeti il controllo. Il risultato è un’osservazione temporanea della finestra, non uno stato di disponibilità persistente. Le rotte legacy restano utilizzabili dalle funzioni esistenti ma questo nuovo controllo richiede una rotta SSH esplicita.
+
+Lo stop della condivisione resta indipendente dalla verifica e dalle operazioni di trasferimento. Il ponte GUI concede alla nuova azione 75 secondi, mentre le azioni precedenti mantengono 15 secondi; i limiti del trasporto e della raccolta sono descritti nel [contratto di verifica](node-enrollment.md). L’eventuale arresto non confermato del processo di verifica è indicato esplicitamente, senza presentare un esito riuscito.
+
+Serve un runtime completo con `agent/node_probe.py` e le sue dipendenze, oltre a `node_enrollment.py`. Un runtime minimo precedente conserva il catalogo manuale e chiede di aggiornarsi per la nuova azione. La verifica usa il catalogo selezionato da `VINCULA_NODE_REGISTRY`, o quello standard della GUI: configurare il profilo Core di Codex non migra automaticamente il catalogo Desktop. Questo incremento non distribuisce le nuove GUI sulle installazioni operative.
 
 ## Layout desktop e controlli preliminari
 
