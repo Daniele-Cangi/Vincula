@@ -123,15 +123,40 @@ class Controller:
             "KillMode=control-group", "StandardInput=null", "StandardOutput=null", "StandardError=null",
             "", "[Install]", "WantedBy=multi-user.target", ""]) ).encode()
 
+    def _create_directory(self, path):
+        path.mkdir(mode=0o755)
+        created = path.lstat()
+        require(stat.S_ISDIR(created.st_mode) and created.st_uid == self.paths.admin_uid
+                and not created.st_mode & 0o022, "New controller directory is not protected")
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            pinned = os.fstat(fd)
+            identity = (created.st_dev, created.st_ino)
+            require(stat.S_ISDIR(pinned.st_mode) and pinned.st_uid == self.paths.admin_uid
+                    and (pinned.st_dev, pinned.st_ino) == identity, "New controller directory identity changed")
+            os.fchmod(fd, 0o755)
+            current, pinned = path.lstat(), os.fstat(fd)
+            require((current.st_dev, current.st_ino) == identity == (pinned.st_dev, pinned.st_ino)
+                    and pinned.st_uid == self.paths.admin_uid and stat.S_IMODE(pinned.st_mode) == 0o755,
+                    "New controller directory identity or mode changed")
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    def _searchable(self, info):
+        require(self.account.pw_uid in (0, info.st_uid) or info.st_mode & 0o011,
+                "Controller directory is not searchable by selected owner; inspect OS permissions")
+
     def _parents(self, directory):
         for path in reversed((directory, *directory.parents)):
             if not path.is_relative_to(self.paths.anchor):
                 continue
             if not path.exists():
-                path.mkdir(mode=0o755)
+                self._create_directory(path)
             info = path.lstat()
             require(stat.S_ISDIR(info.st_mode) and info.st_uid == self.paths.admin_uid and not info.st_mode & 0o022,
                     "Controller OS directory must be protected")
+            self._searchable(info)
 
     def _check_parents(self, directory):
         for path in (directory, *directory.parents):
@@ -139,6 +164,7 @@ class Controller:
                 info = path.lstat()
                 require(stat.S_ISDIR(info.st_mode) and info.st_uid == self.paths.admin_uid and not info.st_mode & 0o022,
                         "Unprotected controller directory")
+                self._searchable(info)
 
     def _public_file(self, path, *, mode=None):
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)

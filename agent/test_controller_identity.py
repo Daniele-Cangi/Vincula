@@ -115,6 +115,56 @@ class ControllerTests(unittest.TestCase):
                 os.fstat(fd)
         self.provider.verify_installed()
 
+    def test_restrictive_umask_sets_only_new_directory_modes_and_preserves_existing(self):
+        self.paths.configuration.mkdir(mode=0o750)
+        self.paths.configuration.chmod(0o750)
+        preserved = {path: path.stat().st_mode & 0o777 for path in (self.root, self.paths.configuration)}
+        previous = os.umask(0o077)
+        try:
+            result = self.install()
+        finally:
+            os.umask(previous)
+        self.assertTrue(result["installed"])
+        for directory in (self.paths.runtime, self.paths.system, self.paths.helper.parent, self.provider.directory):
+            self.assertEqual(directory.stat().st_mode & 0o777, 0o755)
+        for path, mode in preserved.items():
+            self.assertEqual(path.stat().st_mode & 0o777, mode)
+        self.assertEqual(self.provider.public.stat().st_mode & 0o777, 0o644)
+        self.assertEqual(self.paths.helper.stat().st_mode & 0o777, 0o644)
+        self.assertEqual(self.provider.cipher.stat().st_mode & 0o777, 0o600)
+
+    def test_preexisting_private_admin_directory_is_not_widened_for_other_owner(self):
+        self.root.chmod(0o755)
+        self.paths.helper.parent.mkdir(mode=0o700)
+        self.paths.helper.parent.chmod(0o700)
+        self.paths.helper.write_bytes(Path(ci.__file__).read_bytes())
+        self.paths.helper.chmod(0o644)
+        self.provider.account = SimpleNamespace(pw_name="tester", pw_uid=os.getuid() + 1, pw_dir=str(self.root), pw_gid=os.getgid())
+        with self.assertRaisesRegex(ValueError, "searchable.*inspect"):
+            self.provider.plan()
+        self.assertEqual(self.paths.helper.parent.stat().st_mode & 0o777, 0o700)
+        self.assertFalse(any(c[0][0].endswith("ssh-keygen") for c in self.calls))
+        self.paths.helper.parent.chmod(0o750)
+        self.assertFalse(self.provider.plan()["already_installed"])
+        self.assertEqual(self.paths.helper.parent.stat().st_mode & 0o777, 0o750)
+
+    def test_replaced_new_directory_is_not_chmodded_and_descriptor_is_closed(self):
+        destination = self.root / "new-directory"
+        foreign = self.root / "foreign-directory"
+        foreign.mkdir(mode=0o700); foreign.chmod(0o700)
+        original_open = os.open
+        def replace_before_open(path, flags, *args, **kwargs):
+            if Path(path) == destination:
+                self.assertTrue(flags & os.O_DIRECTORY and flags & os.O_NOFOLLOW)
+                destination.rename(self.root / "original-directory")
+                foreign.rename(destination)
+            return original_open(path, flags, *args, **kwargs)
+        before = len(list(Path("/proc/self/fd").iterdir()))
+        with patch.object(ci.os, "open", side_effect=replace_before_open), self.assertRaisesRegex(ValueError, "identity changed"):
+            self.provider._parents(destination)
+        self.assertEqual(destination.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(len(list(Path("/proc/self/fd").iterdir())), before)
+
     def test_idempotent_install_does_not_rotate_identity(self):
         self.install()
         public, cipher = self.provider.public.read_bytes(), self.provider.cipher.read_bytes()
