@@ -30,13 +30,15 @@ python3 -I -B agent/controller_identity.py status --owner nomeutente
 
 `plan` e `status` non elevano privilegi, non generano chiavi, non avviano unità e non modificano il registro. Il piano su un'installazione esistente, eseguito senza root, verifica i metadati dell'involucro protetto e dichiara che non ne ha verificato il digest. Durante l'installazione root vengono verificati anche i byte cifrati.
 
-Solo dopo aver verificato codice e piano, l'operatore esegue localmente:
+Per `install` usare una copia del modulo posseduta da root, con tutti gli antenati protetti da scrittura degli altri utenti; il normale checkout utente resta sufficiente per `plan/status`. Il setup ripubblica il proprio sorgente come loader OS: anche dopo una verifica iniziale del digest, una copia modificabile durante l'esecuzione non soddisfa questo requisito. Un launcher può leggere i byte del modulo, confrontarli con il digest della release e copiarli in una directory root privata prima di eseguire quei medesimi byte. Non deve eseguire direttamente un percorso utente modificabile. La verifica e la copia del codice pubblico non richiedono la lettura di chiavi private.
+
+Solo dopo aver verificato codice e piano, dal checkout protetto l'operatore esegue localmente:
 
 ```bash
 sudo python3 -I -B agent/controller_identity.py install --owner nomeutente --encryption host
 ```
 
-Il codice del setup viene eseguito come root: deve provenire da un checkout verificato, non da file modificabili da altri utenti. Il comando non richiede password degli altri computer. Crea:
+Il comando richiede l'autorizzazione amministrativa locale, non le password degli altri computer. Crea:
 
 | Risorsa | Percorso |
 | --- | --- |
