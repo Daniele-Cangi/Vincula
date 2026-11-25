@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Local Linux receiver setup. No MCP endpoint, GUI, key management or runtime migration."""
 import argparse
-from contextlib import closing
+from contextlib import ExitStack, closing
 from dataclasses import dataclass
 import hashlib
 import inspect
@@ -176,6 +176,8 @@ class Installer:
         self.old_file = self.home / ".config/systemd/user" / OLD_UNIT
         self.unit_file = self.paths.system / UNIT
         self.created = {}
+        self.created_fds = {}
+        self._payload_pins = ExitStack()
         self.user_disabled = self.user_stopped = self.system_started = False
 
     def command(self, argv, **kwargs):
@@ -186,7 +188,7 @@ class Installer:
 
     def show(self, name, user=False):
         raw = self.ctl("show", name, "-p", "LoadState,UnitFileState,ActiveState,MainPID,ControlGroup,FragmentPath", user=user, check=False)
-        return dict(line.split("=", 1) for line in raw.splitlines() if "=" in line)
+        return {key: value for key, separator, value in (line.partition("=") for line in raw.splitlines()) if separator}
 
     def state_snapshot(self):
         _, identity = read_file(self.db, {self.account.pw_uid})
@@ -252,7 +254,7 @@ class Installer:
             payloads[dropin] = ("[Service]\nExecStartPre=" + " ".join(word(s, True) for s in command) + "\n").encode()
         return payloads
 
-    def plan(self):
+    def _verify_release(self):
         cfg = self.settings
         if self.account.pw_uid == 0:
             for path in (self.home, self.state, self.db, cfg.release, cfg.release / "_release-manifest.json",
@@ -269,15 +271,16 @@ class Installer:
             wanted = manifest["files"]["agent/" + name]["sha256"]
             for path in (cfg.release / "agent" / name, self.state / name):
                 require(sha(read_file(path, {0, self.account.pw_uid})[0]) == wanted, "Release/installed helper mismatch")
-        state = self.state_snapshot()
-        require(state["active"] == 0, "Existing active work prevents setup")
-        worker_path = valid_worker_path(cfg.worker_path if cfg.worker_path is not None else state["worker_path"])
-        payloads = self.payloads(worker_path)
+        return manifest
+
+    def _check_payloads(self, payloads):
         for path, data in payloads.items():
             if os.path.lexists(path):
                 require(read_file(path, {self.paths.admin_uid})[0] == data, "Existing OS setup differs; review upgrade separately")
                 require(not path.lstat().st_mode & 0o022, "Writable OS payload is not trusted")
         require(not self.unit_file.with_name(UNIT + ".d").exists(), "Worker drop-ins need separate review")
+
+    def _legacy_worker(self):
         old = self.show(OLD_UNIT, user=True)
         if self.old_file.exists():
             old_bytes, _ = read_file(self.old_file, {self.account.pw_uid})
@@ -292,6 +295,17 @@ class Installer:
             require(self.lock_owners() == [int(old.get("MainPID", "0"))], "Active user worker lock not confirmed")
         else:
             require(not self.lock_owners() or self.ready(), "Unowned worker lock prevents setup")
+        return old, old_bytes
+
+    def plan(self):
+        cfg = self.settings
+        manifest = self._verify_release()
+        state = self.state_snapshot()
+        require(state["active"] == 0, "Existing active work prevents setup")
+        worker_path = valid_worker_path(cfg.worker_path if cfg.worker_path is not None else state["worker_path"])
+        payloads = self.payloads(worker_path)
+        self._check_payloads(payloads)
+        old, old_bytes = self._legacy_worker()
         return {"source_commit": manifest["source_commit"], "owner": cfg.owner, "home": str(self.home),
                 "before": state, "target_policy": [cfg.access, int(cfg.native_execution == "enable")],
                 "payloads": payloads, "old_unit": old, "old_bytes": old_bytes, "system_unit": self.show(UNIT)}
@@ -314,13 +328,15 @@ class Installer:
             return
         temporary = path.with_name("." + path.name + "." + uuid4().hex)
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        self._payload_pins.callback(os.close, fd)
         try:
-            with os.fdopen(fd, "wb") as stream:
+            with os.fdopen(os.dup(fd), "wb") as stream:
                 os.fchmod(stream.fileno(), mode)
                 stream.write(raw); stream.flush(); os.fsync(stream.fileno())
+            info = os.fstat(fd)
             os.link(temporary, path)
-            info = path.lstat()
             self.created[path] = ((info.st_dev, info.st_ino), sha(raw))
+            self.created_fds[path] = fd
         finally:
             temporary.unlink(missing_ok=True)
         fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
@@ -363,18 +379,15 @@ class Installer:
 
     def _rollback(self, plan):
         require(self.state_snapshot()["active"] == 0, "Rollback deferred: new work exists")
-        for path, (identity, digest) in self.created.items():
-            raw, current = read_file(path, {self.paths.admin_uid})
-            require(current == identity and sha(raw) == digest, "Rollback refuses changed OS file")
+        for path in self.created:
+            self._owned_payload(path)
         if self.system_started:
             require(self.unit_file in self.created and plan["system_unit"].get("ActiveState") != "active", "Rollback does not own this worker lifecycle")
             self._drain(UNIT)
-            raw, current = read_file(self.unit_file, {self.paths.admin_uid})
-            require((current, sha(raw)) == self.created[self.unit_file], "Rollback worker file changed during drain")
+            self._owned_payload(self.unit_file)
             self.ctl("disable", "--now", UNIT)
-        for path, (identity, digest) in reversed(list(self.created.items())):
-            raw, current = read_file(path, {self.paths.admin_uid})
-            require(current == identity and sha(raw) == digest, "Rollback refuses changed OS file")
+        for path in reversed(self.created):
+            self._owned_payload(path)
             path.unlink()
         self.ctl("daemon-reload")
         if self.user_disabled:
@@ -383,6 +396,13 @@ class Installer:
         if self.user_stopped:
             require(read_file(self.old_file, {self.account.pw_uid})[0] == plan["old_bytes"], "Original user unit changed")
             self.ctl("start", OLD_UNIT, user=True)
+
+    def _owned_payload(self, path):
+        identity, digest = self.created[path]
+        original = os.fstat(self.created_fds[path])
+        require((original.st_dev, original.st_ino) == identity, "Payload descriptor identity changed")
+        raw, current = read_file(path, {self.paths.admin_uid})
+        require(current == identity and sha(raw) == digest, "Rollback refuses changed OS file")
 
     def install(self):
         require(os.geteuid() == 0, "Install is a local root-only operation")
@@ -395,7 +415,46 @@ class Installer:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return self._install()
         finally:
-            os.close(descriptor)
+            try:
+                self._payload_pins.close()
+            finally:
+                self.created_fds.clear()
+                os.close(descriptor)
+
+    def _cutover(self, plan):
+        for path, raw in plan["payloads"].items():
+            self._put(path, raw)
+        self._native_verify()
+        self.ctl("daemon-reload")
+        require(self.state_snapshot() == plan["before"], "State changed before worker cutover")
+        if plan["old_unit"].get("UnitFileState") in {"enabled", "enabled-runtime"}:
+            self.user_disabled = True
+            self.ctl("--no-reload", *(["--runtime"] if plan["old_unit"].get("UnitFileState") == "enabled-runtime" else []), "disable", OLD_UNIT, user=True)
+        if plan["old_unit"].get("ActiveState") == "active":
+            self.user_stopped = True
+            self._drain(OLD_UNIT, user=True)
+            self.ctl("stop", OLD_UNIT, user=True)
+        require(not self.lock_owners() and self.state_snapshot()["active"] == 0, "Previous worker/work still present")
+        self.system_started = True
+        self.ctl("enable", "--now", UNIT)
+        self._wait_ready()
+        require(self.state_snapshot()["tables"] == plan["before"]["tables"], "Existing tables changed")
+
+    def _install_failure(self, error, plan, policy_attempted, committed):
+        if policy_attempted and not committed:
+            try:
+                committed = self.state_snapshot()["policy"] != plan["before"]["policy"]
+            except Exception:
+                committed = True  # Unknown commit result: preserve state for local review.
+        result = {"error_class": type(error).__name__, "policy_committed": committed}
+        if not committed:
+            try:
+                self._rollback(plan); result["rollback"] = True
+            except Exception:
+                result.update(rollback=False, manual_review_required=True)
+        else:
+            result["manual_review_required"] = True
+        return result
 
     def _install(self):
         plan = self.plan()
@@ -416,23 +475,7 @@ class Installer:
         committed = policy_attempted = False
         result = {"applied": False, "backup": str(backup), "desktop_ready": False}
         try:
-            for path, raw in plan["payloads"].items():
-                self._put(path, raw)
-            self._native_verify()
-            self.ctl("daemon-reload")
-            require(self.state_snapshot() == plan["before"], "State changed before worker cutover")
-            if plan["old_unit"].get("UnitFileState") in {"enabled", "enabled-runtime"}:
-                self.user_disabled = True
-                self.ctl("--no-reload", *(["--runtime"] if plan["old_unit"].get("UnitFileState") == "enabled-runtime" else []), "disable", OLD_UNIT, user=True)
-            if plan["old_unit"].get("ActiveState") == "active":
-                self.user_stopped = True
-                self._drain(OLD_UNIT, user=True)
-                self.ctl("stop", OLD_UNIT, user=True)
-            require(not self.lock_owners() and self.state_snapshot()["active"] == 0, "Previous worker/work still present")
-            self.system_started = True
-            self.ctl("enable", "--now", UNIT)
-            self._wait_ready()
-            require(self.state_snapshot()["tables"] == plan["before"]["tables"], "Existing tables changed")
+            self._cutover(plan)
             policy_attempted = True
             self._policy(plan["before"])
             committed = True
@@ -440,19 +483,7 @@ class Installer:
             require(after["policy"] == plan["target_policy"] and after["tables"] == plan["before"]["tables"] and self.ready(), "Post-install state not confirmed")
             result.update(applied=True, worker_running=True, policy=after["policy"], reboot_verified=False)
         except Exception as error:
-            if policy_attempted and not committed:
-                try:
-                    committed = self.state_snapshot()["policy"] != plan["before"]["policy"]
-                except Exception:
-                    committed = True  # Unknown commit result: preserve state for local review.
-            result.update(error_class=type(error).__name__, policy_committed=committed)
-            if not committed:
-                try:
-                    self._rollback(plan); result["rollback"] = True
-                except Exception:
-                    result.update(rollback=False, manual_review_required=True)
-            else:
-                result["manual_review_required"] = True
+            result.update(self._install_failure(error, plan, policy_attempted, committed))
         (backup / "receipt.json").write_text(json.dumps(result, indent=2))
         for path in backup.iterdir():
             path.chmod(0o600)

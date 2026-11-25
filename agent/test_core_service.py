@@ -57,7 +57,13 @@ class FakeCommands:
                     if self.system_active and self.fail_start:
                         if self.replace_payload:
                             path = self.case.installer.unit_file
-                            raw = path.read_bytes(); path.unlink(); path.write_bytes(raw)
+                            original = (path.stat().st_dev, path.stat().st_ino)
+                            replacement = path.with_name("replacement.service")
+                            replacement.write_bytes(path.read_bytes())
+                            changed = (replacement.stat().st_dev, replacement.stat().st_ino)
+                            self.case.assertNotEqual(original, changed, "Replacement must exist before the old inode is unlinked")
+                            os.replace(replacement, path)
+                            self.case.assertEqual((path.stat().st_dev, path.stat().st_ino), changed)
                         raise RuntimeError("Simulated start failure")
             if args[0] in {"stop", "start"} and user:
                 self.old_active = args[0] == "start"
@@ -154,6 +160,20 @@ direct_execution=SimpleNamespace(support=support,set_enabled=set_enabled)
     def apply(self):
         with patch.object(core.os, "geteuid", return_value=0):
             return self.installer.install()
+
+    def observe_payload_fds(self):
+        self.assertTrue(self.installer.created_fds)
+        for path, descriptor in self.installer.created_fds.items():
+            info = os.fstat(descriptor)
+            self.assertEqual((info.st_dev, info.st_ino), self.installer.created[path][0])
+        return list(self.installer.created_fds.values())
+
+    def assert_payload_fds_closed(self, descriptors):
+        self.assertTrue(descriptors)
+        self.assertEqual(self.installer.created_fds, {})
+        for descriptor in descriptors:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
 
     def test_compiler_is_generic_and_has_no_desktop_or_outgoing_identity(self):
         plan = self.installer.plan()
@@ -275,6 +295,68 @@ direct_execution=SimpleNamespace(support=support,set_enabled=set_enabled)
         self.assertTrue(self.installer.unit_file.exists())
         self.assertFalse(any("disable" in c and "--now" in c and core.UNIT in c for c, _ in self.commands.calls))
         self.assertEqual(len([c for c, _ in self.commands.calls if "shutdown" in c]), 1)
+
+    def test_payload_fds_remain_pinned_through_cutover_and_close_after_success(self):
+        self.make_installer(network_profile="9197b042-28a2-426d-b768-54dce4ea01e5", expected_ipv4="192.0.2.20")
+        verify, policy = self.installer._native_verify, self.installer._policy
+        observed = []
+        def verify_with_pins():
+            observed.extend(self.observe_payload_fds())
+            verify()
+        def policy_with_pins(before):
+            self.assertEqual(set(self.observe_payload_fds()), set(observed))
+            policy(before)
+        self.installer._native_verify, self.installer._policy = verify_with_pins, policy_with_pins
+        result = self.apply()
+        self.assertTrue(result["applied"], result)
+        self.assertEqual(len(observed), 3)
+        self.assert_payload_fds_closed(observed)
+
+    def test_payload_fds_stay_open_after_rollback_unlink_and_close_at_exit(self):
+        self.commands.fail_verify = True
+        rollback = self.installer._rollback
+        observed = []
+        def rollback_with_pins(plan):
+            observed.extend(self.observe_payload_fds())
+            rollback(plan)
+            self.assertTrue(all(os.fstat(fd).st_nlink == 0 for fd in observed))
+        self.installer._rollback = rollback_with_pins
+        result = self.apply()
+        self.assertTrue(result["rollback"], result)
+        self.assert_payload_fds_closed(observed)
+
+    def test_unlink_recreate_cannot_reuse_pinned_original_inode(self):
+        self.commands.fail_start = True
+        runner, observed = self.installer.runner, []
+        def replace_at_start(command, **options):
+            if "enable" in command and "--now" in command and core.UNIT in command:
+                observed.extend(self.observe_payload_fds())
+                path = self.installer.unit_file
+                raw = path.read_bytes(); path.unlink()
+                self.assertEqual(os.fstat(observed[0]).st_nlink, 0)
+                path.write_bytes(raw)
+                self.assertNotEqual((path.stat().st_dev, path.stat().st_ino), self.installer.created[path][0])
+            return runner(command, **options)
+        self.installer.runner = replace_at_start
+        result = self.apply()
+        self.assertFalse(result["rollback"], result)
+        self.assertTrue(result["manual_review_required"])
+        self.assertTrue(self.installer.unit_file.exists())
+        self.assertFalse(any("disable" in c and "--now" in c and core.UNIT in c for c, _ in self.commands.calls))
+        self.assert_payload_fds_closed(observed)
+
+    def test_publication_failure_closes_descriptor_even_before_ledger_entry(self):
+        open_file, observed = os.open, []
+        def capture_open(path, flags, *args, **kwargs):
+            descriptor = open_file(path, flags, *args, **kwargs)
+            if Path(path).name.startswith("." + core.UNIT + "."):
+                observed.append(descriptor)
+            return descriptor
+        with patch.object(core.os, "open", side_effect=capture_open), patch.object(core.os, "link", side_effect=OSError("Simulated publication failure")):
+            result = self.apply()
+        self.assertTrue(result["rollback"], result)
+        self.assertFalse(self.installer.unit_file.exists())
+        self.assert_payload_fds_closed(observed)
 
     def test_lost_policy_ack_preserves_new_worker_and_committed_owner_choices(self):
         self.commands.lose_policy_ack = True
