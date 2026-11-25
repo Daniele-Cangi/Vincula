@@ -8,7 +8,6 @@ peer, authorize an SSH identity, grant execution, or establish desktop consent.
 """
 
 import base64
-import binascii
 from copy import deepcopy
 from hashlib import sha256
 from hmac import compare_digest
@@ -48,7 +47,7 @@ def _host_key(key):
     _text(key, 1, 100, "Ed25519 public key")
     try:
         wire = base64.b64decode(key, validate=True)
-    except (ValueError, binascii.Error):
+    except ValueError:
         raise ValueError("Invalid base64 Ed25519 public key.") from None
     if (len(wire) != 51 or not wire.startswith(_WIRE_PREFIX)
             or base64.b64encode(wire).decode("ascii") != key):
@@ -238,6 +237,17 @@ def _registered(snapshot, node_id):
                            "Configure and verify desktop consent separately before enabling shared input."]}
 
 
+def _check_import_parameters(invitation, expected_revision, expected_fingerprint, endpoint_index):
+    key = invitation["ssh_host_key"]
+    if (not isinstance(expected_fingerprint, str) or not expected_fingerprint.isascii()
+            or not compare_digest(expected_fingerprint, key["fingerprint"])):
+        raise ValueError("Explicitly confirm the destination's independently verified SHA256 fingerprint.")
+    if expected_revision is not None and (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)):
+        raise ValueError("Specify the registry revision returned by a previous read.")
+    if type(endpoint_index) is not int or not 0 <= endpoint_index < len(invitation["endpoints"]):
+        raise ValueError("Select one advertised endpoint by its index.")
+
+
 def import_invitation(path, document, *, expected_revision, expected_fingerprint, endpoint_index, local_connection):
     """Publish one verified pin and route, preserving local CAS and identity.
 
@@ -247,13 +257,7 @@ def import_invitation(path, document, *, expected_revision, expected_fingerprint
     """
     invitation = validate_invitation(document)
     key = invitation["ssh_host_key"]
-    if (not isinstance(expected_fingerprint, str) or not expected_fingerprint.isascii()
-            or not compare_digest(expected_fingerprint, key["fingerprint"])):
-        raise ValueError("Explicitly confirm the destination's independently verified SHA256 fingerprint.")
-    if expected_revision is not None and (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)):
-        raise ValueError("Specify the registry revision returned by a previous read.")
-    if type(endpoint_index) is not int or not 0 <= endpoint_index < len(invitation["endpoints"]):
-        raise ValueError("Select one advertised endpoint by its index.")
+    _check_import_parameters(invitation, expected_revision, expected_fingerprint, endpoint_index)
     path = Path(path).resolve()
     node_id = invitation["node"]["id"]
     pin = path.parent / "enrollment-known-hosts" / (node_id + ".known_hosts")

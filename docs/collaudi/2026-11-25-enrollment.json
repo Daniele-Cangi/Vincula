@@ -5,8 +5,8 @@
   "scope": "Public invitations and origin-local registration only; isolated fixtures, no production enrollment or desktop activation.",
   "source_sha256": {
     "agent/nodes.py": "5e1dcdf37f2d9b28056fefc8e7557f7afc77a60ca629d158447743f33946f7c2",
-    "agent/node_enrollment.py": "cbca258f72f2b939b280050e0d0934aa444d70ef475ffd80795de4d4e483e840",
-    "agent/test_node_enrollment.py": "ef5d7425b9b3909e7ea6a7d9ddb88bdc1c57d4bf383f63d2a68898e830ab1088",
+    "agent/node_enrollment.py": "524b73040ee4e9f1ff32aed1ee96eb105c536660e330c7b1851690008b3c23f3",
+    "agent/test_node_enrollment.py": "dae943f605e1d6153ada6e81466438a28db4dca04f1323892c9c80fbdab63af4",
     "agent/test_enrollment_cli.py": "0a09adcb2dba987cbf8f1b78eea17c9f5a5669d59f160b7ba7df008f08103820",
     "outputs/Windows Dock/windows-dock.py": "45d77bc097577b879b0b2eb44b3d94134efa8d183289f9927fdf23756d012362",
     "outputs/Windows Dock/node_catalog.py": "bfe4c2faf3eede0fb0c5fa04a6a2c8621fbac7013984a1d377025872ecae41b0",
@@ -23,13 +23,15 @@
       "tests": 354,
       "skipped": 15,
       "success": true,
-      "warnings": "DeprecationWarning and ResourceWarning treated as errors"
+      "warnings": "DeprecationWarning and ResourceWarning treated as errors",
+      "source_commit": "67ed05b2a154ed9e564089148885f12accc6860d",
+      "scope": "Full functional snapshot; final maintenance-only helper extraction also passed 28 targeted tests before/after. Hosted matrix revalidates the final published source."
     },
     "benchmark_fixture_tests": 2,
     "mcp_smoke": "pass isolated legacy and three-node registry",
     "windows_contract": {
       "python": "3.14.7",
-      "job_id": "11472d59-f3c0-4a11-813a-613c0906d241",
+      "job_id": "74e2df2b-cf02-49af-bd56-f37ab59f5183",
       "tests": 45,
       "skipped": 4,
       "skipped_cases": [
@@ -54,7 +56,7 @@
       "native_ntfs_junction": "passed",
       "native_temp_8_3_roundtrip": "passed",
       "log_tail_limited": false,
-      "manifest_sha256": "d54f176ffcc75cbde9b4f9cbeaad4f3c27731c183cb224cc7fff0126f39fd325"
+      "manifest_sha256": "fa65bd2a244087d81244b691e11f512a22fa83d06f5621bda06126c54ad2ce17"
     },
     "windows_compile": {
       "id": "26d41c49-7404-4820-b705-e27eedcdc155",
@@ -120,6 +122,21 @@
       "id": 45657292428,
       "ubuntu": "2/2 success",
       "windows": "2/2 failed in CLI fixture TEMP path; corrected with physical fixture path and native 8.3 regression."
+    },
+    "hosted_functional_commit": {
+      "sha": "67ed05b2a154ed9e564089148885f12accc6860d",
+      "run": 45658824876,
+      "jobs": "4/4 success",
+      "sonar": "gate passed, 5 maintenance issues then corrected",
+      "codex": "no major issues; comment7168744806"
+    },
+    "final_maintenance_delta": {
+      "changes": "Remove redundant exception/import, extract unchanged initial validation checks, precompute exception-test arguments.",
+      "targeted_tests": 28,
+      "targeted_skipped": 1,
+      "native_windows_tests": 45,
+      "independent_ast_review": "same check order before path/route/lock and unchanged remaining import statements",
+      "automatic_final_head_checks": "to be run on publication"
     }
   },
   "readiness": {

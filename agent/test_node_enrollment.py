@@ -71,8 +71,9 @@ class NodeEnrollmentTests(unittest.TestCase):
 
     def test_export_requires_an_existing_local_registry_and_a_public_key(self):
         missing = self.base / "absent" / "nodes.json"
+        valid_key = public_key()[0]
         with self.assertRaises(ValueError):
-            enrollment.create_invitation(missing, self.endpoints, public_key()[0])
+            enrollment.create_invitation(missing, self.endpoints, valid_key)
         self.assertFalse(missing.exists())
         for key in ["-----BEGIN OPENSSH PRIVATE KEY-----", public_key()[0] + "\n", "ssh-rsa AAAA", 123]:
             with self.subTest(key=key), self.assertRaises(ValueError):
@@ -169,8 +170,9 @@ class NodeEnrollmentTests(unittest.TestCase):
         with self.assertRaises(enrollment.EnrollmentConflict):
             self.request(expected_revision=imported["revision"])
         changed_key = enrollment.create_invitation(self.source, self.endpoints, public_key(2)[0])
+        changed_fingerprint = public_key(2)[1]
         with self.assertRaises(enrollment.EnrollmentConflict):
-            self.request(document=changed_key, expected_fingerprint=public_key(2)[1])
+            self.request(document=changed_key, expected_fingerprint=changed_fingerprint)
         self.assertFalse(self.pin().exists())
 
     def test_concurrent_different_invitations_obey_cas_without_an_orphan_loser_pin(self):
@@ -243,11 +245,12 @@ class NodeEnrollmentTests(unittest.TestCase):
                 raise OSError("cannot read outcome")
             return original(path)
 
+        revision = original(self.path)["revision"]
         with patch.object(nodes, "snapshot", side_effect=uncertain), patch.object(nodes, "save", side_effect=OSError("save failed")):
             with self.assertRaisesRegex(OSError, "save failed"):
                 # Supply revision directly: request() would add another read.
                 enrollment.import_invitation(self.path, self.invitation,
-                    expected_revision=original(self.path)["revision"], expected_fingerprint=self.fingerprint,
+                    expected_revision=revision, expected_fingerprint=self.fingerprint,
                     endpoint_index=0, local_connection=self.connection)
         self.assertTrue(self.pin().is_file())
         self.request()
