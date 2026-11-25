@@ -165,7 +165,7 @@ direct_execution=SimpleNamespace(support=support,set_enabled=set_enabled)
         self.assertTrue(self.installer.created_fds)
         for path, descriptor in self.installer.created_fds.items():
             info = os.fstat(descriptor)
-            self.assertEqual((info.st_dev, info.st_ino), self.installer.created[path][0])
+            self.assertEqual(self.installer.created[path][0], (info.st_dev, info.st_ino))
         return list(self.installer.created_fds.values())
 
     def assert_payload_fds_closed(self, descriptors):
@@ -335,7 +335,7 @@ direct_execution=SimpleNamespace(support=support,set_enabled=set_enabled)
                 raw = path.read_bytes(); path.unlink()
                 self.assertEqual(os.fstat(observed[0]).st_nlink, 0)
                 path.write_bytes(raw)
-                self.assertNotEqual((path.stat().st_dev, path.stat().st_ino), self.installer.created[path][0])
+                self.assertNotEqual(self.installer.created[path][0], (path.stat().st_dev, path.stat().st_ino))
             return runner(command, **options)
         self.installer.runner = replace_at_start
         result = self.apply()
