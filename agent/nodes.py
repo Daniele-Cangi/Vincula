@@ -259,6 +259,20 @@ def enrollment_request(request, path):
         raise ConflictError(str(error)) from None
 
 
+def desktop_preview_request(request, path):
+    request_fields(request, {"desktop"}, set())
+    before = snapshot(path)
+    if "expected_revision" in request and request["expected_revision"] != before["revision"]:
+        raise ConflictError("The node registry changed. Reload it before previewing this layout.")
+    if before["registry"] is None:
+        raise ValueError("Register this computer before configuring the desktop group.")
+    candidate = deepcopy(before["registry"])
+    if "desktop" in request:
+        candidate["desktop"] = request["desktop"]
+    before["desktop_preview"] = desktop_layout.preview(validate(candidate))
+    return before
+
+
 def execute(request, path):
     # A network observation owns its short snapshot locks, never the outer
     # process-wide Windows mutex. Local edits retain their original guard.
@@ -280,17 +294,7 @@ def _execute_locked(request, path):
         request_fields(request, set(), set())
         return snapshot(path)
     if request["action"] == "desktop_preview":
-        request_fields(request, {"desktop"}, set())
-        before = snapshot(path)
-        if "expected_revision" in request and request["expected_revision"] != before["revision"]:
-            raise ConflictError("The node registry changed. Reload it before previewing this layout.")
-        if before["registry"] is None:
-            raise ValueError("Register this computer before configuring the desktop group.")
-        candidate = deepcopy(before["registry"])
-        if "desktop" in request:
-            candidate["desktop"] = request["desktop"]
-        before["desktop_preview"] = desktop_layout.preview(validate(candidate))
-        return before
+        return desktop_preview_request(request, path)
     if request["action"] not in {"add", "update", "remove", "desktop"}:
         raise ValueError("Unknown node operation.")
     with edit_lock(path):

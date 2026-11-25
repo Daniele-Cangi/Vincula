@@ -42,6 +42,7 @@ PROBE_TIMEOUT = 12
 HELPERS = ("jobs.py", "vincula_files.py", "vincula_capabilities.py", "plan_journal.py",
            "wire_framing.py", "direct_execution.py")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
+_INVALID_POLICY = "Invalid policy observation."
 
 # Executed directly by an isolated stdlib Python interpreter. It reads helper
 # bytes only; no installed Vincula code, adapter or shell profile is imported.
@@ -187,7 +188,8 @@ def _read_available(stream, count):
 
 def _drain_available(streams):
     activity = False
-    for stream, (buffer, limit, reason) in list(streams.items()):
+    # EOF removes entries from streams, so iterate over an independent snapshot.
+    for stream, (buffer, limit, reason) in streams.copy().items():
         chunk = _read_available(stream, min(4096, limit - len(buffer) + 1))
         if chunk is None:
             continue
@@ -341,14 +343,14 @@ def _check_hashes(hashes):
 
 def _check_policy(policy):
     if not isinstance(policy, dict):
-        raise ValueError("Invalid policy observation.")
+        raise ValueError(_INVALID_POLICY)
     if policy.get("state") == "observed":
         if (set(policy) != {"state", "mode", "native_enabled"} or policy["mode"] not in ("ask", "full")
                 or type(policy["native_enabled"]) is not bool):
-            raise ValueError("Invalid policy observation.")
+            raise ValueError(_INVALID_POLICY)
     elif (set(policy) != {"state", "reason"} or policy["state"] != "unchecked"
           or policy["reason"] not in ("helpers_unverified", "policy_unavailable", "policy_invalid")):
-        raise ValueError("Invalid policy observation.")
+        raise ValueError(_INVALID_POLICY)
 
 
 def _payload(raw, nonce, *, local):
@@ -435,6 +437,10 @@ def _failed_checks(checks, reason, local):
     return checks
 
 
+def _remote_launcher(family):
+    return "py.exe -3 -IBS -" if family == "windows" else "python3 -IBS -"
+
+
 def _probe(selection, path, node_id):
     local = node_id == selection.snapshot["registry"]["local"]
     checks = {"ssh": {"state": "unchecked"}, "identity": {"state": "unchecked"},
@@ -456,7 +462,7 @@ def _probe(selection, path, node_id):
         checks["ssh"]["reason"] = "local_identity_unavailable"
         return checks
     else:
-        command = "py.exe -3 -IBS -" if selection.entry["family"] == "windows" else "python3 -IBS -"
+        command = _remote_launcher(selection.entry["family"])
         argv = [node_ssh.executable("ssh"), "-T", *node_ssh.OPTIONS, *selection.route.options,
                 selection.route.destination, command]
     nonce = secrets.token_hex(16)

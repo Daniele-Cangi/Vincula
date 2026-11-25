@@ -24,6 +24,9 @@ import windows_ssh as windows
 from remote_desktop import share_input, show_windows
 
 
+NODE_CHECK_LABEL = "Verifica nodo"
+
+
 STYLE = b"""
 window.dock, .dock viewport, .dock scrolledwindow { background-color: #0a111a; color: #e8f2f8; }
 .dock label { color: #e8f2f8; }
@@ -316,7 +319,7 @@ class NodeCheckEditor(Gtk.Window):
               ("policy", "Permessi osservati"), ("worker", "Worker autonomo"), ("desktop", "Desktop"))
 
     def __init__(self, owner, node):
-        super().__init__(title="Verifica nodo")
+        super().__init__(title=NODE_CHECK_LABEL)
         self.owner, self.node_id = owner, node["id"]
         self.alive, self.running = True, False
         self.request_revision = None
@@ -357,7 +360,7 @@ class NodeCheckEditor(Gtk.Window):
         add(body, self.message)
         actions = Gtk.Box(spacing=8)
         add(actions, action_button("Chiudi", lambda *_: self.close()))
-        self.check_button = action_button("Verifica nodo", self.submit, True)
+        self.check_button = action_button(NODE_CHECK_LABEL, self.submit, True)
         add(actions, self.check_button)
         add(body, actions)
 
@@ -391,7 +394,12 @@ class NodeCheckEditor(Gtk.Window):
         if name == "policy" and state == "observed":
             mode = {"full": "Accesso completo", "ask": "Richiede approvazione"}.get(check.get("mode"), "Profilo non riconosciuto")
             native = check.get("native_enabled")
-            execution = "abilitata" if native is True else "disabilitata" if native is False else "non verificata"
+            if native is True:
+                execution = "abilitata"
+            elif native is False:
+                execution = "disabilitata"
+            else:
+                execution = "non verificata"
             return f"{mode}; esecuzione generale {execution}"
         return descriptions.get((name, state), "Non verificato")
 
@@ -528,7 +536,7 @@ class InvitationEditor(Gtk.Window):
         self.submit_button.set_sensitive(invitation is None)
         add(actions, self.submit_button)
         if invitation:
-            self.node_check_button = action_button("Verifica nodo", lambda *_: owner.edit_node_check(invitation["node"]["id"]))
+            self.node_check_button = action_button(NODE_CHECK_LABEL, lambda *_: owner.edit_node_check(invitation["node"]["id"]))
             self.node_check_button.set_sensitive(False)
             add(actions, self.node_check_button)
         add(body, actions)
@@ -836,7 +844,7 @@ class DockWindow(Gtk.ApplicationWindow):
         invitations = Gtk.Box(spacing=8)
         self.node_import = action_button("Importa invito", self.import_invitation)
         self.node_export = action_button("Esporta invito", lambda *_: self.edit_invitation())
-        self.node_check = action_button("Verifica nodo", lambda *_: self.edit_node_check())
+        self.node_check = action_button(NODE_CHECK_LABEL, lambda *_: self.edit_node_check())
         add(invitations, self.node_import)
         add(invitations, self.node_export)
         add(invitations, self.node_check)

@@ -6,13 +6,17 @@ Il nuovo controllo legge identità persistente, hash degli helper e policy attra
 
 ## Prove automatiche
 
-La snapshot pulita della PR #23 con i sette file di prodotto/test del nuovo incremento supera **385 test del runtime**, con 15 esclusioni di piattaforma, più due test del benchmark e lo smoke MCP isolato. DeprecationWarning e ResourceWarning sono trattati come errori per il runtime.
+La snapshot iniziale pulita, pubblicata in `8f0d8e1` sulla PR #23, con i sette file di prodotto/test del nuovo incremento supera **385 test del runtime**, con 15 esclusioni di piattaforma, più due test del benchmark e lo smoke MCP isolato. DeprecationWarning e ResourceWarning sono trattati come errori per il runtime. La matrice hosted Windows/Linux con Python3.10/3.14 passa per questo commit e la review automatica Codex termina senza rilievi.
 
 Sul PC Windows reale, Python 3.14.7 supera **48 test mirati**, con tre esclusioni: FIFO POSIX e due prove che richiedono la creazione di symlink, non disponibile all’account del collaudo. Il job `5851c289-f1ef-4f01-b765-de68b9fc84c8` termina con esito confermato e codice zero. Una prima esecuzione aveva individuato un errore nella fixture: `write_text` convertiva LF in CRLF mentre il digest atteso usava LF. La correzione scrive gli stessi byte UTF-8 con `write_bytes`, conservando tutte le asserzioni e il codice del prodotto.
 
 La sorgente WinForms è compilata nativamente nel job `45b495b4-a458-4ec2-9b79-692fc8bf8044`, senza avviare l’app operativa. Il collaudo GTK usa proprietario nascosto e corpo della finestra renderizzato fuori schermo: verifica stati, dimensioni di testo e pulsanti, conflitti, risposta tardiva, callback dopo chiusura e stop indipendente durante verifica e trasferimento simulato. Un secondo caso usa davvero CLI e backend su un profilo locale sintetico, con file e policy invariati. Queste prove non equivalgono a uno stop durante un trasferimento reale o a un desktop condiviso sui tre PC.
 
 Il primo harness WinForms non aveva un ciclo messaggi persistente: dopo `DoEvents` il secondo invio acquisiva un contesto generico, producendo timeout del callback e un errore di cleanup. La diagnostica conserva il primo errore. La correzione riguarda il solo harness, usa `Application.Run` e aggiunge verifiche di thread e contesto senza togliere le asserzioni esistenti. Il collaudo finale nativo `80af0769-e81e-4bdd-a61b-90348a2fd676` termina con esito confermato e codice zero: passa le stesse prove di stati, callback, conflitto, timeout, dimensioni e stop durante trasferimento simulato; cleanup senza errori. La sorgente e l’assembly del prodotto restano identici.
+
+Sonar supera il gate della prima snapshot ma segnala sette rilievi di manutenzione. Il delta successivo estrae piccoli helper, due costanti e una condizione annidata. Conserva una vera copia della mappa di stream durante la raccolta, necessaria perché gli EOF eliminano voci: non rimuove la snapshot per soddisfare il rilievo. La review indipendente confronta gli AST e conferma guardie, CAS, launcher, timeout, reap, messaggi e binding invariati.
+
+Sul delta passano25 test probe e23 test CLI/contratti Linux, con tre skip nel secondo gruppo, oltre a **48 test nativi Windows con tre skip** nel nuovo job `4c9b536f-43cc-40e7-b22b-22650c21f8f7`. Il confronto GTK conserva8624 descrizioni,48 risposte/errori del bridge e7 casi di selezione runtime; i harness mock e locale reale passano nuovamente con i nuovi hash. C# e harness WinForms sono identici, quindi la prova nativa precedente resta riferita alla stessa sorgente. Gli esiti hosted/review della prima snapshot non sono attribuiti automaticamente al delta: i controlli sul nuovo commit vengono verificati separatamente.
 
 ## Cataloghi reali
 

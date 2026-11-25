@@ -4,16 +4,16 @@
   "parent_commit": "de4e3c789994fb8255a0755e184e75428ef6bfda",
   "scope": "Read-only authenticated observations through explicit SSH routes, local JSON CLI and optional desktop dialogs. No worker/desktop readiness attestation or production deployment.",
   "source_sha256": {
-    "agent/nodes.py": "3a744b34bac43bf95f6edc7d61f7011ce5cc7f030ec0f57cd6e08f642c34a6ba",
-    "agent/node_probe.py": "a7719ef9bb3fb7cf1c12d15801d04e774fbee97de0857e8f9faa354b55265f52",
+    "agent/nodes.py": "4c213333988896663101fb3bc5e7db4453030dea1752227eea68468d7e02dc20",
+    "agent/node_probe.py": "edce8a9dd38a3c7dbf2a7310dadb0dd80b803c8b027982ef79913c1cec0c32d8",
     "agent/test_node_probe.py": "93c997bc3bdfdcee9770524b12aa896472275434ad7d793fe8ea6e7fada13a22",
     "agent/test_node_check_cli.py": "2e85e7bc58897c1689ae4bca48ee632d80f94a4122473cc290a44a7120e30690",
-    "outputs/Windows Dock/windows-dock.py": "b0a2647e7a028e5649b4efe55dd531f12557381c58413258fb55c0d2d380d41a",
-    "outputs/Windows Dock/node_catalog.py": "9955c64d7be4cff5658a6b86f93ccd2f6fd2ee9ebe52ad493ca87cbf34e32472",
+    "outputs/Windows Dock/windows-dock.py": "932490bac95d7fd68edc1b10fa1dbe677f969badd7e579d879e8dfd6745ea522",
+    "outputs/Windows Dock/node_catalog.py": "10b417e44f292e95078ec8c1792e7d85f825341b72e83dfa8053229cae993c8b",
     "outputs/Linux Dock/LinuxDock.cs": "2d086be83f07322bc435498dda39a2bbb91b13480d9113754ab3a32e27b8663b",
     "docs/node-enrollment.md": "c064eb0b6ae53b951a5d999fe73a702f4b5b3f98dcecc51fc6c19c397d0fa9e9",
     "docs/catalogo-gui.md": "93805304496737e476957f8984fe84db965418ea9ce626e69c90de8446e8e809",
-    "docs/collaudo-verifica-nodi.md": "aa1b4a422e1837b00f12ccce4dde0576778eb16742b9ee78375e0748d4247523",
+    "docs/collaudo-verifica-nodi.md": "49760378133f5e056460a32f76158746afb00fc61107993e4caf0d339b2a3d67",
     "tools/qa-node-check/check-gtk.py": "c3e3330149922a517ba8a53fe8808a5c213c04f31e0f17f71e479f0dbe8480f1",
     "tools/qa-node-check/NativeNodeCheckQa.cs": "84fdd4b9603d42ea2f541d40e9f3566e1cee189632f10aeb1c886c6cb82a5559",
     "tools/qa-node-check/README.md": "6da702a8ea2dd5aef209f979ecae7e426538eb1529981c9b4cc525ba9d17bdd2",
@@ -25,7 +25,8 @@
       "skipped": 15,
       "success": true,
       "seconds": 58.741,
-      "warnings": "DeprecationWarning and ResourceWarning treated as errors"
+      "warnings": "DeprecationWarning and ResourceWarning treated as errors",
+      "source_commit": "8f0d8e1d7132265c5f3f99714429b152955990d1"
     },
     "benchmark_tests": 2,
     "mcp_smoke": "pass isolated legacy and three-node catalogs",
@@ -44,7 +45,8 @@
       "python": "3.14.7",
       "tests": 48,
       "skipped": 3,
-      "fixture_correction": "write_bytes preserves explicit UTF-8/LF, assertions and product unchanged"
+      "fixture_correction": "write_bytes preserves explicit UTF-8/LF, assertions and product unchanged",
+      "source_commit": "8f0d8e1d7132265c5f3f99714429b152955990d1"
     },
     "windows_compile": {
       "id": "45b495b4-a458-4ec2-9b79-692fc8bf8044",
@@ -90,7 +92,8 @@
         "asynchronous check plus transfer flag cannot block Stop",
         "late callback after dialog destruction ignored",
         "offscreen labels, metadata and disabled button allocations complete"
-      ]
+      ],
+      "source_commit": "8f0d8e1d7132265c5f3f99714429b152955990d1"
     },
     "gtk_real_local": {
       "ok": true,
@@ -120,7 +123,96 @@
           "state": "unchecked"
         }
       },
-      "fixture_policy_and_files_unchanged": true
+      "fixture_policy_and_files_unchanged": true,
+      "source_commit": "8f0d8e1d7132265c5f3f99714429b152955990d1"
+    },
+    "maintenance": {
+      "base_commit": "8f0d8e1d7132265c5f3f99714429b152955990d1",
+      "scope": "Seven maintenance findings, independent AST/delta review found no P1/P2; no suppressions or policy changes.",
+      "linux_probe": {
+        "tests": 25,
+        "success": true,
+        "warnings": "all warnings treated as errors"
+      },
+      "linux_cli_contracts": {
+        "tests": 23,
+        "skipped": 3,
+        "success": true,
+        "warnings": "DeprecationWarning and ResourceWarning treated as errors"
+      },
+      "windows_contract": {
+        "id": "4c9b536f-43cc-40e7-b22b-22650c21f8f7",
+        "state": "completed",
+        "exit_code": 0,
+        "outcome": {
+          "runtime_protocol_version": 1,
+          "state": "completed",
+          "program_exit_code": 0,
+          "reason": "exit",
+          "started": true
+        },
+        "manifest_sha256": "aa7e0f219142058db64d2ac818cf3245060f9902382e878e93bc627275867420"
+      },
+      "windows_tests": 48,
+      "windows_skipped": 3,
+      "gtk_mock": {
+        "ok": true,
+        "mode": "mock",
+        "network": "none",
+        "checks": [
+          "typed six-state report and policy full remain observations",
+          "UUID/origin/revision binding rejects stale replies",
+          "postimport button binds imported UUID",
+          "timeout and runtime update messages",
+          "private diagnostics omitted",
+          "asynchronous check plus transfer flag cannot block Stop",
+          "late callback after dialog destruction ignored",
+          "offscreen labels, metadata and disabled button allocations complete"
+        ]
+      },
+      "gtk_real_local": {
+        "ok": true,
+        "mode": "real_local",
+        "network": "none; local UUID only, no SSH route",
+        "checks": {
+          "ssh": {
+            "state": "unchecked",
+            "reason": "local_node"
+          },
+          "identity": {
+            "state": "match"
+          },
+          "helper": {
+            "state": "compatible_on_disk",
+            "protocol_version": 1
+          },
+          "policy": {
+            "state": "observed",
+            "mode": "full",
+            "native_enabled": true
+          },
+          "worker": {
+            "state": "unverified"
+          },
+          "desktop": {
+            "state": "unchecked"
+          }
+        },
+        "fixture_policy_and_files_unchanged": true
+      },
+      "gtk_equivalence_cases": {
+        "descriptions": 8624,
+        "bridge_responses": 48,
+        "runtime_selection": 7
+      },
+      "csharp_source_unchanged": true,
+      "native_gui_harness_unchanged": true,
+      "hosted_ci_initial": {
+        "run_id": 45681385971,
+        "commit": "8f0d8e1d7132265c5f3f99714429b152955990d1",
+        "jobs_successful": 4
+      },
+      "final_hosted_and_automatic_review": "reported separately against the updated commit; initial green checks are not transferred"
     }
   },
   "real_checks": {

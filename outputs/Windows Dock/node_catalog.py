@@ -36,6 +36,16 @@ def runtime_script(enrollment=False, node_check=False):
                        "nella cartella agent dell’app oppure imposta VINCULA_RUNTIME alla radice di Vincula.")
 
 
+def _raise_runtime_error(error, action):
+    if not isinstance(error, dict):
+        error = {}
+    if error.get("code") == "conflict":
+        if action == "enrollment_check":
+            raise CatalogError("Il catalogo, la rotta o la chiave host sono cambiati. Aggiorna l’elenco e ripeti la verifica.")
+        raise CatalogError("Il catalogo è cambiato. Aggiorna l’elenco e riapri il modulo prima di salvare.")
+    raise CatalogError("Catalogo non aggiornato. " + str(error.get("message", "Errore del runtime.")))
+
+
 def request(payload):
     interpreter = os.environ.get("VINCULA_PYTHON") or sys.executable
     action = str(payload.get("action", ""))
@@ -55,14 +65,7 @@ def request(payload):
     if not isinstance(reply, dict):
         raise CatalogError("Risposta del runtime non valida.")
     if reply.get("ok") is not True:
-        error = reply.get("error")
-        if not isinstance(error, dict):
-            error = {}
-        if error.get("code") == "conflict":
-            if action == "enrollment_check":
-                raise CatalogError("Il catalogo, la rotta o la chiave host sono cambiati. Aggiorna l’elenco e ripeti la verifica.")
-            raise CatalogError("Il catalogo è cambiato. Aggiorna l’elenco e riapri il modulo prima di salvare.")
-        raise CatalogError("Catalogo non aggiornato. " + str(error.get("message", "Errore del runtime.")))
+        _raise_runtime_error(reply.get("error"), action)
     complete = isinstance(reply.get("invitation"), dict) if invitation_reply else "registry" in reply and "revision" in reply
     if result.returncode or not complete:
         raise CatalogError("Risposta del runtime incompleta.")
