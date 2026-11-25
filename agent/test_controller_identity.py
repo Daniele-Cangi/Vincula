@@ -85,7 +85,9 @@ def run_credential_parser(cases, environment):
                 if not os.path.lexists(path):
                     continue
                 info, pinned = path.lstat(), os.fstat(fd)
-                assert stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_nlink == 1
+                assert stat.S_ISREG(info.st_mode)
+                assert info.st_uid == os.getuid()
+                assert info.st_nlink == 1
                 assert (info.st_dev, info.st_ino) == identity == (pinned.st_dev, pinned.st_ino)
                 assert hashlib.sha256(path.read_bytes()).hexdigest() == wanted
                 path.unlink()
@@ -223,6 +225,51 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.provider.public.stat().st_mode & 0o777, 0o644)
         self.assertEqual(self.paths.helper.stat().st_mode & 0o777, 0o644)
         self.assertEqual(self.provider.cipher.stat().st_mode & 0o777, 0o600)
+
+    def test_private_staging_and_cipher_publication_ignore_permissive_umask(self):
+        runner, link = self.provider.runner, os.link
+        observed = []
+
+        def inspect_staging(argv, **kwargs):
+            if argv[0].endswith("ssh-keygen") or "encrypt" in argv:
+                stage = Path(argv[-1]).parent
+                self.assertEqual(stage.stat().st_uid, self.paths.admin_uid)
+                self.assertEqual(stat.S_IMODE(stage.stat().st_mode), 0o700)
+                self.assertEqual(stage.parent, self.paths.runtime)
+                observed.append(stage)
+            return runner(argv, **kwargs)
+
+        def inspect_publication(source, destination, *args, **kwargs):
+            if Path(destination) == self.provider.cipher:
+                self.assertEqual(stat.S_IMODE(Path(source).stat().st_mode), 0o600)
+                observed.append(Path(destination))
+            return link(source, destination, *args, **kwargs)
+
+        self.provider.runner = inspect_staging
+        previous = os.umask(0o000)
+        try:
+            with patch.object(ci.os, "link", side_effect=inspect_publication):
+                self.install()
+        finally:
+            os.umask(previous)
+        self.assertEqual(len(observed), 3)
+        self.assertFalse(observed[0].exists())
+        self.assertEqual(observed[0], observed[1])
+        self.assertEqual(observed[2], self.provider.cipher)
+        self.assertEqual(stat.S_IMODE(self.provider.directory.stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE(self.provider.cipher.stat().st_mode), 0o600)
+
+    def test_verification_rejects_exposed_cipher_without_changing_permissions(self):
+        self.install()
+        try:
+            for mode in (0o640, 0o644, 0o666):
+                self.provider.cipher.chmod(mode)
+                for verify_digest in (False, True):
+                    with self.subTest(mode=mode, digest=verify_digest), self.assertRaises(ValueError):
+                        self.provider.verify_installed(cipher_digest=verify_digest)
+                    self.assertEqual(stat.S_IMODE(self.provider.cipher.stat().st_mode), mode)
+        finally:
+            self.provider.cipher.chmod(0o600)
 
     def test_preexisting_private_admin_directory_is_not_widened_for_other_owner(self):
         self.root.chmod(0o755)

@@ -1,0 +1,123 @@
+{
+  "schema": 1,
+  "date": "2026-11-25",
+  "scope": "Linux receiver setup and actual Windows Codex execution; not a cold boot without graphical login certification",
+  "implementation": {
+    "installer_commit": "34756b00bd6caf3ba18bdb535f18222fae3db3eb",
+    "installer_source_sha256": "9e501a15c845f2c57b8c086359c05c057de4c9e3479a9f7fc63784bfae9e591f",
+    "worker_release": "f304b9109c57fb5b3c0695542249739694c32962"
+  },
+  "validation": {
+    "targeted_setup_tests": 39,
+    "runtime_tests": 311,
+    "runtime_skips": 13,
+    "benchmark_fixture_tests": 2,
+    "isolated_mcp_smoke": "PASS",
+    "hosted_matrix": {
+      "os": [
+        "ubuntu-latest",
+        "windows-latest"
+      ],
+      "python": [
+        "3.10",
+        "3.14"
+      ],
+      "result": "PASS",
+      "run_id": 45598131939
+    },
+    "github_codex_review": {
+      "commit": "34756b00bd6caf3ba18bdb535f18222fae3db3eb",
+      "findings": false
+    },
+    "sonar": {
+      "quality_gate": "PASS",
+      "runtime_issues": 0,
+      "test_style_suggestions": 2
+    }
+  },
+  "installation": {
+    "generic_cli_applied": true,
+    "unique_system_worker": true,
+    "legacy_user_unit_disabled": true,
+    "original_tables_preserved_at_cutover": true,
+    "owner_mode": "full",
+    "native_execution_enabled": true,
+    "worker_account_uid": 1000,
+    "ssh_or_network_restarted_during_apply": false
+  },
+  "boot": {
+    "boot_id_sha256": "e457a7d92a143a2bdf5f34f170ef2649c32129221b7b9dd4a81ce51dc11f784d",
+    "worker_active_monotonic_us": 40519211,
+    "ssh_active_monotonic_us": 47434867,
+    "first_local_graphical_login_monotonic_us": 61451288,
+    "worker_and_ssh_started_before_local_graphical_login": true,
+    "root_disk_encrypted": true,
+    "operator_disk_unlock_still_required": true,
+    "no_graphical_login_acceptance": "PENDING: local graphical login occurred"
+  },
+  "credential_separation": {
+    "windows_origin": "existing Windows OpenSSH agent service",
+    "receiver_outgoing_keys_before": [
+      "key_locked",
+      "key_locked"
+    ],
+    "receiver_outgoing_keys_after": [
+      "key_locked",
+      "key_locked"
+    ],
+    "receiver_unlock_requested": false,
+    "receiver_desktop_credential_autostart_disabled_with_backup": true,
+    "personal_keys_or_passphrases_changed": false,
+    "client_mcp_preauthorization": "Vincula server only; default_tools_approval_mode=approve; other config preserved"
+  },
+  "actual_agent": {
+    "product": "Codex CLI native Windows",
+    "version": "0.171.0",
+    "allowed_model_tools": [
+      "vincula.get_process_execution_info",
+      "vincula.execute_process",
+      "vincula.read_process"
+    ],
+    "program_registration_calls": 0,
+    "runs": [
+      {
+        "case": "job2",
+        "job_id": "1d420191-da41-41f7-a226-1eddfe6169c5",
+        "mcp_calls": 3,
+        "manifest_sha256": "4bd10cda63ef7f189537d4925e058627cb80ea6ab30b3fb5c95a6b56272d3105",
+        "events_sha256": "5993b5da54b6ba440c9fb3ce917f54737ba61b1eecfb640db569bc0d7a5cb226",
+        "exit_code": 0,
+        "worker_uid": 1000,
+        "worker_cgroup": "0::/system.slice/vincula-core-worker.service",
+        "environment_present": {
+          "DISPLAY": false,
+          "SSH_AUTH_SOCK": false,
+          "DBUS_SESSION_BUS_ADDRESS": false
+        },
+        "graphical_session_present": true
+      },
+      {
+        "case": "job3",
+        "job_id": "f5f1e64a-8869-41f4-b460-5de2039dd46f",
+        "mcp_calls": 3,
+        "manifest_sha256": "47cd753a306f9612307912eeb48a4bb57abae6300f3bc940b677f6f1e210d995",
+        "events_sha256": "b1a6310ec1debe27e911b385774cd73a5404421cae507d7a9e979c262dc61c31",
+        "exit_code": 0,
+        "worker_uid": 1000,
+        "worker_cgroup": "0::/system.slice/vincula-core-worker.service",
+        "environment_present": {
+          "DISPLAY": false,
+          "SSH_AUTH_SOCK": false,
+          "DBUS_SESSION_BUS_ADDRESS": false
+        },
+        "graphical_session_present": true
+      }
+    ]
+  },
+  "limits": [
+    "Both actual jobs ran with a local graphical session present; environment absence is not an OS-wide no-GUI proof.",
+    "No additional Kali reboot without explicit operator approval.",
+    "Linux controller credential provisioning, Windows service provider and Desktop sharing integration are separate increments."
+  ],
+  "privacy": "Raw events/configuration/receipts remain private; this report excludes addresses, MACs, SSIDs, key contents and credential values."
+}

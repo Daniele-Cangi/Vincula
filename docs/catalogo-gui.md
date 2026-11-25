@@ -29,11 +29,15 @@ Su Linux mantieni `node_catalog.py` accanto a `windows-dock.py`, insieme ai modu
 
 Su Windows la build WinForms richiede anche `System.Web.Extensions.dll` per la serializzazione JSON. Il comando nella README include il riferimento. Il PC deve avere `py -3` con Python 3.10 o successivo disponibile oppure `VINCULA_PYTHON` configurata. L’app può essere compilata direttamente in `outputs/Linux Dock` per usare la ricerca della checkout, oppure distribuita con il runtime in uno dei percorsi indicati.
 
+La PR #20 aggiunge su main `f304b91` il [bootstrap locale delle credenziali SSH](ssh-credentials-bootstrap.md) per le sessioni utente che lo utilizzano. Il [Core ricevente Linux](core-service.md) viene configurato separatamente per partire senza login grafico o bootstrap dell'agente SSH sul destinatario. La presenza di questi componenti non prova l'avvio delle GUI o il funzionamento del desktop multinodo.
+
 ## Compatibilità e passaggi successivi
 
 Quando il registro manca, la scheda mostra il profilo a due PC e offre **Registra questo PC**. Questa operazione crea l’identità locale con un UUID. Se esiste un profilo legacy configurato, il nodo locale conserva il relativo alias storico. Le installazioni nuove iniziano con alias vuoti.
 
 Un profilo SSH legacy di un nodo già registrato rimane selezionabile nel modulo. Per passare a un percorso esplicito si sceglie **SSH esplicito** e si compilano i campi. **Da configurare** rimuove il percorso del nodo dal registro.
+
+Il modulo manuale non completa ancora l’[enrollment verificato](node-enrollment.md): importazione dell’invito, confronto dell’impronta, verifica dell’identità sul peer e abilitazione delle funzioni appartengono al passo successivo.
 
 ## Layout desktop e controlli preliminari
 
@@ -47,6 +51,6 @@ Le opzioni previste richiedono TLS e verifica delle impronte. Gli appunti produc
 
 Il preflight inventaria localmente il binario Deskflow e l’esistenza dei file SSH. **Presente** non significa collaudato. Le capacità dei nodi remoti, autenticazione, forwarding, certificati TLS e consenso grafico sono indicati come mancanti o da verificare. Una chiave host SSH verificata non autentica il certificato TLS Deskflow. Su Wayland occorre verificare i portali InputCapture/RemoteDesktop e Clipboard e il relativo consenso locale; su X11 occorre l’accesso alla sessione grafica. Il preflight non richiede né sostituisce quel consenso e non modifica i livelli agente `ask`/`full`.
 
-L’anteprima restituisce sempre `launchable:false`, `preflight.ready:false` e `active:false`: supervisor, lease, provisioning e trasporti multinodo non sono ancora implementati. In particolare il collegamento MCP di Kali non abilita automaticamente il forwarding desktop: servono credenziali dedicate con permessi limitati e una verifica effettiva. Il salvataggio del layout non altera una condivisione legacy già attiva.
+L’anteprima restituisce sempre `launchable:false`, `preflight.ready:false` e `active:false`. Il [supervisore](desktop-supervisor.md) e il [coordinatore](desktop-coordinator.md), con lease e stop circoscritto, esistono in moduli separati su main ma non sono integrati nelle GUI. La PR #19 aggiunge anche [contratti e anteprime dei profili Deskflow](desktop-backend.md), che restano non attivabili: integrazione dei trasporti, provisioning e motore gestito sono ancora da completare. Il collegamento MCP di Kali non abilita automaticamente il desktop condiviso; restano da verificare identità TLS, rete e consenso grafico. Il salvataggio del layout non altera una condivisione legacy già attiva.
 
 L’instradamento delle altre schede verso il nodo selezionato e l’attivazione Deskflow multinodo appartengono all’incremento successivo.
