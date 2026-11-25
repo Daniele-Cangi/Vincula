@@ -252,6 +252,63 @@ class NodeEnrollmentTests(unittest.TestCase):
         self.assertTrue(self.pin().is_file())
         self.request()
 
+    def test_cleanup_does_not_probe_registry_paths_and_preserves_ambiguous_pin(self):
+        untrusted = self.base / "untrusted network mount" / "known_hosts"
+        route = {**self.endpoints[0], **self.connection, "known_hosts_file": str(untrusted)}
+        nodes.execute({"action": "update", "node_id": self.ids[1], "changes": {"ssh": route}}, self.path)
+        before = self.path.read_bytes()
+
+        def forbid_probe(method):
+            original = getattr(Path, method)
+
+            def guarded(path, *arguments, **keywords):
+                if path == untrusted or path == untrusted.parent or untrusted in path.parents:
+                    raise AssertionError("Cleanup must not explore paths taken from the registry.")
+                return original(path, *arguments, **keywords)
+
+            return guarded
+
+        with patch.object(Path, "resolve", forbid_probe("resolve")), \
+                patch.object(Path, "stat", forbid_probe("stat")), \
+                patch.object(Path, "lstat", forbid_probe("lstat")), \
+                patch.object(Path, "open", forbid_probe("open")), \
+                patch.object(nodes, "save", side_effect=OSError("save before commit")):
+            with self.assertRaisesRegex(OSError, "save before commit"):
+                self.request()
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertTrue(self.pin().is_file())
+        # The orphan is verified public trust, reused by an explicit retry.
+        self.request()
+        self.assertEqual(nodes.snapshot(self.path)["registry"]["nodes"][-1]["id"], self.ids[3])
+
+    def test_cleanup_preserves_pin_referenced_through_a_real_directory_alias(self):
+        self.pin().parent.mkdir()
+        alias = self.base / "alias to pin directory"
+        try:
+            alias.symlink_to(self.pin().parent, target_is_directory=True)
+        except OSError as error:
+            if sys.platform == "win32" and getattr(error, "winerror", None) == 1314:
+                self.skipTest("The Windows account cannot create symlinks.")
+            raise
+        reference = alias / self.pin().name
+        route = {**self.endpoints[0], **self.connection, "known_hosts_file": str(reference)}
+        nodes.execute({"action": "update", "node_id": self.ids[1], "changes": {"ssh": route}}, self.path)
+        with patch.object(nodes, "save", side_effect=OSError("save before commit")):
+            with self.assertRaisesRegex(OSError, "save before commit"):
+                self.request()
+        self.assertTrue(self.pin().is_file())
+        self.assertEqual(reference.read_bytes(), self.pin().read_bytes())
+
+    def test_cleanup_preserves_pin_when_legacy_route_references_are_implicit(self):
+        legacy = "ubuntu" if sys.platform == "win32" else "windows"
+        family = "linux" if legacy == "ubuntu" else "windows"
+        nodes.execute({"action": "update", "node_id": self.ids[1],
+                       "changes": {"family": family, "legacy_route": legacy}}, self.path)
+        with patch.object(nodes, "save", side_effect=OSError("save before commit")):
+            with self.assertRaisesRegex(OSError, "save before commit"):
+                self.request()
+        self.assertTrue(self.pin().is_file())
+
     def test_matching_orphan_pin_is_reused_and_not_removed_on_failed_registry_save(self):
         self.request()
         pin_bytes = self.pin().read_bytes()

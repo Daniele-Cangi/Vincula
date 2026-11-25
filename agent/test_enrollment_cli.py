@@ -17,7 +17,9 @@ class EnrollmentCLITests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        # Hosted Windows can expose TEMP through an 8.3 alias containing '~'.
+        # Identities deliberately require literal paths; use the physical fixture root.
+        self.root = Path(self.temporary.name).resolve()
         self.family = "windows" if sys.platform == "win32" else "linux"
         self.source_id = str(uuid4())
         self.registry = self.profile("source", self.source_id)
@@ -62,7 +64,7 @@ class EnrollmentCLITests(unittest.TestCase):
                    "expected_fingerprint": invitation["ssh_host_key"]["fingerprint"], "endpoint_index": 0,
                    "local_connection": {"identity_file": str(destination.parent / "controller.pub")}}
         imported = self.call(request, destination)
-        self.assertTrue(imported["ok"])
+        self.assertTrue(imported["ok"], imported)
         self.assertEqual(imported["node_id"], self.source_id)
         self.assertEqual(imported["state"], "registered")
         self.assertEqual(imported["checks"], {"ssh": "unchecked", "runtime": "unchecked", "desktop": "unchecked"})
@@ -89,6 +91,37 @@ class EnrollmentCLITests(unittest.TestCase):
         result = self.call(request)
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"]["code"], "invalid_request")
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows TEMP short-name alias")
+    def test_roundtrip_with_windows_short_temp_alias(self):
+        import ctypes
+        from ctypes import wintypes
+
+        directory = self.root / "Windows temporary directory with spaces"
+        directory.mkdir()
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.GetShortPathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+        kernel.GetShortPathNameW.restype = wintypes.DWORD
+        buffer = ctypes.create_unicode_buffer(32768)
+        size = kernel.GetShortPathNameW(str(directory), buffer, len(buffer))
+        if not size or size >= len(buffer):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if "~" not in buffer.value:
+            self.skipTest("8.3 names are disabled on the fixture volume.")
+        environment = dict(os.environ, TEMP=buffer.value, TMP=buffer.value, PYTHONDONTWRITEBYTECODE="1")
+        # A fresh interpreter must choose TEMP before tempfile caches its directory.
+        bootstrap = (
+            "import sys,unittest;"
+            f"sys.path.insert(0,{str(Path(__file__).resolve().parent)!r});"
+            "suite=unittest.TestLoader().loadTestsFromName("
+            "'test_enrollment_cli.EnrollmentCLITests."
+            "test_export_preview_import_and_idempotent_retry_keep_public_identity');"
+            "result=unittest.TextTestRunner().run(suite);"
+            "sys.exit(0 if result.wasSuccessful() else 1)"
+        )
+        result = subprocess.run([sys.executable, "-IB", "-c", bootstrap],
+                                capture_output=True, text=True, encoding="utf-8", env=environment, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

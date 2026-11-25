@@ -121,7 +121,7 @@ L’importazione mantiene lock, revisione attesa e sostituzione atomica del regi
 
 Una ripetizione identica non riscrive i file e può riuscire anche con una vecchia revisione **solo** se voce registrata e pin coincidono già esattamente. Metadati, rotta o chiave differenti per lo stesso UUID producono conflitto: l’importazione non ruota silenziosamente le chiavi. Un pin mancante su un UUID già registrato richiede un ripristino esplicito, non una nuova fiducia implicita.
 
-Un errore dopo il commit può aver perso soltanto la conferma: il recupero non rimuove mai un pin ancora referenziato dal registro. Un pin orfano identico può essere riutilizzato con impronta verificata e revisione corrente. Su filesystem che non supportano la pubblicazione atomica tramite hard link, l’operazione restituisce errore prima del salvataggio del registro.
+Un errore dopo il commit può aver perso soltanto la conferma. Il cleanup non risolve né esplora i percorsi contenuti nelle altre rotte del registro. Se esiste una rotta SSH esplicita o legacy, conserva il pin: un alias o un riferimento implicito potrebbe ancora usarlo. Può quindi restare un pin pubblico verificato orfano anche dopo un errore prima del commit. Un pin orfano identico può essere riutilizzato con impronta verificata e revisione corrente. La rimozione automatica resta limitata ai casi senza rotte e con proprietà e contenuto del pin ancora verificati. Su filesystem che non supportano la pubblicazione atomica tramite hard link, l’operazione restituisce errore prima del salvataggio del registro.
 
 ## Passi successivi e permessi
 

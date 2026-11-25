@@ -213,10 +213,12 @@ def _cleanup_unreferenced_pin(registry_path, pin, ownership, content):
     try:
         _check_pin_directory(pin.parent)
         registry = nodes.snapshot(registry_path)["registry"]
-        if registry is not None and any(
-                isinstance(entry.get("ssh"), dict)
-                and Path(entry["ssh"]["known_hosts_file"]).resolve() == pin.resolve()
-                for entry in registry["nodes"] if "known_hosts_file" in entry.get("ssh", {})):
+        # Do not probe paths supplied by registry entries. Even a lexically
+        # different path can alias this pin through a symlink or junction, and
+        # legacy routes have implicit references. Preserve a harmless orphan
+        # whenever a route makes non-reference impossible to establish here.
+        if registry is not None and any("ssh" in entry or "legacy_route" in entry
+                                        for entry in registry["nodes"]):
             return
         metadata = pin.lstat()
         if (not _redirected(metadata) and (metadata.st_dev, metadata.st_ino) == ownership

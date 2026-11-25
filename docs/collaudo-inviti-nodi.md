@@ -6,12 +6,14 @@ Il parent è la PR #22, `b4b3a8c6688cca947a673c8f9545ab1c1aa38eb2`. L'incremento
 
 | Verifica | Esito e limiti |
 | --- | --- |
-| Runtime su snapshot pulita | 350 test, 14 esclusioni previste; nessun errore, deprecazioni e resource warning fatali. Due fixture benchmark e smoke MCP isolato passati. |
-| Backend e CLI su Windows reale | Python 3.14.4, 41 test, 3 esclusioni: due richiedono privilegi per symlink e una riguarda soltanto il socket Linux. Junction NTFS, nomi brevi e mutex abbandonato verificati. |
+| Runtime su snapshot pulita | 354 test, 15 esclusioni previste; nessun errore, deprecazioni e resource warning fatali. Due fixture benchmark e smoke MCP isolato passati. |
+| Backend e CLI su Windows reale | Python 3.14.7, 45 test, 4 esclusioni: tre richiedono privilegi per symlink e una riguarda soltanto il socket Linux. Junction NTFS, nomi brevi, mutex abbandonato e round trip con TEMP/TMP 8.3 verificati. |
 | Build WinForms | Compilazione nativa del sorgente finale; nessun avvio dell'app operativa. |
 | Moduli GTK | Proprietario nascosto e soli widget offscreen; gate dell'impronta, endpoint, identità e socket locali, import `registered/unchecked`, export validato e screenshot. Nessun accesso al contenuto dell'identità. |
 | Moduli Windows | Proprietario `DockWindow(false)` nascosto, senza evento Shown/status o condivisione; dialoghi trasparenti fuori schermo, import reale nella fixture, endpoint e identità locali, stato non verificato. Export validato dal runtime; il selettore nativo di salvataggio non è automatizzato. |
-| Review indipendente | Il rilievo sulle junction NTFS è corretto; nessun P1/P2 aperto nel backend, bridge e GUI esaminati. |
+| Review indipendente | Corretti i rilievi su junction NTFS, probing di percorsi nel cleanup e bit eseguibile GTK. Nessun P1/P2 aperto nelle review indipendenti sul delta corretto; review automatica e CI vengono riconfermate sul nuovo commit. |
+
+La prima CI hosted ha inoltre rilevato una fixture che passava un alias TEMP 8.3 contenente `~` come percorso di identità. La fixture usa ora il percorso fisico; un test Windows ripete il round trip con TEMP/TMP in formato 8.3, senza allentare i vincoli dei percorsi runtime. La pubblicazione conserva il modo eseguibile originale del launcher GTK. Il cleanup conserva i pin ambigui senza esplorare percorsi derivati dal registro.
 
 La verifica Windows delle dimensioni ha rilevato una conferma troncata quando il modulo diventava disabilitato. La frase è stata accorciata nelle due GUI e il solo controllo Windows ha ricevuto spazio aggiuntivo. Il test controlla anche larghezza del testo e glifo della checkbox; non modifica il renderer condiviso dell'app. I risultati della build e del modulo finale sono distinti dai tentativi del harness precedenti, falliti durante raccolta o preparazione dei dati.
 
