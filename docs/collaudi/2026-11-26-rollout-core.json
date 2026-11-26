@@ -1,0 +1,218 @@
+{
+  "date": "2026-11-26",
+  "source_commit": "ed40e6fadf606c4a575abd0125ad95ec44848560",
+  "source_tree": "048c040eb20b87d533d799575c1d5ca8fdb9cf71",
+  "release": {
+    "commit": "ed40e6fadf606c4a575abd0125ad95ec44848560",
+    "tree": "048c040eb20b87d533d799575c1d5ca8fdb9cf71",
+    "archive_sha256": "6753082d9fc369d7d86cb97cf6ecb1c3b5f925a56b0a692789eaad4c9de8246d",
+    "manifest_sha256": "2e7b8b2c9d98a41fe306ea4d1e22821ae9666078772e07568f3b011bbabe8057",
+    "count": 131,
+    "cs_sha256": "2d086be83f07322bc435498dda39a2bbb91b13480d9113754ab3a32e27b8663b",
+    "exe_sha256": "9ed17a4326f37b76fe89ac17e04b23057d5763c4cb6d9b0a7cde006494761b16",
+    "exe_bytes": 105472
+  },
+  "origins": {
+    "ubuntu": {
+      "configured_release": "ed40e6fadf606c4a575abd0125ad95ec44848560",
+      "protocol_initialized": true,
+      "nodes": [
+        {
+          "node_id": "0d97d16f-1624-4467-b834-f0592a4d29ab",
+          "local": true,
+          "availability": "available",
+          "metrics_received": true
+        },
+        {
+          "node_id": "a197f389-14b2-4716-86a2-70314e2ee4e2",
+          "local": false,
+          "availability": "available",
+          "metrics_received": true
+        },
+        {
+          "node_id": "12365c6d-f1c3-41ad-a4cb-458363b2fae5",
+          "local": false,
+          "availability": "available",
+          "metrics_received": true
+        }
+      ],
+      "execution": [
+        {
+          "node_id": "0d97d16f-1624-4467-b834-f0592a4d29ab",
+          "job_id": "5775843c-a556-51f6-9209-e1ddd38c8d6c",
+          "passed": true,
+          "exit_code": 7,
+          "outcome_reason": "exit",
+          "log_verified": true
+        },
+        {
+          "node_id": "a197f389-14b2-4716-86a2-70314e2ee4e2",
+          "job_id": "2fadfe25-fecd-5666-85da-d0b4ffe654f9",
+          "passed": true,
+          "exit_code": 7,
+          "outcome_reason": "exit",
+          "log_verified": true
+        },
+        {
+          "node_id": "12365c6d-f1c3-41ad-a4cb-458363b2fae5",
+          "job_id": "2292d962-9441-5e38-9b83-eba7345b9db1",
+          "passed": true,
+          "exit_code": 7,
+          "outcome_reason": "exit",
+          "log_verified": true
+        }
+      ],
+      "all_executions_passed": true,
+      "all_three_available": true
+    },
+    "windows_interactive_limited": {
+      "configured_release": "ed40e6fadf606c4a575abd0125ad95ec44848560",
+      "protocol_initialized": true,
+      "nodes": [
+        {
+          "node_id": "0d97d16f-1624-4467-b834-f0592a4d29ab",
+          "local": false,
+          "availability": "available",
+          "metrics_received": true
+        },
+        {
+          "node_id": "a197f389-14b2-4716-86a2-70314e2ee4e2",
+          "local": true,
+          "availability": "available",
+          "metrics_received": true
+        },
+        {
+          "node_id": "12365c6d-f1c3-41ad-a4cb-458363b2fae5",
+          "local": false,
+          "availability": "available",
+          "metrics_received": true
+        }
+      ],
+      "execution": [
+        {
+          "node_id": "0d97d16f-1624-4467-b834-f0592a4d29ab",
+          "job_id": "bd4d5966-5b0a-5f1d-a515-7d54a259a98c",
+          "passed": true,
+          "exit_code": 7,
+          "outcome_reason": "exit",
+          "log_verified": true
+        },
+        {
+          "node_id": "a197f389-14b2-4716-86a2-70314e2ee4e2",
+          "job_id": "523734c6-e9e0-5ae6-ba78-eeeeced5762a",
+          "passed": true,
+          "exit_code": 7,
+          "outcome_reason": "exit",
+          "log_verified": true
+        },
+        {
+          "node_id": "12365c6d-f1c3-41ad-a4cb-458363b2fae5",
+          "job_id": "f28e465f-3af7-5032-b35c-a8693a66eea7",
+          "passed": true,
+          "exit_code": 7,
+          "outcome_reason": "exit",
+          "log_verified": true
+        }
+      ],
+      "all_executions_passed": true,
+      "all_three_available": true
+    },
+    "kali_without_desktop_agent": {
+      "configured_release": "ed40e6fadf606c4a575abd0125ad95ec44848560",
+      "protocol_initialized": true,
+      "nodes": [
+        {
+          "node_id": "12365c6d-f1c3-41ad-a4cb-458363b2fae5",
+          "local": true,
+          "availability": "available",
+          "metrics_received": true
+        },
+        {
+          "node_id": "0d97d16f-1624-4467-b834-f0592a4d29ab",
+          "local": false,
+          "availability": "available",
+          "metrics_received": true
+        },
+        {
+          "node_id": "a197f389-14b2-4716-86a2-70314e2ee4e2",
+          "local": false,
+          "availability": "available",
+          "metrics_received": true
+        }
+      ],
+      "execution": [
+        {
+          "node_id": "12365c6d-f1c3-41ad-a4cb-458363b2fae5",
+          "job_id": "366120c2-b341-5f0e-8736-79bddc13fcef",
+          "passed": true,
+          "exit_code": 7,
+          "outcome_reason": "exit",
+          "log_verified": true
+        },
+        {
+          "node_id": "0d97d16f-1624-4467-b834-f0592a4d29ab",
+          "job_id": "ba563a9e-03f1-5056-bc72-b2e262846ee6",
+          "passed": true,
+          "exit_code": 7,
+          "outcome_reason": "exit",
+          "log_verified": true
+        },
+        {
+          "node_id": "a197f389-14b2-4716-86a2-70314e2ee4e2",
+          "job_id": "c6582ae4-53c7-5652-b322-247bfa56bb40",
+          "passed": true,
+          "exit_code": 7,
+          "outcome_reason": "exit",
+          "log_verified": true
+        }
+      ],
+      "all_executions_passed": true,
+      "all_three_available": true
+    }
+  },
+  "windows_medium_source_gate": {
+    "actual_medium": true,
+    "compiled_extra": true,
+    "jobs_initialize": false,
+    "passed": true,
+    "phase": "done",
+    "production_activation": false,
+    "readable": true,
+    "same_user_sid": true,
+    "server_imported": true,
+    "source_commit": "ed40e6fadf606c4a575abd0125ad95ec44848560",
+    "source_files": 132,
+    "write_denied": true,
+    "process_exit": 0,
+    "task_cleaned": true
+  },
+  "kali_controller": {
+    "enabled": true,
+    "active": true,
+    "signature_valid": true,
+    "fingerprint": "SHA256:XW+0sMeur+ywpUf/dQq7laIQpxriUcsaA74Iisu9MJQ",
+    "source_sha256": "dbfb00777386cb5cdabfc7005a1705d60a75e2bcf5c969eb77e301fcde542045",
+    "encrypted_credential_read_by_python": false,
+    "new_boot_test": false
+  },
+  "preserved": {
+    "helper_bytes": true,
+    "full_and_native_policies": true,
+    "previous_authorized_key_lines_and_acls": true,
+    "existing_sharing_process_ids": true,
+    "personal_keys": true
+  },
+  "gui": {
+    "ubuntu_icon_updated": true,
+    "windows_icon_updated": true,
+    "ubuntu_default_catalog": "Core",
+    "running_windows_reopened": false,
+    "visual_test_of_updated_production_windows": false
+  },
+  "limitations": [
+    "Windows SSH-logon nested native process-info/execute requests timed out before job creation; Interactive/Limited origin passed with the same request UUIDs. Windows headless controller is not certified.",
+    "Kali controller tested with personal SSH socket invalid and graphical environment removed; no new reboot or logout test.",
+    "Windows legacy Ubuntu route remains supported by MCP but not by the new explicit-route node-check action.",
+    "Desktop multinode, transport provisioning, TLS and input/clipboard consent remain separate work."
+  ]
+}
