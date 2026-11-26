@@ -2,7 +2,7 @@
 
 Un nodo che riceve lavori usa SSH in ingresso e il worker Core. Non deve caricare chiavi SSH verso altri computer. Un nodo che avvia connessioni ha invece bisogno di un'identità in uscita: il provider locale `agent/controller_identity.py` prepara un'identità dedicata, caricata da un servizio OpenSSH indipendente dal desktop. Le richieste dell'agente AI contengono gli identificativi dei nodi e le operazioni; non contengono credenziali.
 
-Questo incremento implementa il provider e il collegamento al registro. L'installazione reale, l'enrollment e la verifica dopo boot delle origini Linux restano da collaudare. Le precedenti prove Windows → Kali riguardano il Core ricevente, non certificano questo provider.
+Questo incremento implementa il provider e il collegamento al registro. Il [rollout del 26 novembre](collaudo-rollout-core.md) documenta le installazioni Ubuntu e Kali, l’autorizzazione delle loro chiavi pubbliche e l’uso MCP senza agente SSH personale sul client Kali. Non è stato eseguito un nuovo boot del controller Kali. Le precedenti prove Windows → Kali riguardano il Core ricevente e conservano il proprio ambito.
 
 ## Requisiti e protezione
 
