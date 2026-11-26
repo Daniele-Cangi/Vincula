@@ -1,0 +1,89 @@
+# Proposal only. Copy into Vincula/.github/workflows after selecting the patch path.
+# Native compilation + headless unit tests; never starts a desktop engine or sharing session.
+name: Build managed Deskflow Windows
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-windows:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    env:
+      DESKFLOW_COMMIT: 081f6478e654a112168879e67a41ce7d7e4ae3af
+      DESKFLOW_PATCH: vendor/deskflow/vincula-managed-v1.patch # Root selects final repository path.
+      QT_VERSION: 6.10.2
+      VCPKG_COMMIT: d5ec528843d29e3a52d745a64b469f810b2cedbf
+      AQT_COMMIT: 16db45a70b5905ad596941b223469bc86a56901e
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Fetch exact upstream and verify patch
+        run: |
+          git -c core.autocrlf=false init deskflow-src
+          git -C deskflow-src remote add origin https://github.com/deskflow/deskflow.git
+          git -C deskflow-src fetch --depth=1 origin $env:DESKFLOW_COMMIT
+          if ($LASTEXITCODE) { throw 'Deskflow fetch failed' }
+          git -C deskflow-src checkout --detach FETCH_HEAD
+          if ((git -C deskflow-src rev-parse HEAD) -ne $env:DESKFLOW_COMMIT) { throw 'Upstream commit mismatch' }
+          $patch = Join-Path $env:GITHUB_WORKSPACE $env:DESKFLOW_PATCH
+          git -C deskflow-src apply --check $patch
+          if ($LASTEXITCODE) { throw 'Patch check failed' }
+          git -C deskflow-src apply $patch
+          if ($LASTEXITCODE) { throw 'Patch application failed' }
+      - name: Install pinned Qt and vcpkg sources
+        run: |
+          python -m pip install "git+https://github.com/miurahr/aqtinstall.git@$env:AQT_COMMIT"
+          if ($LASTEXITCODE) { throw 'aqt installation failed' }
+          python -m aqt install-qt windows desktop $env:QT_VERSION win64_msvc2022_64 --outputdir "$env:RUNNER_TEMP/qt"
+          if ($LASTEXITCODE) { throw 'Qt installation failed' }
+          git init "$env:RUNNER_TEMP/managed-vcpkg"
+          git -C "$env:RUNNER_TEMP/managed-vcpkg" remote add origin https://github.com/microsoft/vcpkg.git
+          git -C "$env:RUNNER_TEMP/managed-vcpkg" fetch --depth=1 origin $env:VCPKG_COMMIT
+          if ($LASTEXITCODE) { throw 'vcpkg fetch failed' }
+          git -C "$env:RUNNER_TEMP/managed-vcpkg" checkout --detach FETCH_HEAD
+          & "$env:RUNNER_TEMP/managed-vcpkg/bootstrap-vcpkg.bat" -disableMetrics
+          if ($LASTEXITCODE) { throw 'vcpkg bootstrap failed' }
+      - name: Configure with Visual Studio 2022 and build core plus tests
+        run: |
+          $qt = "$env:RUNNER_TEMP/qt/$env:QT_VERSION/msvc2022_64"
+          cmake -S deskflow-src -B managed-build -G 'Visual Studio 17 2022' -A x64 `
+            "-DCMAKE_TOOLCHAIN_FILE=$env:RUNNER_TEMP/managed-vcpkg/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_HOST_TRIPLET=x64-windows `
+            "-DQt6_DIR=$qt/lib/cmake/Qt6" -DCMAKE_BUILD_TYPE=Release `
+            -DBUILD_GUI=OFF -DBUILD_INSTALLER=OFF -DBUILD_TESTS=ON -DSKIP_BUILD_TESTS=ON
+          if ($LASTEXITCODE) { throw 'CMake configure failed' }
+          cmake --build managed-build --config Release --parallel 4 --target `
+            deskflow-core ManagedSessionTests SettingsTests ServerTests ClientProxyTests ServerProxyTests SecureUtilsTests
+          if ($LASTEXITCODE) { throw 'Native compilation failed' }
+      - name: Run native headless regression tests
+        run: |
+          $qt = "$env:RUNNER_TEMP/qt/$env:QT_VERSION/msvc2022_64"
+          $env:PATH = "$qt/bin;$env:GITHUB_WORKSPACE/managed-build/vcpkg_installed/x64-windows/bin;$env:PATH"
+          $env:QT_QPA_PLATFORM = 'minimal'
+          ctest --test-dir managed-build/src/unittests -C Release `
+            -R '^(ManagedSessionTests|SettingsTests|ServerTests|ClientProxyTests|ServerProxyTests|SecureUtilsTests)$' --output-on-failure
+          if ($LASTEXITCODE) { throw 'Native tests failed' }
+      - name: Bundle core and runtime dependencies without starting it
+        run: |
+          $qt = "$env:RUNNER_TEMP/qt/$env:QT_VERSION/msvc2022_64"
+          New-Item -ItemType Directory -Force managed-windows | Out-Null
+          Copy-Item managed-build/bin/Release/deskflow-core.exe managed-windows/
+          & "$qt/bin/windeployqt.exe" --release --no-translations --no-opengl-sw managed-windows/deskflow-core.exe
+          if ($LASTEXITCODE) { throw 'Qt dependency deployment failed' }
+          Copy-Item managed-build/vcpkg_installed/x64-windows/bin/*.dll managed-windows/
+          Get-ChildItem managed-windows -Recurse -File | Get-FileHash -Algorithm SHA256 |
+            Select-Object Path,Hash | ConvertTo-Json | Set-Content managed-windows/SHA256.json
+          Get-FileHash $env:DESKFLOW_PATCH -Algorithm SHA256 | Format-List | Out-File managed-windows/PATCH-SHA256.txt
+          Copy-Item deskflow-src/LICENSE managed-windows/Deskflow-LICENSE.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: managed-deskflow-windows-x64
+          path: |
+            managed-windows/
+            managed-build/src/unittests/Testing/Temporary/LastTest.log
+          if-no-files-found: error

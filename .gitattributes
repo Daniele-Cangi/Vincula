@@ -1,0 +1,5 @@
+# Preserve pinned patch bytes (including meaningful blank context lines) and
+# verbatim upstream license texts on Windows as well as Linux.
+third_party/deskflow/*.patch -text -whitespace
+third_party/deskflow/LICENSE -text -whitespace
+third_party/deskflow/LICENSES/*.txt -text -whitespace

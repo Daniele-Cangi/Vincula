@@ -54,6 +54,20 @@ def unavailable_catalog(path):
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_scoped_readiness_lifetime_is_preserved_and_bounded(self):
+        binding = self.binding()
+        status = {"instance": binding["instance"], "session_id": binding["session_id"],
+                  "revision": binding["revision"], "local_id": binding["node_id"],
+                  "primary": binding["node_id"], "members": [binding["node_id"]],
+                  "state": "running", "desktop_ready": True, "lease_remaining": 5,
+                  "desktop_ready_remaining": 0.4, "unrelated_diagnostics": "private"}
+        result = bridge.scoped_reply({"ok": True, "session": status}, binding)["session"]
+        self.assertEqual(result["desktop_ready_remaining"], 0.4)
+        self.assertNotIn("unrelated_diagnostics", result)
+        for invalid in (True, -1, 2.001, float("nan"), float("inf")):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                bridge.scoped_reply({"ok": True, "session": dict(status, desktop_ready_remaining=invalid)}, binding)
+
     def binding(self, emergency=False):
         return {"protocol": 1, "mode": "stop" if emergency else "control", "node_id": str(uuid4()),
                 "session_id": str(uuid4()), "revision": "a" * 64, "helper_sha256": "b" * 64,

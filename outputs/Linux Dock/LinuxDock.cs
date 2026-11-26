@@ -722,6 +722,21 @@ internal static class NodeCatalog
         }
     }
 
+    internal static ProcessStartInfo DesktopCommand()
+    {
+        string script = Path.Combine(Path.GetDirectoryName(RuntimeScript(false, false)), "desktop_app.py");
+        if (!File.Exists(script))
+            throw new IOException("Aggiorna il runtime Vincula: manca il controller del gruppo desktop.");
+        string interpreter = Environment.GetEnvironmentVariable("VINCULA_PYTHON");
+        bool launcher = String.IsNullOrWhiteSpace(interpreter);
+        return new ProcessStartInfo(launcher ? "py.exe" : interpreter,
+            (launcher ? "-3 " : "") + "-IB \"" + script + "\" run") {
+            UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+            StandardOutputEncoding = new UTF8Encoding(false, true), StandardErrorEncoding = new UTF8Encoding(false)
+        };
+    }
+
     internal static Dictionary<string, object> Request(Dictionary<string, object> request)
     {
         var json = new JavaScriptSerializer();
@@ -830,6 +845,20 @@ internal sealed class DockWindow : Form
     private readonly Label inputStatus = new Label();
     private readonly TabPage inputPage;
     private Button inputButton;
+    private Button inputGroupButton;
+    private Button groupButton;
+    private readonly Label groupStatus = new Label { AutoSize = true, ForeColor = Muted };
+    private ManagedGroupSession managedSession;
+    private bool managedUncertain;
+    private sealed class ManagedGroupSession
+    {
+        internal readonly object Gate = new object();
+        internal Process Process;
+        internal volatile bool StopRequested;
+        internal bool CloseInput, Writing, StopSent, InputClosed;
+        internal bool CleanupComplete, Terminal, ProtocolFault;
+        internal string State = "starting", Message = "Avvio del gruppo…";
+    }
     private CancellationTokenSource inputSession;
     private CancellationTokenSource desktopSession;
     private bool closePending;
@@ -982,7 +1011,13 @@ internal sealed class DockWindow : Form
                 StopInput();
             if (desktopSession != null)
                 desktopSession.Cancel();
-            if (busy || nodesBusy || desktopSession != null || inputSession != null)
+            if (managedSession != null)
+            {
+                closePending = true;
+                SetGroupStatus("Arresto del gruppo prima della chiusura…", "stopping");
+                QueueGroupStop(managedSession, true);
+            }
+            if (busy || nodesBusy || desktopSession != null || inputSession != null || managedSession != null)
             {
                 closePending = true;
                 args.Cancel = true;
@@ -1118,7 +1153,8 @@ internal sealed class DockWindow : Form
 
     private void TryAutomaticInput()
     {
-        if (automaticInputWanted && !closePending && !busy && !nodesBusy && inputSession == null && desktopSession == null)
+        if (automaticInputWanted && !closePending && !busy && !nodesBusy && inputSession == null && desktopSession == null
+            && managedSession == null && !managedUncertain)
             StartInput(true);
     }
 
@@ -1198,11 +1234,13 @@ internal sealed class DockWindow : Form
         nodeRefresh.Enabled = !nodesBusy;
         nodeList.Enabled = !nodesBusy;
         if (nodeDesktop != null)
-            nodeDesktop.Enabled = available && registry != null;
+            nodeDesktop.Enabled = available && registry != null && managedSession == null && !managedUncertain;
         if (nodeImport != null)
             nodeImport.Enabled = nodeExport.Enabled = available && registry != null;
         if (nodeCheck != null)
             nodeCheck.Enabled = available && registry != null && selected != null;
+        if (inputGroupButton != null)
+            inputGroupButton.Enabled = !nodesBusy && managedSession == null && !managedUncertain;
     }
 
     private void ShowCatalog(Dictionary<string, object> reply)
@@ -1371,6 +1409,11 @@ internal sealed class DockWindow : Form
 
     private void EditDesktop()
     {
+        if (managedSession != null || managedUncertain)
+        {
+            SetGroupStatus("Ferma il gruppo prima di modificarne la disposizione.", "stopping");
+            return;
+        }
         if (nodesBusy || nodesSnapshot == null || nodesSnapshot["registry"] == null)
             return;
         if (desktopEditor != null)
@@ -1381,6 +1424,309 @@ internal sealed class DockWindow : Form
         desktopEditor = new DesktopEditor(this);
         desktopEditor.FormClosed += delegate { desktopEditor = null; };
         desktopEditor.Show(this);
+    }
+
+    private void ConfigureDesktopGroup()
+    {
+        if (managedSession != null || managedUncertain)
+        {
+            SetGroupStatus("Ferma il gruppo prima di modificarne la disposizione.", "stopping");
+            return;
+        }
+        if (nodesBusy)
+            return;
+        if (desktopEditor != null)
+        {
+            desktopEditor.Activate();
+            return;
+        }
+        StartCatalog(new Dictionary<string, object> { { "action", "list" } }, received: reply => {
+            if (closePending)
+                return;
+            // Catalog callbacks run before nodesBusy is cleared in finally.
+            BeginInvoke((Action)(() => {
+                if (closePending || IsDisposed)
+                    return;
+                if (nodesSnapshot["registry"] == null)
+                {
+                    tabs.SelectedTab = nodesPage;
+                    nodesStatus.Text = "Registra questo PC nel catalogo prima di configurare il gruppo di schermi.";
+                }
+                else
+                    EditDesktop();
+            }));
+        });
+    }
+
+    private void SetGroupStatus(string text, string state)
+    {
+        groupStatus.Text = text;
+        groupStatus.ForeColor = state == "ready" ? Online : state == "failed" ? Danger
+            : state == "stopped" ? Muted : Waiting;
+    }
+
+    private void GroupControls()
+    {
+        bool active = managedSession != null, blocked = active || managedUncertain;
+        groupButton.Text = active ? "Ferma gruppo" : blocked ? "Arresto non confermato" : "Avvia gruppo";
+        groupButton.Enabled = !managedUncertain;
+        StyleButton(groupButton, true, stop: blocked);
+        inputGroupButton.Enabled = !blocked && !nodesBusy;
+        inputButton.Enabled = !blocked && desktopSession == null;
+        inputSide.Enabled = !blocked;
+        shareClipboard.Enabled = !blocked && inputSession == null;
+        autoConnectInput.Enabled = !blocked;
+        desktopButton.Enabled = !blocked && inputSession == null;
+        if (blocked)
+        {
+            inputHeaderButton.Text = active ? "Ferma gruppo" : "Arresto non confermato";
+            inputHeaderButton.Enabled = active;
+            StyleButton(inputHeaderButton, true, stop: true);
+        }
+        else if (inputSession == null && desktopSession == null)
+        {
+            inputHeaderButton.Text = "Attiva condivisione";
+            inputHeaderButton.Enabled = true;
+            StyleButton(inputHeaderButton, true);
+        }
+        SetCatalogButtons();
+    }
+
+    private async void ToggleManagedGroup()
+    {
+        if (managedSession != null)
+        {
+            StopManagedGroup();
+            return;
+        }
+        if (managedUncertain)
+        {
+            SetGroupStatus("Arresto del gruppo non confermato. Verifica i nodi prima di avviare altre condivisioni.", "failed");
+            return;
+        }
+        if (inputSession != null || desktopSession != null)
+        {
+            SetGroupStatus("Ferma prima il collegamento attuale a due PC o il desktop remoto, usando il suo pulsante.", "failed");
+            return;
+        }
+        if (desktopEditor != null)
+        {
+            SetGroupStatus("Salva e chiudi la configurazione prima di avviare il gruppo.", "waiting_ready");
+            return;
+        }
+        inputRetry.Stop(); // Keep the stored preference, but never restart legacy after stopping a group.
+        var session = new ManagedGroupSession();
+        managedSession = session;
+        SetGroupStatus(session.Message, session.State);
+        GroupControls();
+        try { await Task.Run(() => RunManagedGroup(session)); }
+        catch (Exception)
+        {
+            session.CleanupComplete = false;
+            session.State = "failed";
+            session.Message = "Il controller del gruppo non ha confermato l’arresto.";
+        }
+        finally
+        {
+            if (managedSession == session)
+            {
+                managedSession = null;
+                managedUncertain = !session.CleanupComplete;
+                SetGroupStatus(managedUncertain
+                    ? "Arresto del gruppo non confermato. Verifica i nodi prima di avviare altre condivisioni."
+                    : session.Message, managedUncertain ? "failed" : session.State);
+                GroupControls();
+                FinishClose();
+            }
+        }
+    }
+
+    private void StopManagedGroup()
+    {
+        var session = managedSession;
+        if (session == null)
+            return;
+        SetGroupStatus("Arresto del gruppo in corso…", "stopping");
+        QueueGroupStop(session, closePending);
+    }
+
+    private static void QueueGroupStop(ManagedGroupSession session, bool closeInput = false)
+    {
+        Process process;
+        lock (session.Gate)
+        {
+            session.StopRequested = true;
+            session.CloseInput |= closeInput;
+            process = session.Process;
+            if (process == null || session.Writing)
+                return;
+            session.Writing = true;
+        }
+        Task.Run(() => {
+            try
+            {
+                bool send;
+                lock (session.Gate)
+                {
+                    send = !session.StopSent;
+                    session.StopSent = true;
+                }
+                if (send)
+                {
+                    process.StandardInput.Write("{\"action\":\"stop\"}\n");
+                    process.StandardInput.Flush();
+                }
+                bool close;
+                lock (session.Gate) { close = session.CloseInput; }
+                if (close)
+                {
+                    process.StandardInput.Close();
+                    lock (session.Gate) { session.InputClosed = true; }
+                }
+            }
+            catch (IOException) { }
+            catch (InvalidOperationException) { }
+            finally
+            {
+                bool finishClose;
+                lock (session.Gate)
+                {
+                    session.Writing = false;
+                    finishClose = session.CloseInput && !session.InputClosed;
+                    if (finishClose)
+                        session.InputClosed = true;
+                }
+                if (finishClose)
+                    try { process.StandardInput.Close(); }
+                    catch (IOException) { }
+                    catch (InvalidOperationException) { }
+            }
+        });
+    }
+
+    private void PostGroupStatus(ManagedGroupSession session, string state, string message, bool cleanup)
+    {
+        if (IsDisposed || Disposing || !IsHandleCreated)
+            return;
+        try
+        {
+            BeginInvoke((Action)(() => {
+                if (managedSession != session || IsDisposed)
+                    return;
+                if (session.StopRequested && (state == "starting" || state == "waiting_ready" || state == "ready"))
+                    return;
+                SetGroupStatus(message, state);
+                if (state == "failed" && !cleanup)
+                    lock (session.Gate) { session.StopSent = false; }
+            }));
+        }
+        catch (InvalidOperationException) { }
+    }
+
+    private static string GroupLine(StreamReader reader, Action oversized)
+    {
+        var result = new StringBuilder();
+        bool tooLong = false;
+        while (true)
+        {
+            int character = reader.Read();
+            if (character < 0)
+                return result.Length == 0 && !tooLong ? null : "";
+            if (character == '\n')
+                return tooLong ? "" : result.ToString();
+            if (result.Length < 16384)
+                result.Append((char)character);
+            else if (!tooLong)
+            {
+                tooLong = true;
+                oversized();
+            }
+        }
+    }
+
+    private void GroupProtocolFailure(ManagedGroupSession session)
+    {
+        session.ProtocolFault = session.Terminal = true;
+        session.State = "failed";
+        session.Message = "Risposta del controller non valida. Arresto richiesto.";
+        QueueGroupStop(session);
+        PostGroupStatus(session, session.State, session.Message, false);
+    }
+
+    private void RunManagedGroup(ManagedGroupSession session)
+    {
+        Process process = null;
+        bool started = false;
+        try
+        {
+            process = new Process { StartInfo = NodeCatalog.DesktopCommand() };
+            if (!process.Start())
+                throw new IOException("Impossibile avviare il controller del gruppo.");
+            started = true;
+            lock (session.Gate) { session.Process = process; }
+            if (session.StopRequested)
+                QueueGroupStop(session);
+            Task.Run(() => {
+                try
+                {
+                    var buffer = new char[4096];
+                    while (process.StandardError.Read(buffer, 0, buffer.Length) != 0) { }
+                }
+                catch (IOException) { }
+                catch (InvalidOperationException) { }
+            });
+            var serializer = new JavaScriptSerializer();
+            string line;
+            while ((line = GroupLine(process.StandardOutput, () => GroupProtocolFailure(session))) != null)
+            {
+                try
+                {
+                    var data = serializer.DeserializeObject(line) as Dictionary<string, object>;
+                    object type, stateValue, text, cleanupValue;
+                    if (data == null || !data.TryGetValue("type", out type) || !(type is string) || (string)type != "status"
+                        || !data.TryGetValue("state", out stateValue) || !(stateValue is string)
+                        || !data.TryGetValue("message", out text) || !(text is string)
+                        || !data.TryGetValue("cleanup_complete", out cleanupValue) || !(cleanupValue is bool))
+                        throw new ArgumentException("Invalid desktop status fields");
+                    string state = (string)stateValue;
+                    if (!new[] { "starting", "waiting_ready", "ready", "stopping", "stopped", "failed" }.Contains(state))
+                        throw new ArgumentException("Invalid desktop state");
+                    bool active = state == "starting" || state == "waiting_ready" || state == "ready";
+                    if ((session.Terminal || session.StopRequested) && active)
+                        continue;
+                    string message = (string)text;
+                    if (message.Length > 2000)
+                        message = message.Substring(0, 2000);
+                    session.Terminal |= state == "stopped" || state == "failed";
+                    session.CleanupComplete = (bool)cleanupValue && (state == "stopped" || state == "failed");
+                    session.State = session.ProtocolFault ? "failed" : state;
+                    if (!session.ProtocolFault)
+                        session.Message = message;
+                    PostGroupStatus(session, session.State, session.Message, session.CleanupComplete);
+                }
+                catch (ArgumentException) { GroupProtocolFailure(session); }
+                catch (InvalidOperationException) { GroupProtocolFailure(session); }
+            }
+            process.WaitForExit(); // Keep ownership of the original handle; never kill/adopt by PID.
+        }
+        catch (Exception error)
+        {
+            session.State = "failed";
+            session.Message = !started ? error.Message
+                : "Il controller del gruppo si è interrotto senza confermare l’arresto.";
+            if (!started)
+                session.CleanupComplete = true;
+            else
+            {
+                QueueGroupStop(session, true);
+                process.WaitForExit();
+            }
+        }
+        finally
+        {
+            if (process != null)
+                process.Dispose();
+        }
     }
 
     private sealed class NodeCheckEditor : Form
@@ -1832,7 +2178,7 @@ internal sealed class DockWindow : Form
         }
         private sealed class Member
         {
-            internal string Id;
+            internal string Id, Label;
             internal CheckBox Selected;
             internal TextBox X, Y;
         }
@@ -1840,26 +2186,35 @@ internal sealed class DockWindow : Form
         private readonly object revision;
         private readonly ComboBox primary = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
         private readonly CheckBox clipboard = new DockCheckBox { Text = "Condividi gli appunti tra i membri", AutoSize = true };
+        private readonly ComboBox screenChoice = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 250 };
         private readonly List<Member> members = new List<Member>();
         private readonly List<Button> buttons = new List<Button>();
+        private readonly List<Button> moveButtons = new List<Button>();
+        private readonly TableLayoutPanel form = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1 };
+        private readonly TableLayoutPanel map = new TableLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
+        private readonly Label mapStatus = new Label { AutoSize = true, ForeColor = Muted };
+        private readonly ToolTip tips = new ToolTip();
         private readonly TextBox preview = ConsoleBox();
-        private readonly Label message = new Label { Dock = DockStyle.Fill, AutoEllipsis = true };
-        private bool saving;
+        private readonly CheckBox details = new DockCheckBox { Text = "Dettagli della verifica", AutoSize = true };
+        private readonly Label message = new Label { AutoSize = true };
+        private bool saving, adjusting;
+        private string currentPrimary;
 
         internal DesktopEditor(DockWindow parent)
         {
             owner = parent;
             revision = parent.nodesSnapshot["revision"];
-            Text = "Layout desktop — anteprima";
+            Text = "Configura gruppo di schermi";
             BackColor = Canvas;
             ForeColor = Ink;
             Font = parent.Font;
-            MinimumSize = new Size(650, 580);
+            MinimumSize = new Size(650, 520);
             ClientSize = new Size(810, 720);
             StartPosition = FormStartPosition.CenterParent;
             var registry = NodeCatalog.Map(parent.nodesSnapshot["registry"]);
             var profile = registry.ContainsKey("desktop") ? NodeCatalog.Map(registry["desktop"]) : null;
             string primaryId = profile == null ? NodeCatalog.Text(registry, "local") : NodeCatalog.Text(profile, "primary");
+            currentPrimary = primaryId;
             clipboard.Checked = profile == null || (bool)profile["clipboard"];
             var positions = new Dictionary<string, Dictionary<string, object>>();
             if (profile != null)
@@ -1868,64 +2223,324 @@ internal sealed class DockWindow : Form
                     var entry = NodeCatalog.Map(item);
                     positions[NodeCatalog.Text(entry, "node_id")] = entry;
                 }
-            var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 7, Padding = new Padding(16) };
-            foreach (float height in new float[] { 57, 38, 33 })
-                body.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
-            body.RowStyles.Add(new RowStyle(SizeType.Percent, 40));
-            body.RowStyles.Add(new RowStyle(SizeType.Percent, 60));
-            body.RowStyles.Add(new RowStyle(SizeType.Absolute, 45));
-            body.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+            var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(16) };
+            body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             Controls.Add(body);
-            body.Controls.Add(new Label { Text = "Principale: PC con mouse e tastiera. Celle adiacenti: X verso destra, Y verso il basso.\nOgni PC rappresenta il suo desktop logico. Il salvataggio non avvia la condivisione.", Dock = DockStyle.Fill, ForeColor = Muted }, 0, 0);
+            var viewport = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+            form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            viewport.Controls.Add(form);
+            body.Controls.Add(viewport, 0, 0);
+            var guide = new Label { Text = "Scegli il PC con mouse e tastiera, poi disponi gli schermi. Ogni PC rappresenta il suo desktop logico. Salva layout prepara la configurazione: non avvia la condivisione multinodo.", AutoSize = true, ForeColor = Muted };
+            AddRow(guide);
+            AddRow(new Label { Text = "Principale (mouse e tastiera collegati qui)", AutoSize = true });
             primary.BackColor = Inset;
             primary.ForeColor = Ink;
             primary.FlatStyle = FlatStyle.Flat;
-            body.Controls.Add(primary, 0, 1);
-            body.Controls.Add(clipboard, 0, 2);
-            var viewport = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+            AddRow(primary);
+            AddRow(clipboard);
+            AddRow(new Label { Text = "Computer inclusi nel gruppo", AutoSize = true });
+            var memberList = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1 };
+            memberList.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            AddRow(memberList);
+            AddRow(new Label { Text = "Disposizione degli schermi · anteprima", AutoSize = true });
+            var move = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true };
+            screenChoice.BackColor = Inset;
+            screenChoice.ForeColor = Ink;
+            screenChoice.FlatStyle = FlatStyle.Flat;
+            screenChoice.AccessibleName = "Schermo da spostare";
+            move.Controls.Add(screenChoice);
+            foreach (var entry in new[] { new { Text = "←", X = -1, Y = 0 }, new { Text = "→", X = 1, Y = 0 },
+                new { Text = "↑", X = 0, Y = -1 }, new { Text = "↓", X = 0, Y = 1 } })
+            {
+                int dx = entry.X, dy = entry.Y;
+                var button = ActionButton(entry.Text, () => MoveScreen(dx, dy), false);
+                tips.SetToolTip(button, "Sposta lo schermo selezionato. Una cella occupata scambia i due schermi.");
+                moveButtons.Add(button);
+                move.Controls.Add(button);
+            }
+            AddRow(move);
+            var mapViewport = new Panel { Dock = DockStyle.Top, Height = 205, AutoScroll = true, BackColor = Inset };
+            mapViewport.Controls.Add(map);
+            AddRow(mapViewport);
+            AddRow(mapStatus);
             var grid = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, RowCount = 1 };
             grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70));
             grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70));
-            grid.Controls.Add(new Label { Text = "Membro", AutoSize = true }, 0, 0);
+            grid.Controls.Add(new Label { Text = "Computer", AutoSize = true }, 0, 0);
             grid.Controls.Add(new Label { Text = "X", AutoSize = true }, 1, 0);
             grid.Controls.Add(new Label { Text = "Y", AutoSize = true }, 2, 0);
-            viewport.Controls.Add(grid);
-            body.Controls.Add(viewport, 0, 3);
+            var advancedToggle = new DockCheckBox { Text = "Coordinate avanzate", AutoSize = true };
+            AddRow(advancedToggle);
+            grid.Visible = false;
+            advancedToggle.CheckedChanged += delegate { grid.Visible = advancedToggle.Checked; };
+            AddRow(grid);
             foreach (object item in NodeCatalog.Items(registry["nodes"]))
             {
                 var node = NodeCatalog.Map(item);
                 string id = NodeCatalog.Text(node, "id");
                 var choice = new Choice { Id = id, Label = NodeCatalog.Text(node, "label") };
                 primary.Items.Add(choice);
+                screenChoice.Items.Add(choice);
                 if (id == primaryId)
+                {
                     primary.SelectedItem = choice;
+                    screenChoice.SelectedItem = choice;
+                }
                 Dictionary<string, object> position;
                 positions.TryGetValue(id, out position);
                 bool selected = position != null || profile == null && id == primaryId;
-                var member = new Member { Id = id,
-                    Selected = new DockCheckBox { Text = choice.ToString(), Checked = selected, AutoSize = true },
+                var member = new Member { Id = id, Label = choice.Label,
+                    Selected = new DockCheckBox { Text = choice.ToString(), Checked = selected, Dock = DockStyle.Fill,
+                        Height = Font.Height + 10, AutoEllipsis = true },
                     X = new TextBox { Text = position == null ? "0" : NodeCatalog.Text(position, "x"), Dock = DockStyle.Fill, BackColor = Inset, ForeColor = Ink },
                     Y = new TextBox { Text = position == null ? "0" : NodeCatalog.Text(position, "y"), Dock = DockStyle.Fill, BackColor = Inset, ForeColor = Ink } };
                 int row = grid.RowCount++;
-                grid.Controls.Add(member.Selected, 0, row);
+                grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                var name = new Label { Text = member.Label, Dock = DockStyle.Fill, AutoEllipsis = true,
+                    TextAlign = ContentAlignment.MiddleLeft, MinimumSize = new Size(0, Font.Height + 8) };
+                tips.SetToolTip(name, choice.ToString());
+                tips.SetToolTip(member.Selected, choice.ToString());
+                grid.Controls.Add(name, 0, row);
                 grid.Controls.Add(member.X, 1, row);
                 grid.Controls.Add(member.Y, 2, row);
+                int selectedRow = memberList.RowCount++;
+                memberList.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                memberList.Controls.Add(member.Selected, 0, selectedRow);
                 members.Add(member);
             }
-            body.Controls.Add(preview, 0, 4);
+            AddRow(details);
+            preview.Dock = DockStyle.Top;
+            preview.Height = 160;
+            preview.Visible = false;
+            details.CheckedChanged += delegate { preview.Visible = details.Checked; };
+            AddRow(preview);
             message.Text = "Anteprima e controlli locali; accesso remoto e TLS restano da verificare.";
             message.ForeColor = Muted;
-            body.Controls.Add(message, 0, 5);
-            var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+            message.Dock = DockStyle.Fill;
+            message.Margin = new Padding(0, 10, 0, 10);
+            body.Controls.Add(message, 0, 1);
+            var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true, AutoSize = true };
             buttons.Add(ActionButton("Anteprima", () => Submit("desktop_preview")));
             buttons.Add(ActionButton("Salva layout", () => Submit("desktop"), false));
             buttons.Add(ActionButton("Rimuovi layout", () => Submit("desktop", true), false));
             buttons.Add(ActionButton("Chiudi", Close, false));
             foreach (var button in buttons)
                 actions.Controls.Add(button);
-            body.Controls.Add(actions, 0, 6);
+            body.Controls.Add(actions, 0, 2);
+            foreach (var member in members)
+            {
+                Member captured = member;
+                member.Selected.CheckedChanged += delegate { SelectMember(captured); };
+                member.X.TextChanged += delegate { UpdateMap(); };
+                member.Y.TextChanged += delegate { UpdateMap(); };
+            }
+            primary.SelectedIndexChanged += delegate { ChangePrimary(); };
+            screenChoice.SelectedIndexChanged += delegate { UpdateMap(); };
+            viewport.Resize += delegate {
+                int width = Math.Max(200, viewport.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 12);
+                guide.MaximumSize = mapStatus.MaximumSize = new Size(width, 0);
+                message.MaximumSize = new Size(Math.Max(200, body.ClientSize.Width - 32), 0);
+            };
+            FormClosed += delegate { tips.Dispose(); };
+            UpdateMap();
             FormClosing += delegate(object sender, FormClosingEventArgs args) { args.Cancel = saving; };
+        }
+
+        private void AddRow(Control control)
+        {
+            int row = form.RowCount++;
+            form.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            control.Dock = DockStyle.Top;
+            control.Margin = new Padding(0, 0, 0, 10);
+            form.Controls.Add(control, 0, row);
+        }
+
+        private Dictionary<string, Point> Positions()
+        {
+            var result = new Dictionary<string, Point>();
+            foreach (var member in members.Where(item => item.Selected.Checked))
+            {
+                int x, y;
+                if (!Int32.TryParse(member.X.Text, out x) || !Int32.TryParse(member.Y.Text, out y))
+                    throw new ArgumentException("Le coordinate X e Y devono essere numeri interi a 32 bit.");
+                result[member.Id] = new Point(x, y);
+            }
+            return result;
+        }
+
+        private Point FreePosition(string excluded)
+        {
+            var occupied = new HashSet<Point>(Positions().Where(item => item.Key != excluded).Select(item => item.Value));
+            if (occupied.Count == 0)
+                return new Point(0, 0);
+            foreach (var point in occupied.OrderBy(item => item.Y).ThenBy(item => item.X))
+                foreach (var direction in new[] { new Point(1, 0), new Point(-1, 0), new Point(0, 1), new Point(0, -1) })
+                {
+                    long x = (long)point.X + direction.X, y = (long)point.Y + direction.Y;
+                    if (x < Int32.MinValue || x > Int32.MaxValue || y < Int32.MinValue || y > Int32.MaxValue)
+                        continue;
+                    var next = new Point((int)x, (int)y);
+                    if (!occupied.Contains(next))
+                        return next;
+                }
+            throw new ArgumentException("Nessuna cella adiacente disponibile.");
+        }
+
+        private void SelectMember(Member member)
+        {
+            if (adjusting)
+                return;
+            if (member.Selected.Checked)
+            {
+                try
+                {
+                    Point position = FreePosition(member.Id);
+                    adjusting = true;
+                    member.X.Text = position.X.ToString();
+                    member.Y.Text = position.Y.ToString();
+                    screenChoice.SelectedItem = screenChoice.Items.Cast<Choice>().First(item => item.Id == member.Id);
+                }
+                catch (ArgumentException error)
+                {
+                    adjusting = true;
+                    member.Selected.Checked = false;
+                    message.Text = error.Message;
+                }
+                finally { adjusting = false; }
+            }
+            UpdateMap();
+        }
+
+        private void ChangePrimary()
+        {
+            if (adjusting)
+                return;
+            var choice = primary.SelectedItem as Choice;
+            if (choice == null)
+                return;
+            var member = members.First(item => item.Id == choice.Id);
+            member.Selected.Checked = true;
+            if (!member.Selected.Checked)
+            {
+                adjusting = true;
+                primary.SelectedItem = primary.Items.Cast<Choice>().First(item => item.Id == currentPrimary);
+                adjusting = false;
+                return;
+            }
+            currentPrimary = choice.Id;
+            UpdateMap();
+        }
+
+        private void MoveScreen(int dx, int dy)
+        {
+            try
+            {
+                var positions = Positions();
+                var choice = screenChoice.SelectedItem as Choice;
+                if (choice == null || !positions.ContainsKey(choice.Id))
+                    return;
+                Point before = positions[choice.Id];
+                var target = new Point(checked(before.X + dx), checked(before.Y + dy));
+                string other = positions.Where(item => item.Value == target).Select(item => item.Key).FirstOrDefault();
+                adjusting = true;
+                foreach (var member in members)
+                    if (member.Id == choice.Id || member.Id == other)
+                    {
+                        Point value = member.Id == choice.Id ? target : before;
+                        member.X.Text = value.X.ToString();
+                        member.Y.Text = value.Y.ToString();
+                    }
+            }
+            catch (ArgumentException error) { message.Text = error.Message; }
+            catch (OverflowException) { message.Text = "La posizione supera il limite delle coordinate."; }
+            finally { adjusting = false; }
+            UpdateMap();
+        }
+
+        private void UpdateMap()
+        {
+            if (adjusting)
+                return;
+            foreach (Control child in map.Controls.Cast<Control>().ToArray())
+                child.Dispose();
+            map.Controls.Clear();
+            map.ColumnStyles.Clear();
+            map.RowStyles.Clear();
+            foreach (var member in members)
+            {
+                member.Selected.Enabled = member.Id != currentPrimary;
+                member.X.Enabled = member.Y.Enabled = member.Selected.Checked;
+            }
+            Dictionary<string, Point> positions;
+            try { positions = Positions(); }
+            catch (ArgumentException error)
+            {
+                mapStatus.Text = error.Message;
+                foreach (var button in moveButtons)
+                    button.Enabled = false;
+                return;
+            }
+            var choice = screenChoice.SelectedItem as Choice;
+            foreach (var button in moveButtons)
+                button.Enabled = choice != null && positions.ContainsKey(choice.Id);
+            if (positions.Count == 0)
+            {
+                mapStatus.Text = "Seleziona almeno un computer per comporre il gruppo.";
+                return;
+            }
+            var cells = new HashSet<Point>(positions.Values);
+            bool duplicate = cells.Count != positions.Count;
+            int left = cells.Min(point => point.X), top = cells.Min(point => point.Y);
+            bool distant = (long)cells.Max(point => point.X) - left > 64 || (long)cells.Max(point => point.Y) - top > 64;
+            var reached = new HashSet<Point>();
+            var pending = new Queue<Point>();
+            pending.Enqueue(cells.First());
+            while (pending.Count != 0)
+            {
+                Point point = pending.Dequeue();
+                if (!reached.Add(point))
+                    continue;
+                foreach (var next in cells)
+                    if (Math.Abs((long)next.X - point.X) + Math.Abs((long)next.Y - point.Y) == 1)
+                        pending.Enqueue(next);
+            }
+            int line = Font.Height + 5, cardWidth = 188, cardHeight = line * 3 + 24;
+            map.ColumnCount = duplicate || distant ? 1 : cells.Max(point => point.X) - left + 1;
+            map.RowCount = duplicate || distant ? positions.Count : cells.Max(point => point.Y) - top + 1;
+            for (int column = 0; column < map.ColumnCount; column++)
+                map.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, cardWidth + 10));
+            for (int row = 0; row < map.RowCount; row++)
+                map.RowStyles.Add(new RowStyle(SizeType.Absolute, cardHeight + 10));
+            int index = 0;
+            foreach (var member in members.Where(item => item.Selected.Checked))
+            {
+                Point position = positions[member.Id];
+                bool isPrimary = member.Id == currentPrimary;
+                var panel = new Panel { Size = new Size(cardWidth, cardHeight), Margin = new Padding(5), BackColor = Surface };
+                panel.Paint += delegate(object sender, PaintEventArgs args) {
+                    using (var pen = new Pen(isPrimary ? Cyan : Line))
+                        args.Graphics.DrawRectangle(pen, 0, 0, panel.Width - 1, panel.Height - 1);
+                };
+                var name = new Label { Text = member.Label, Location = new Point(12, 9),
+                    Size = new Size(cardWidth - 24, line), ForeColor = isPrimary ? Cyan : Ink, AutoEllipsis = true };
+                tips.SetToolTip(name, member.Label + "\n" + member.Id);
+                panel.Controls.Add(name);
+                panel.Controls.Add(new Label { Text = isPrimary ? "PC principale" : "Schermo secondario",
+                    Location = new Point(12, 9 + line), Size = new Size(cardWidth - 24, line), ForeColor = Muted });
+                panel.Controls.Add(new Label { Text = "X " + position.X + " · Y " + position.Y,
+                    Location = new Point(12, 9 + line * 2), Size = new Size(cardWidth - 24, line), ForeColor = Muted,
+                    AutoEllipsis = true });
+                map.Controls.Add(panel, duplicate || distant ? 0 : position.X - left,
+                    duplicate || distant ? index : position.Y - top);
+                index++;
+            }
+            mapStatus.Text = duplicate ? "Due schermi occupano la stessa cella. Correggi la posizione prima di salvare."
+                : distant || reached.Count != cells.Count ? "Il gruppo ha un vuoto: avvicina gli schermi lungo un lato prima di salvare."
+                : "Anteprima della disposizione. Le frecce spostano il PC selezionato o scambiano una cella occupata.";
         }
 
         private Dictionary<string, object> Profile()
@@ -1947,6 +2562,7 @@ internal sealed class DockWindow : Form
         private void Finish(string error = null)
         {
             saving = false;
+            form.Enabled = true;
             foreach (var button in buttons)
                 button.Enabled = true;
             if (error != null)
@@ -1980,6 +2596,7 @@ internal sealed class DockWindow : Form
             lines.AppendLine("\r\nLAYOUT DESKFLOW\r\n" + NodeCatalog.Text(result, "layout"));
             lines.AppendLine("OPZIONI PREVISTE (non avviabili)\r\n" + new JavaScriptSerializer().Serialize(result["server_options"]));
             preview.Text = lines.ToString();
+            details.Checked = true;
             message.Text = "Layout valido. Condivisione multinodo non attiva: consulta i prerequisiti sopra.";
         }
 
@@ -1991,6 +2608,7 @@ internal sealed class DockWindow : Form
             try { profile = clear ? null : Profile(); }
             catch (ArgumentException error) { message.Text = error.Message; return; }
             saving = true;
+            form.Enabled = false;
             foreach (var button in buttons)
                 button.Enabled = false;
             owner.StartCatalog(new Dictionary<string, object> { { "action", action }, { "desktop", profile },
@@ -2320,16 +2938,32 @@ internal sealed class DockWindow : Form
     private TabPage BuildInput()
     {
         var page = Page("Mouse e tastiera");
-        var content = PageLayout(page, 7);
-        for (int i = 0; i < 3; i++)
-            content.RowStyles.Add(new RowStyle(SizeType.Absolute, i == 2 ? 55 : 42));
-        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
-        content.Controls.Add(new Label { Text = "Posizione dello schermo Ubuntu",
-            Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft,
-            Font = new Font("Segoe UI", 12, FontStyle.Bold) }, 0, 0);
+        var viewport = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+        page.Controls.Add(viewport);
+        var content = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true,
+            ColumnCount = 1, RowCount = 11, Padding = new Padding(15) };
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        for (int i = 0; i < 11; i++)
+            content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        viewport.Controls.Add(content);
+        content.Controls.Add(new Label { Text = "Più PC · un gruppo di schermi", AutoSize = true,
+            Font = new Font("Segoe UI", 12, FontStyle.Bold), Margin = new Padding(0, 0, 0, 10) }, 0, 0);
+        var groupNote = new Label { Text = "Scegli il PC principale, disponi gli schermi e prepara gli appunti condivisi. "
+            + "Salva layout conserva la disposizione; Avvia gruppo controlla i prerequisiti e richiede i consensi necessari.",
+            AutoSize = true, ForeColor = Muted, Margin = new Padding(0, 0, 0, 10) };
+        content.Controls.Add(groupNote, 0, 1);
+        inputGroupButton = ActionButton("Configura gruppo di schermi", ConfigureDesktopGroup, false);
+        inputGroupButton.Anchor = AnchorStyles.Left;
+        var groupActions = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true };
+        groupActions.Controls.Add(inputGroupButton);
+        groupButton = ActionButton("Avvia gruppo", ToggleManagedGroup);
+        groupActions.Controls.Add(groupButton);
+        content.Controls.Add(groupActions, 0, 2);
+        groupStatus.Text = "Gruppo non attivo. Il motore e i consensi desktop devono essere disponibili sui membri.";
+        groupStatus.Margin = new Padding(0, 8, 0, 24);
+        content.Controls.Add(groupStatus, 0, 3);
+        content.Controls.Add(new Label { Text = "Collegamento attuale a due PC · schermo Ubuntu", AutoSize = true,
+            TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(0, 0, 0, 10) }, 0, 4);
         inputSide.Items.AddRange(new object[] { "A sinistra di Windows", "A destra di Windows",
             "Sopra Windows", "Sotto Windows" });
         inputSide.SelectedIndex = 0;
@@ -2338,23 +2972,42 @@ internal sealed class DockWindow : Form
         inputSide.BackColor = Inset;
         inputSide.ForeColor = Ink;
         inputSide.AccessibleName = "Posizione dello schermo Ubuntu";
-        content.Controls.Add(inputSide, 0, 1);
-        content.Controls.Add(new Label { Text = "Porta il puntatore oltre il bordo scelto. "
-            + "Premi Ctrl+F12 per cambiare PC.",
-            Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 2);
-        content.Controls.Add(shareClipboard, 0, 3);
-        content.Controls.Add(autoConnectInput, 0, 4);
+        content.Controls.Add(inputSide, 0, 5);
+        var guide = new Label { Text = "Porta il puntatore oltre il bordo scelto. Premi Ctrl+F12 per cambiare PC.",
+            AutoSize = true, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(0, 8, 0, 10) };
+        content.Controls.Add(guide, 0, 6);
+        content.Controls.Add(shareClipboard, 0, 7);
+        content.Controls.Add(autoConnectInput, 0, 8);
         SetInputStatus("Disattivata", Muted);
         inputStatus.Dock = DockStyle.Fill;
+        inputStatus.AutoSize = true;
+        inputStatus.Margin = new Padding(0, 10, 0, 10);
         inputStatus.TextAlign = ContentAlignment.MiddleLeft;
-        content.Controls.Add(inputStatus, 0, 5);
+        content.Controls.Add(inputStatus, 0, 9);
         inputButton = ActionButton("Attiva condivisione", ToggleInput);
-        content.Controls.Add(inputButton, 0, 6);
+        inputButton.Anchor = AnchorStyles.Left;
+        content.Controls.Add(inputButton, 0, 10);
+        viewport.Resize += delegate {
+            int width = Math.Max(200, viewport.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 35);
+            foreach (var label in new[] { groupNote, guide, inputStatus, groupStatus })
+                label.MaximumSize = new Size(width, 0);
+            shareClipboard.MaximumSize = autoConnectInput.MaximumSize = new Size(width, 0);
+        };
         return page;
     }
 
     private void ToggleInput()
     {
+        if (managedSession != null)
+        {
+            StopManagedGroup();
+            return;
+        }
+        if (managedUncertain)
+        {
+            SetGroupStatus("Arresto del gruppo non confermato. Verifica i nodi prima di avviare altre condivisioni.", "failed");
+            return;
+        }
         if (inputSession != null)
         {
             StopInput();
@@ -2378,6 +3031,8 @@ internal sealed class DockWindow : Form
 
     private async void StartInput(bool automatic)
     {
+        if (managedSession != null || managedUncertain)
+            return;
         string direction = new[] { "left", "right", "up", "down" }[inputSide.SelectedIndex];
         bool clipboard = shareClipboard.Checked;
         var session = new CancellationTokenSource();
@@ -2469,7 +3124,7 @@ internal sealed class DockWindow : Form
 
     private void FinishClose()
     {
-        if (closePending && !busy && !nodesBusy && inputSession == null && desktopSession == null)
+        if (closePending && !busy && !nodesBusy && inputSession == null && desktopSession == null && managedSession == null)
             Close();
     }
 
@@ -2647,6 +3302,11 @@ internal sealed class DockWindow : Form
 
     private async void ToggleDesktop()
     {
+        if (managedSession != null || managedUncertain)
+        {
+            SetGroupStatus("Ferma il gruppo prima di usare il collegamento desktop remoto.", "stopping");
+            return;
+        }
         if (desktopSession != null)
         {
             desktopSession.Cancel();

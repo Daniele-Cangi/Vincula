@@ -136,6 +136,10 @@ si applica a x2vnc 1.7.2. Il [testo GPL incluso](outputs/Windows%20Dock/x2vnc-CO
 proviene dalla distribuzione x2vnc.
 La [patch per gli appunti su GNOME 50](outputs/Windows%20Dock/deskflow-gnome50-clipboard.patch)
 si applica a Deskflow 1.27.0 con la licenza di Deskflow.
+Il [motore desktop multinodo gestito](third_party/deskflow/README.md) è un
+incremento in sviluppo, con [stato e verifiche ancora necessarie](docs/desktop-multinode-implementation.md).
+La patch comprende già quella GNOME 50; non va applicata due volte. Il nuovo
+motore non è ancora il percorso distribuito sulle installazioni esistenti.
 
 ## Licenza
 

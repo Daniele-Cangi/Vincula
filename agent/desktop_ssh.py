@@ -36,7 +36,7 @@ MAX_REPLY = 65536
 DIGEST = re.compile(r"[0-9a-f]{64}")
 BUNDLE_FILES = ("desktop_ssh.py", "desktop_supervisor.py", "desktop_security.py",
                 "desktop_process.py", "node_ssh.py", "nodes.py", "node_registry.py",
-                "desktop_layout.py", "wire_framing.py")
+                "desktop_layout.py", "wire_framing.py", "desktop_managed.py", "desktop_backend.py")
 SESSION_FIELDS = {"instance", "session_id", "revision", "local_id", "primary", "members",
                   "state", "desktop_ready", "lease_remaining"}
 BIND_FIELDS = {"protocol", "mode", "node_id", "session_id", "revision", "helper_sha256", "instance"}
@@ -198,6 +198,11 @@ def scoped_reply(reply, binding):
             or status["local_id"] != binding["node_id"] or status["revision"] != binding["revision"]):
         raise BridgeError(GENERIC_ERROR)
     result = {"ok": True, "session": {key: deepcopy(status[key]) for key in SESSION_FIELDS}}
+    if "desktop_ready_remaining" in status:
+        remaining = status["desktop_ready_remaining"]
+        if type(remaining) not in (int, float) or not 0 <= remaining <= 2:
+            raise ValueError("Invalid scoped desktop readiness lifetime.")
+        result["session"]["desktop_ready_remaining"] = remaining
     encode(result, MAX_REPLY)
     return result
 

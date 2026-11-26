@@ -146,6 +146,26 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(controller._failed, "A cache read must not perform async failure/cleanup.")
         self.assertEqual(self.network.calls, before)
 
+    async def test_readiness_expires_before_the_control_lease(self):
+        for node in self.ids:
+            for action in ("commit", "status", "heartbeat"):
+                self.network.corrupt[(node, action)] = {"desktop_ready_remaining": 0.8}
+        controller = self.controller()
+        self.assertTrue((await controller.start())["ready"])
+        self.clock.now += 0.81
+        self.assertFalse(controller.report()["ready"])
+        self.assertTrue(all(row["lease_deadline"] > self.clock() for row in controller._records.values()))
+        self.assertTrue((await controller.status())["ready"])
+
+    async def test_expired_or_invalid_readiness_ttl_cannot_confirm_ready(self):
+        for ttl in (0, -1, True, float("nan"), float("inf"), 2.01):
+            with self.subTest(ttl=ttl):
+                self.network = Network(self.ids, self.clock)
+                self.network.corrupt[(self.ids[0], "commit")] = {"desktop_ready_remaining": ttl}
+                report = await self.controller().start()
+                self.assertFalse(report["ready"])
+                self.assertEqual(report["state"], "failed")
+
     async def test_cached_report_is_not_ready_during_partially_completed_status(self):
         controller = self.controller()
         await controller.start()
