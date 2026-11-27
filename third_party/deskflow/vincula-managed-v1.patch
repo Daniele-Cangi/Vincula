@@ -310,10 +310,10 @@ index 9e3607bf..0dea6dee 100644
    PUBLIC
 diff --git a/src/lib/common/ManagedSession.cpp b/src/lib/common/ManagedSession.cpp
 new file mode 100644
-index 00000000..c7f9302d
+index 00000000..9e0289ff
 --- /dev/null
 +++ b/src/lib/common/ManagedSession.cpp
-@@ -0,0 +1,519 @@
+@@ -0,0 +1,529 @@
 +/*
 + * SPDX-FileCopyrightText: (C) 2026 Daniele Cangi
 + * SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-OpenSSL-Exception
@@ -399,6 +399,18 @@ index 00000000..c7f9302d
 +  LocalFree(descriptor); require(safe, "managed profile ACL grants another account access");
 +}
 +#endif
++void openExclusivePrivate(QFile &file, const char *message)
++{
++#ifdef Q_OS_WIN
++  // Qt's explicit POSIX-permission overload adds Everyone/group metadata ACEs
++  // on Windows. Inherit the already verified private parent instead, and check
++  // the new file's ACL before any private key or session data is written.
++  require(file.open(QIODevice::WriteOnly | QIODevice::NewOnly), message);
++  windowsPrivateAcl(file.fileName());
++#else
++  require(file.open(QIODevice::WriteOnly | QIODevice::NewOnly, QFileDevice::ReadOwner | QFileDevice::WriteOwner), message);
++#endif
++}
 +void privateFile(const QString &path)
 +{
 +  const QFileInfo info(path);
@@ -558,8 +570,7 @@ index 00000000..c7f9302d
 +  privateDirectory(tls);
 +  const auto path = tls + "/identity.pem";
 +  QFile file(path);
-+  require(file.open(QIODevice::WriteOnly | QIODevice::NewOnly, QFileDevice::ReadOwner | QFileDevice::WriteOwner),
-+          "provision certificate already exists");
++  openExclusivePrivate(file, "provision certificate already exists");
 +  auto key = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>(EVP_RSA_gen(2048), EVP_PKEY_free);
 +  auto cert = std::unique_ptr<X509, decltype(&X509_free)>(X509_new(), X509_free);
 +  require(key && cert, "cannot allocate provision certificate");
@@ -627,8 +638,7 @@ index 00000000..c7f9302d
 +  // Session profiles are consumed once, including after a crash. A new engine
 +  // requires new enrollment and a freshly provisioned local certificate.
 +  QFile claim(profileRoot() + "/runtime.claim");
-+  require(claim.open(QIODevice::WriteOnly | QIODevice::NewOnly, QFileDevice::ReadOwner | QFileDevice::WriteOwner),
-+          "managed profile was already started");
++  openExclusivePrivate(claim, "managed profile was already started");
 +  const auto identity = QJsonDocument(QJsonObject{{"session_id", m_bootstrap.value("session_id")},
 +          {"node_id", localNode()}, {"engine_nonce", m_bootstrap.value("engine_nonce")}}).toJson(QJsonDocument::Compact);
 +  require(claim.write(identity) == identity.size() && claim.flush(), "cannot consume managed profile");
@@ -1871,10 +1881,10 @@ index 7a2fd3f2..745de797 100644
    DEPENDS common
 diff --git a/src/unittests/common/ManagedSessionTests.cpp b/src/unittests/common/ManagedSessionTests.cpp
 new file mode 100644
-index 00000000..615049b2
+index 00000000..f17cc6c1
 --- /dev/null
 +++ b/src/unittests/common/ManagedSessionTests.cpp
-@@ -0,0 +1,352 @@
+@@ -0,0 +1,380 @@
 +/*
 + * SPDX-FileCopyrightText: (C) 2026 Daniele Cangi
 + * SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-OpenSSL-Exception
@@ -1964,6 +1974,7 @@ index 00000000..615049b2
 +  void neverClaimsDisabledClipboardReady();
 +  void requiresActualWaylandFacts();
 +  void provisionIsExclusiveAndSessionSpecific();
++  void exclusiveFileCreationKeepsPrivateAcl();
 +  void privateControlBindsChallengeAndStops();
 +  void privateControlRejectsAmbiguousRequest();
 +  void privateBootstrapRejectsAnotherSessionCertificate();
@@ -2069,6 +2080,29 @@ index 00000000..615049b2
 +#endif
 +}
 +
++void ManagedSessionTests::exclusiveFileCreationKeepsPrivateAcl()
++{
++  QTemporaryDir root;
++  QVERIFY(root.isValid()); protectFixture(root.path());
++  QCOMPARE(ManagedSession::provision(root.path(), bootstrap()["session_id"].toString(), a), 0);
++  const auto pem = root.path() + "/tls/identity.pem";
++  QVERIFY(ManagedSession::hexDigest(ManagedSession::certificateFingerprint(pem)));
++#ifdef Q_OS_WIN
++  QFile original(pem);
++  QVERIFY(original.open(QIODevice::ReadOnly));
++  const auto bytes = original.readAll(); original.close();
++  QFile qtPermissions(root.path() + "/qt-posix-permissions.pem");
++  QVERIFY(qtPermissions.open(QIODevice::WriteOnly | QIODevice::NewOnly, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
++  QCOMPARE(qtPermissions.write(bytes), bytes.size()); qtPermissions.close();
++  try {
++    ManagedSession::certificateFingerprint(qtPermissions.fileName());
++    QFAIL("Qt's POSIX permission ACL must not pass the strict Windows trustee check");
++  } catch (const std::runtime_error &error) {
++    QCOMPARE(QString::fromUtf8(error.what()), "managed profile ACL grants another account access");
++  }
++#endif
++}
++
 +namespace {
 +struct PrivateChannelFixture
 +{
@@ -2094,7 +2128,11 @@ index 00000000..615049b2
 +#endif
 +    ManagedSession::provision(root.path(), bootstrap()["session_id"].toString(), a);
 +    QFile file(root.path() + "/Deskflow.conf");
++#ifdef Q_OS_WIN
++    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly)) throw std::runtime_error("fixture settings failed");
++#else
 +    if (!file.open(QIODevice::WriteOnly, QFileDevice::ReadOwner | QFileDevice::WriteOwner)) throw std::runtime_error("fixture settings failed");
++#endif
 +  }
 +  ~PrivateChannelFixture()
 +  {

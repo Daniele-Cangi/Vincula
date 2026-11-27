@@ -5,7 +5,7 @@ desktop service. Apply it once to the official Deskflow repository at
 `081f6478e654a112168879e67a41ce7d7e4ae3af` (1.27.0).
 
 `vincula-managed-v1.patch` SHA256:
-`b7c51d981fda6aee2e4e0bc7f05a4fb7de9281e62fa0d98093ad72d1261dd7dc`.
+`70afdffdba804e5bc95644f7ac27b24f8815857426d6737577d3d3e47d18ea5a`.
 It includes Vincula's earlier GNOME clipboard patch; do not apply that separately.
 
 The upstream copyright and license notices remain in the patch. New managed C++
@@ -38,15 +38,16 @@ The local Ubuntu build used Qt 6.10.2, GCC 15.2, OpenSSL 3.5.5, libei 1.5 and
 libportal 0.10. The incomplete local SDK required disabling optional RandR and
 Xinerama headers (`X11_EXTENSIONS_XRANDR_H=0`,
 `HAVE_X11_EXTENSIONS_XINERAMA_H=0`). These flags are not needed on a complete SDK.
-All 16 managed Qt results (14 tests plus init/cleanup) and the six selected CTest suites passed. The resulting
+All 17 managed Qt results (15 tests plus init/cleanup) and the six selected CTest suites passed. The resulting
 ELF is dynamically linked; copying it alone is insufficient for another PC.
 
-`windows-managed-workflow.proposed.yml` records the proposed native MSVC/Qt/vcpkg
-build. It is deliberately outside `.github/workflows`, has not run, and is not a
-Windows success claim. Select its patch path and verify package availability
-before activating it. Preserve dependency licenses and hashes in the resulting
-distribution. Native Windows compilation and real desktop acceptance are still
-required before release.
+`windows-managed-workflow.proposed.yml` preserves the early build proposal.
+The active, pinned native build is now in
+[managed-deskflow.yml](../../.github/workflows/managed-deskflow.yml), with its
+[build recipe](../../tools/build-managed-deskflow/README.md). Native Windows
+tests and real desktop acceptance remain release gates. The common patch
+includes the Windows private-file creation correction; it inherits the private
+profile ACL instead of translating POSIX permissions through Qt on Windows.
 
 ## Managed boundary
 

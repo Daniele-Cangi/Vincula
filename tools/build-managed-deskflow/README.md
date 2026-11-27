@@ -38,7 +38,11 @@ is launched by this workflow.
 
 The job runs six selected upstream regression suites and runs ManagedSessionTests
 again with XML output. The build rejects any skipped, missing or failed managed
-case, including the real Windows ACL/CreatePipe fixture. These tests use
+case (17 Qt results), including the real Windows ACL/CreatePipe fixture.
+The ACL regression verifies that inherited private Windows ACLs remain strict;
+Qt's explicit POSIX permission overload creates additional metadata trustees,
+so managed Windows files inherit and validate their private parent before data
+is written. POSIX files still use explicit `0600` permissions. These tests use
 QCoreApplication/synthetic backend facts; they do not grant portal consent, read
 user clipboard contents or inject input. A green build does not replace testing
 real desktop sessions on the three PCs.

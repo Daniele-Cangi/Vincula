@@ -125,7 +125,7 @@ class BuildArtifactTests(unittest.TestCase):
         return path
 
     def test_all_native_managed_cases_must_pass_without_skips(self):
-        self.assertEqual(recipe.verify_managed_tests(self.xml()), 16)
+        self.assertEqual(recipe.verify_managed_tests(self.xml()), 17)
         for changes in ({"remove": "provisionIsExclusiveAndSessionSpecific"},
                         {"skip": "privateControlBindsChallengeAndStops"},
                         {"duplicate": "privateControlRequiresLiveBackendLoop"}):

@@ -22,7 +22,7 @@ python agent/desktop_install.py plan \
 
 ## Verifica prima della pubblicazione
 
-Il manifest deve avere il formato canonico e il pin esterno di `desktop_backend.verify_artifact_manifest`. Sono accettati soltanto Deskflow 1.27.0, repository e commit definiti in `desktop_deskflow`, patch SHA256 `b7c51d981fda6aee2e4e0bc7f05a4fb7de9281e62fa0d98093ad72d1261dd7dc` e le quattro capability gestite richieste. Il chiamante non può sostituire questi pin. Restano separate le licenze del [motore e della patch](../third_party/deskflow/README.md) e quelle del codice originale Vincula.
+Il manifest deve avere il formato canonico e il pin esterno di `desktop_backend.verify_artifact_manifest`. Sono accettati soltanto Deskflow 1.27.0, repository e commit definiti in `desktop_deskflow`, patch SHA256 `70afdffdba804e5bc95644f7ac27b24f8815857426d6737577d3d3e47d18ea5a` e le quattro capability gestite richieste. Il chiamante non può sostituire questi pin. Restano separate le licenze del [motore e della patch](../third_party/deskflow/README.md) e quelle del codice originale Vincula.
 
 Piattaforma e architettura devono corrispondere al sistema chiamante; l’header ELF64 little-endian oppure PE deve dichiarare la stessa architettura x86_64/aarch64. Il controllo PE legge al massimo 1 MiB di header. Questo non certifica ABI, librerie OS, backend grafico, TLS, portali o funzionalità del programma.
 

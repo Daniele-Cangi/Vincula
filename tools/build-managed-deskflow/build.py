@@ -29,6 +29,7 @@ MANAGED_TESTS = {
     "initTestCase", "cleanupTestCase", "canonicalPythonInterop", "rejectsAmbiguousJson", "validatesExactBootstrap",
     "bindsCertificateToExactUuid", "preservesStarTopology", "latchesBackendRevocation", "ignoresStrangerDisconnection",
     "neverClaimsDisabledClipboardReady", "requiresActualWaylandFacts", "provisionIsExclusiveAndSessionSpecific",
+    "exclusiveFileCreationKeepsPrivateAcl",
     "privateControlBindsChallengeAndStops", "privateControlRejectsAmbiguousRequest",
     "privateBootstrapRejectsAnotherSessionCertificate", "privateControlRequiresLiveBackendLoop",
 }
