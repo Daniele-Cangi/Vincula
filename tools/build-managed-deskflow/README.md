@@ -5,8 +5,11 @@ native tests. It does not run `deskflow-core.exe`, provision desktop sessions,
 install software/services/firewall rules, publish releases or deploy to a PC.
 Pushes to `codex/desktop-multinode` and relevant pull requests can start this build;
 `workflow_dispatch` is also available once GitHub registers the workflow.
+Concurrency preserves an active build and keeps only the latest pending build.
+Pull-request path filters inspect the entire PR diff, so later unrelated pushes
+can queue another build; they must not interrupt a useful native compilation.
 
-`inputs.json` pins the upstream commit, source patch, Python, MSVC toolset,
+`inputs.json` pins the upstream commit and annotated version tag object, source patch, Python, MSVC toolset,
 Windows SDK, QtBase, OpenSSL and downloaded tools. Every downloaded archive/tool
 must match its committed SHA256 **before extraction or execution**. No `aqt`, pip
 packages or vcpkg dependency resolution runs. CMake and Perl are portable builds

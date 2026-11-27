@@ -175,8 +175,11 @@ def main():
     run(["git", "-c", "core.autocrlf=false", "init", source])
     run(["git", "-C", source, "config", "core.autocrlf", "false"])
     run(["git", "-C", source, "remote", "add", "origin", inputs["upstream_repository"] + ".git"])
-    run(["git", "-C", source, "fetch", "--depth=1", "origin", inputs["upstream_commit"]])
-    run(["git", "-C", source, "checkout", "--detach", "FETCH_HEAD"])
+    tag_ref = "refs/tags/" + inputs["upstream_tag"]
+    run(["git", "-C", source, "fetch", "--depth=1", "origin", tag_ref + ":" + tag_ref])
+    if run(["git", "-C", source, "rev-parse", tag_ref]) != inputs["upstream_tag_object"]:
+        raise ValueError("Upstream version tag differs from its approved tag object")
+    run(["git", "-C", source, "checkout", "--detach", inputs["upstream_commit"]])
     if run(["git", "-C", source, "rev-parse", "HEAD"]) != inputs["upstream_commit"]:
         raise ValueError("Unexpected Deskflow source commit")
     run(["git", "-C", source, "apply", "--check", patch])
@@ -263,6 +266,7 @@ def main():
     provenance = {
         "schema_version": 1, "inputs": inputs, "compiler_version": match.group(1), "compiler_sha256": sha256(compiler),
         "nmake_sha256": sha256(nmake), "cmake_sha256": sha256(cmake), "perl_sha256": sha256(perl),
+        "python_sha256": sha256(sys.executable), "git_sha256": sha256(shutil.which("git.exe")),
         "runner_image": os.environ.get("ImageVersion", "unknown"), "openssl_no_asm": True,
         "native_managed_qt_results": managed_count, "native_ctest_suites": list(TESTS),
         "sources": {path.name: sha256(path) for path in sorted(sources.iterdir())},

@@ -14,6 +14,8 @@ import struct
 import sys
 from uuid import uuid4
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import desktop_backend as backend
 import desktop_deskflow as deskflow
 import desktop_security as security
@@ -23,6 +25,9 @@ DEFAULT_PORT = 24807
 MAX_FILE_BYTES = 512 * 1024 * 1024
 MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 MANIFEST_NAME = "artifact-manifest.json"
+# Directory mutation, deletion and security control; read/traverse/synchronize are harmless here.
+PARENT_MUTATION_RIGHTS = (0x10000000 | 0x40000000 | 0x10000 | 0x40000 | 0x80000
+                          | 0x40 | 0x2 | 0x4 | 0x10 | 0x100)
 
 
 def require(value, message):
@@ -67,6 +72,12 @@ def windows_sddl(sid):
             "(A;OICI;FA;;;S-1-5-32-544)S:(ML;OICI;NW;;;S-1-16-8192)")
 
 
+def parent_ace_allowed(kind, flags, mask, trusted):
+    if flags & 8 or kind == 1:  # INHERIT_ONLY does not apply to this parent; deny grants no rights.
+        return True
+    return kind == 0 and (trusted or not mask & PARENT_MUTATION_RIGHTS)
+
+
 class InstallerWindowsSecurity(security.WindowsSecurity):
     """Create new Medium objects; never relabel or repair existing storage."""
     def descriptor(self):
@@ -81,6 +92,30 @@ class InstallerWindowsSecurity(security.WindowsSecurity):
             attributes = self.Attributes(ctypes.sizeof(self.Attributes), descriptor, False)
             if not self.kernel.CreateDirectoryW(str(path), ctypes.byref(attributes)):
                 raise ctypes.WinError(ctypes.get_last_error())
+        finally:
+            self.kernel.LocalFree(descriptor)
+
+    def verify_parent(self, path):
+        owner, dacl, descriptor = ctypes.c_void_p(), ctypes.c_void_p(), ctypes.c_void_p()
+        code = self.api.GetNamedSecurityInfoW(str(path), 1, 5, ctypes.byref(owner), None,
+                                              ctypes.byref(dacl), None, ctypes.byref(descriptor))
+        if code:
+            raise ctypes.WinError(code)
+        try:
+            require(self.sid_string(owner) in self.trusted and bool(dacl), "Unsafe installation parent owner or DACL.")
+            count = ctypes.c_ushort.from_address(dacl.value + 4).value
+            for index in range(count):
+                ace = ctypes.c_void_p()
+                if not self.api.GetAce(dacl, index, ctypes.byref(ace)):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                kind = ctypes.c_ubyte.from_address(ace.value).value
+                flags = ctypes.c_ubyte.from_address(ace.value + 1).value
+                if flags & 8 or kind == 1:
+                    continue
+                require(kind == 0, "Unsupported effective installation parent ACE.")
+                mask = ctypes.c_uint32.from_address(ace.value + 4).value
+                require(parent_ace_allowed(kind, flags, mask, self.sid_string(ace.value + 8) in self.trusted),
+                        "The installation parent permits another SID to mutate children or security.")
         finally:
             self.kernel.LocalFree(descriptor)
 
@@ -144,7 +179,7 @@ class Store:
     def parent(self, path):
         identity = plain(path, directory=True)
         if self.windows:
-            self.windows.verify(path)
+            self.windows.verify_parent(path)
         else:
             info = path.lstat()
             require(info.st_uid in (0, os.getuid()) and not info.st_mode & 0o022,

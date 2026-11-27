@@ -199,6 +199,17 @@ def task(operation):
     require(desktop_ssh.decode(result.stdout).get("ok") is True, "Desktop task setup failed.")
 
 
+def user_manager_environment(runtime=None):
+    # Connect to the existing owner bus. A system worker or SSH session may not
+    # inherit XDG_RUNTIME_DIR; this neither creates a bus nor invents a display.
+    runtime = Path("/run/user") / str(os.getuid()) if runtime is None else Path(runtime)
+    directory, bus = runtime.lstat(), (runtime / "bus").lstat()
+    require(stat.S_ISDIR(directory.st_mode) and directory.st_uid == os.getuid()
+            and not directory.st_mode & 0o077 and stat.S_ISSOCK(bus.st_mode) and bus.st_uid == os.getuid(),
+            "The existing owner desktop bus is unavailable.")
+    return dict(os.environ, XDG_RUNTIME_DIR=str(runtime), DBUS_SESSION_BUS_ADDRESS="unix:path=" + str(runtime / "bus"))
+
+
 def start():
     config = verify_installed()
     root = desktop_node.home()
@@ -207,13 +218,14 @@ def start():
     else:
         # A user-manager unit inherits its existing graphical environment. Never
         # invent DISPLAY, Xauthority or a new D-Bus session on an SSH login.
-        observed = subprocess.run(["systemctl", "--user", "show-environment"], capture_output=True, timeout=5)
+        environment = user_manager_environment()
+        observed = subprocess.run(["systemctl", "--user", "show-environment"], env=environment, capture_output=True, timeout=5)
         values = dict(line.split("=", 1) for line in observed.stdout.decode("utf-8").splitlines() if "=" in line)
         require(observed.returncode == 0 and (values.get("DISPLAY") or values.get("WAYLAND_DISPLAY")),
                 "The graphical user manager has no desktop environment; use the local login autostart.")
         result = subprocess.run(["systemd-run", "--user", "--collect", "--unit=vincula-desktop-runtime",
                                  "--property=Restart=no", config["python"], "-IB", str(root / "desktop_session.py"), "serve"],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=8)
+                                env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=8)
         require(result.returncode == 0, "Desktop supervisor start rejected or already owned.")
     return {"start_requested": True, "engine_started": False}
 

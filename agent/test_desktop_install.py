@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import struct
 import stat
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -76,6 +77,14 @@ class ArtifactInstallTests(unittest.TestCase):
         self.assertFalse(plan["engine_started"]);self.assertFalse(plan["service_installed"])
         self.assertEqual(plan["deployment"]["port"],24807);self.assertTrue(plan["deployment"]["enabled"])
         self.assertEqual(len(plan["changes"]),3)
+
+    def test_isolated_cli_help_imports_helpers_without_creating_state(self):
+        working=self.base/"isolated-cwd";working.mkdir()
+        result=subprocess.run([sys.executable,"-IB",str(Path(install.__file__).resolve()),"--help"],
+            cwd=working,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=10)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn("--approved-sha256",result.stdout);self.assertIn("--enable",result.stdout)
+        self.assertEqual(list(working.iterdir()),[]);self.assertFalse(self.root.exists())
 
     def test_install_matches_real_deployment_and_approval_readers(self):
         candidate=self.installer(port=24809);result=candidate.install()
@@ -238,6 +247,7 @@ class ArtifactInstallTests(unittest.TestCase):
         calls=[]
         class FakeWindows:
             def create_directory(self,path):calls.append(('mkdir',path));path.mkdir(mode=0o700)
+            def verify_parent(self,path):calls.append(('parent',path));self.verify(path)
             def verify(self,path):
                 self_info=path.lstat()
                 if self_info.st_mode & 0o077:raise PermissionError('synthetic broad ACL')
@@ -256,6 +266,26 @@ class ArtifactInstallTests(unittest.TestCase):
             self.assertTrue(self.installer().install()["installed"])
         self.assertTrue(any(row[0]=='open' and row[2] for row in calls))
         self.assertTrue(any(row[0]=='mkdir' for row in calls))
+        self.assertTrue(any(row[0]=='parent' for row in calls))
+
+    def test_windows_parent_accepts_read_traverse_and_inherit_only_aces(self):
+        for mask in (0x100020,0x1200a9,0x80000000,0x20000000,0x20000,0x100000):
+            with self.subTest(mask=hex(mask)):
+                self.assertTrue(install.parent_ace_allowed(0,0,mask,False))
+        self.assertTrue(install.parent_ace_allowed(0,8,0x1f01ff,False))
+        self.assertTrue(install.parent_ace_allowed(1,0,0x1f01ff,False))
+        self.assertTrue(install.parent_ace_allowed(0,0,0x1f01ff,True))
+
+    def test_windows_parent_rejects_every_effective_mutation_bit(self):
+        for mask in (0x10000000,0x40000000,0x10000,0x40000,0x80000,0x40,0x2,0x4,0x10,0x100):
+            with self.subTest(mask=hex(mask)):
+                self.assertFalse(install.parent_ace_allowed(0,0,mask,False))
+                self.assertFalse(install.parent_ace_allowed(0,3,mask|0x1200a9,False))
+        self.assertFalse(install.parent_ace_allowed(9,0,0,False))
+
+    @unittest.skipUnless(sys.platform=="win32","Native Windows default parent metadata only")
+    def test_windows_native_default_parent_integrity(self):
+        install.InstallerWindowsSecurity().verify_parent(Path(os.environ["LOCALAPPDATA"]))
 
     @unittest.skipIf(sys.platform=="win32","POSIX directory fsync failure fixture")
     def test_failure_after_deployment_publication_preserves_committed_artifact(self):

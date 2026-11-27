@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import socket
 import sys
 from tempfile import TemporaryDirectory
 import unittest
@@ -145,10 +146,27 @@ class SupportInstallTests(unittest.TestCase):
 
     def test_start_without_graphical_manager_does_not_invent_a_display(self):
         with patch.object(session, "verify_installed", return_value={"python": sys.executable}), \
+             patch.object(session, "user_manager_environment", return_value=dict(os.environ)), \
              patch.object(session.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, b"XDG_RUNTIME_DIR=/run/user/1000\n")) as run:
             with self.assertRaises(ValueError):
                 session.start()
             run.assert_called_once()
+
+    def test_existing_owner_bus_can_be_used_without_inheriting_graphical_variables(self):
+        runtime = self.base / "existing-user-runtime"
+        runtime.mkdir(mode=0o700)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as bus:
+            bus.bind(str(runtime / "bus"))
+            with patch.dict(os.environ, {}, clear=True):
+                environment = session.user_manager_environment(runtime)
+                self.assertEqual(environment["XDG_RUNTIME_DIR"], str(runtime))
+                self.assertEqual(environment["DBUS_SESSION_BUS_ADDRESS"], "unix:path=" + str(runtime / "bus"))
+                self.assertNotIn("DISPLAY", environment)
+                self.assertNotIn("WAYLAND_DISPLAY", environment)
+        (runtime / "bus").unlink()
+        (runtime / "bus").write_bytes(b"not a socket")
+        with self.assertRaises(ValueError):
+            session.user_manager_environment(runtime)
 
     def test_serve_from_headless_context_never_opens_supervisor(self):
         with patch.object(session, "verify_installed"), patch.dict(os.environ, {}, clear=True), \

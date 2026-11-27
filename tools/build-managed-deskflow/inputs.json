@@ -41,5 +41,7 @@
       "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz",
       "sha256": "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a"
     }
-  }
+  },
+  "upstream_tag": "v1.27.0",
+  "upstream_tag_object": "90376dfaba2c28dd61c5d4453ae5641c6edec5a3"
 }
