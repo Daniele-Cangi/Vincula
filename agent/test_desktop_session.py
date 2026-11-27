@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Support installation fixtures; never register a task or start a live service."""
 from contextlib import ExitStack
+import base64
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,43 @@ import unittest
 from unittest.mock import patch
 
 import desktop_session as session
+
+
+def task_fixture_script():
+    """Only in-memory XML validation; never calls a Task Scheduler command."""
+    config = {"sid": "S-1-5-21-1-2-3-1001", "python": "C:\\approved\\python.exe",
+              "arguments": "-IB approved.py serve", "root": "C:\\approved"}
+    xml = '''<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+<Triggers><LogonTrigger><Enabled>true</Enabled><UserId>S-1-5-21-1-2-3-1001</UserId></LogonTrigger></Triggers>
+<Principals><Principal><UserId>S-1-5-21-1-2-3-1001</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+<Settings><Enabled>true</Enabled><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries></Settings>
+<Actions><Exec><Command>C:\\approved\\python.exe</Command><Arguments>-IB approved.py serve</Arguments><WorkingDirectory>C:\\approved</WorkingDirectory></Exec></Actions>
+</Task>'''
+    cases = [(xml, True), (xml.replace("<Enabled>true</Enabled>", ""), True),
+             (xml.replace("</Actions>", "<ComHandler><ClassId>unexpected</ClassId></ComHandler></Actions>"), False),
+             (xml.replace("</Triggers>", "<TimeTrigger/></Triggers>"), False),
+             (xml.replace("<Settings><Enabled>true", "<Settings><Enabled>false"), False),
+             (xml.replace("<LogonTrigger><Enabled>true", "<LogonTrigger><Enabled>false"), False),
+             (xml.replace("LeastPrivilege", "HighestAvailable"), False),
+             (xml.replace("<StopIfGoingOnBatteries>false", "<StopIfGoingOnBatteries>true"), False)]
+    data = base64.b64encode(json.dumps({"config": config, "cases": [{"xml": text, "accept": accepted}
+                                          for text, accepted in cases]}).encode()).decode()
+    return session.TASK_ASSERT + "\n$ErrorActionPreference='Stop'\n" + \
+        "$data=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + data + "')) | ConvertFrom-Json\n" + \
+        "$count=0;foreach($case in $data.cases){$accepted=$true;try{Assert-VinculaDesktopTask ([xml]$case.xml) $data.config}catch{$accepted=$false};" + \
+        "if($accepted -ne $case.accept){throw 'Unexpected task acceptance'};$count++};" + \
+        "@{passed=$true;cases=$count;registered_tasks=0}|ConvertTo-Json -Compress\n"
+
+
+@unittest.skipUnless(os.name == "nt", "Native PowerShell XML fixture runs on Windows.")
+class NativeTaskDefinitionTests(unittest.TestCase):
+    def test_only_the_expected_enabled_task_definition_is_accepted(self):
+        bootstrap = "& ([ScriptBlock]::Create([Console]::In.ReadToEnd()))"
+        result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                                 base64.b64encode(bootstrap.encode("utf-16le")).decode()],
+                                input=task_fixture_script().encode(), capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        self.assertEqual(json.loads(result.stdout.decode("utf-8-sig")), {"passed": True, "cases": 8, "registered_tasks": 0})
 
 
 class BundleTests(unittest.TestCase):

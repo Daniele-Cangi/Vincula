@@ -123,6 +123,7 @@ def provision(request):
     result = subprocess.run([str(engine), "--vincula-provision", str(profile),
                              "--vincula-session", session, "--vincula-node", node_id],
                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20,
+                            env=managed.runtime_environment(),
                             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
     managed.require(result.returncode == 0 and len(result.stdout) <= 4096, "Local TLS provisioning failed.")
     public = desktop_ssh.decode(result.stdout)

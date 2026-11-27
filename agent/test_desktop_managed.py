@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 from uuid import uuid4
 
 from desktop_backend import GroupManifest, Screen
@@ -43,6 +44,23 @@ class Clock:
 
 
 class ManagedProtocolTests(unittest.TestCase):
+    def test_runtime_environment_uses_the_real_desktop_without_ambient_loaders(self):
+        original = {"LD_PRELOAD": "/external/preload.so", "LD_LIBRARY_PATH": "/external/lib",
+                    "QT_PLUGIN_PATH": "/external/qt", "QT_QPA_PLATFORM": "offscreen", "OPENSSL_CONF": "/external/ssl.conf",
+                    "SSH_AUTH_SOCK": "/credentials/agent.sock", "DISPLAY": ":7", "XAUTHORITY": "/local/session/auth",
+                    "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus", "XDG_SESSION_TYPE": "x11"}
+        with patch.object(managed.sys, "platform", "linux"):
+            result = managed.runtime_environment(original)
+            self.assertEqual(result["QT_QPA_PLATFORM"], "xcb")
+            for key in ("LD_PRELOAD", "LD_LIBRARY_PATH", "QT_PLUGIN_PATH", "OPENSSL_CONF", "SSH_AUTH_SOCK"):
+                self.assertNotIn(key, result)
+            self.assertEqual(result["XAUTHORITY"], original["XAUTHORITY"])
+            self.assertEqual(result["DBUS_SESSION_BUS_ADDRESS"], original["DBUS_SESSION_BUS_ADDRESS"])
+            self.assertEqual(managed.runtime_environment(dict(original, XDG_SESSION_TYPE="wayland", WAYLAND_DISPLAY="wayland-2"))["QT_QPA_PLATFORM"], "wayland")
+        self.assertEqual(original["QT_QPA_PLATFORM"], "offscreen")
+        with patch.object(managed.sys, "platform", "win32"):
+            self.assertEqual(managed.runtime_environment(original)["QT_QPA_PLATFORM"], "windows")
+
     def test_frame_roundtrip_unicode_and_windows_paths(self):
         value = {"z": 'C:\\profilo è😀\\"quote"/config', "a": True}
         encoded = managed.frame(value)

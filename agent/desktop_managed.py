@@ -25,6 +25,24 @@ SNAPSHOT_TIMEOUT = 2.0
 DIGEST = re.compile(r"[0-9a-f]{64}")
 
 
+def runtime_environment(environment=None):
+    """Keep real desktop/session facts; isolate this approved runtime's loaders."""
+    result = dict(os.environ if environment is None else environment)
+    for name in ("LD_PRELOAD", "LD_LIBRARY_PATH", "QT_PLUGIN_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH",
+                 "QT_QPA_PLATFORM", "QT_QPA_PLATFORMTHEME", "QT_STYLE_OVERRIDE", "OPENSSL_CONF", "OPENSSL_MODULES",
+                 "OPENSSL_ENGINES", "SSH_AUTH_SOCK", "SSH_AGENT_PID", "SSH_ASKPASS", "GIT_ASKPASS"):
+        result.pop(name, None)
+    if sys.platform == "win32":
+        result["QT_QPA_PLATFORM"] = "windows"
+    elif result.get("XDG_SESSION_TYPE") == "wayland" and result.get("WAYLAND_DISPLAY"):
+        result["QT_QPA_PLATFORM"] = "wayland"
+    elif result.get("DISPLAY"):
+        result["QT_QPA_PLATFORM"] = "xcb"
+    elif result.get("WAYLAND_DISPLAY"):
+        result["QT_QPA_PLATFORM"] = "wayland"
+    return result
+
+
 def require(condition, message):
     if not condition:
         raise ValueError(message)
@@ -336,7 +354,8 @@ class ManagedEngine:
             argv = self.argv + ["--vincula-managed-in", str(incoming), "--vincula-managed-out", str(outgoing)]
             self.check_cancelled()
             self.process = subprocess.Popen(argv, cwd=self.cwd, stdin=subprocess.DEVNULL,
-                                            stdout=self.log, stderr=subprocess.STDOUT, close_fds=True, **options)
+                                            stdout=self.log, stderr=subprocess.STDOUT, close_fds=True,
+                                            env=runtime_environment(), **options)
             self.reader, self.writer = reader, writer
             self.check_cancelled()
             after = Path(self.argv[0]).lstat()

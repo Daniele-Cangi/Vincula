@@ -142,25 +142,34 @@ def install(source, approved_sha256, registry, python):
 
 # Native Task Scheduler API, never desktop UI automation. Everything substituted
 # comes from the private, verified local setup; stdin is a small JSON document.
-TASK_SCRIPT = r"""
+TASK_ASSERT = r"""
+function Assert-VinculaDesktopTask([xml]$x,$c) {
+  $ns=New-Object Xml.XmlNamespaceManager($x.NameTable);$ns.AddNamespace('t','http://schemas.microsoft.com/windows/2004/02/mit/task')
+  $exec=$x.SelectNodes('//t:Actions/t:Exec',$ns)
+  $actions=$x.SelectNodes('//t:Actions/*',$ns)
+  $p=$x.SelectSingleNode('//t:Principals/t:Principal',$ns)
+  $triggers=$x.SelectNodes('//t:Triggers/t:LogonTrigger',$ns)
+  $allTriggers=$x.SelectNodes('//t:Triggers/*',$ns)
+  $settings=$x.SelectSingleNode('//t:Settings',$ns)
+  if ($actions.Count -ne 1 -or $exec.Count -ne 1 -or $exec[0].Command -ne $c.python -or $exec[0].Arguments -ne $c.arguments -or
+      $exec[0].WorkingDirectory -ne $c.root -or $p.UserId -ne $c.sid -or $p.LogonType -ne 'InteractiveToken' -or $p.RunLevel -ne 'LeastPrivilege' -or
+      $allTriggers.Count -ne 1 -or $triggers.Count -ne 1 -or $triggers[0].UserId -ne $c.sid -or $settings.ExecutionTimeLimit -ne 'PT0S' -or
+      $settings.MultipleInstancesPolicy -ne 'IgnoreNew' -or $settings.DisallowStartIfOnBatteries -ne 'false' -or
+      $settings.StopIfGoingOnBatteries -ne 'false' -or ($settings.Enabled -and $settings.Enabled -ne 'true') -or
+      ($triggers[0].Enabled -and $triggers[0].Enabled -ne 'true')) {
+    throw 'Existing desktop task differs; no overwrite'
+  }
+}
+"""
+
+TASK_SCRIPT = TASK_ASSERT + r"""
 $ErrorActionPreference='Stop'
 $c=[Console]::In.ReadToEnd() | ConvertFrom-Json
 $name='Vincula-Desktop-' + $c.sid
 $existing=Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
 if ($existing) {
   [xml]$x=Export-ScheduledTask -TaskName $name
-  $ns=New-Object Xml.XmlNamespaceManager($x.NameTable);$ns.AddNamespace('t','http://schemas.microsoft.com/windows/2004/02/mit/task')
-  $exec=$x.SelectNodes('//t:Actions/t:Exec',$ns)
-  $p=$x.SelectSingleNode('//t:Principals/t:Principal',$ns)
-  $triggers=$x.SelectNodes('//t:Triggers/t:LogonTrigger',$ns)
-  $settings=$x.SelectSingleNode('//t:Settings',$ns)
-  if ($exec.Count -ne 1 -or $exec[0].Command -ne $c.python -or $exec[0].Arguments -ne $c.arguments -or
-      $exec[0].WorkingDirectory -ne $c.root -or $p.UserId -ne $c.sid -or $p.LogonType -ne 'InteractiveToken' -or $p.RunLevel -ne 'LeastPrivilege' -or
-      $triggers.Count -ne 1 -or $triggers[0].UserId -ne $c.sid -or $settings.ExecutionTimeLimit -ne 'PT0S' -or
-      $settings.MultipleInstancesPolicy -ne 'IgnoreNew' -or $settings.DisallowStartIfOnBatteries -ne 'false' -or
-      $settings.StopIfGoingOnBatteries -ne 'false') {
-    throw 'Existing desktop task differs; no overwrite'
-  }
+  Assert-VinculaDesktopTask $x $c
 } elseif ($c.operation -eq 'install') {
   $action=New-ScheduledTaskAction -Execute $c.python -Argument $c.arguments -WorkingDirectory $c.root
   $principal=New-ScheduledTaskPrincipal -UserId $c.sid -LogonType Interactive -RunLevel Limited

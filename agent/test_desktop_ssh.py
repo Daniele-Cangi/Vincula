@@ -62,7 +62,7 @@ class ProtocolTests(unittest.TestCase):
             if sys.platform != "win32":
                 selection.chmod(0o600)
             with patch.object(bridge, "default_directory", return_value=root / "control"), \
-                 patch.dict(os.environ, {}, clear=True), patch.object(bridge.desktop_security, "private_file"):
+                 patch.dict(os.environ, {"VINCULA_NODE_REGISTRY": ""}), patch.object(bridge.desktop_security, "private_file"):
                 with self.assertRaises(ValueError):
                     bridge.default_registry_path()
                 # Stop/status do not parse this file or acquire the catalog mutex.
@@ -70,6 +70,10 @@ class ProtocolTests(unittest.TestCase):
                 registry = root / "core-nodes.json"
                 selection.write_text(json.dumps({"registry": str(registry)}))
                 self.assertEqual(bridge.default_registry_path(), registry)
+                with patch.dict(os.environ, {"VINCULA_NODE_REGISTRY": "/unavailable/nodes.json"}), \
+                     patch.object(bridge, "registry_argument_path", side_effect=PermissionError("Unavailable ancestor")) as resolve:
+                    self.assertTrue(bridge.default_registry_path(configured=False).is_absolute())
+                    resolve.assert_not_called()
 
     def test_scoped_readiness_lifetime_is_preserved_and_bounded(self):
         binding = self.binding()

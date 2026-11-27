@@ -122,7 +122,7 @@ def default_directory():
 def default_registry_path(*, configured=True):
     # Match nodes.registry_path without acquiring the edit mutex just to locate
     # the file. Emergency stop must not queue behind a GUI registry writer.
-    override = os.environ.get("VINCULA_NODE_REGISTRY")
+    override = os.environ.get("VINCULA_NODE_REGISTRY") if configured else None
     if override:
         return registry_argument_path(override)
     if configured:
