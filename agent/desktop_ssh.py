@@ -16,6 +16,7 @@ import math
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 from uuid import UUID
@@ -24,6 +25,7 @@ from uuid import UUID
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import desktop_supervisor
+import desktop_security
 import node_ssh
 import node_registry
 import nodes
@@ -117,12 +119,26 @@ def default_directory():
     return Path.home() / ".local/share/vincula-desktop/control"
 
 
-def default_registry_path():
+def default_registry_path(*, configured=True):
     # Match nodes.registry_path without acquiring the edit mutex just to locate
     # the file. Emergency stop must not queue behind a GUI registry writer.
     override = os.environ.get("VINCULA_NODE_REGISTRY")
     if override:
         return registry_argument_path(override)
+    if configured:
+        # An operator-selected Core catalog may differ from the desktop default.
+        # This immutable local selection is separate from the mutable catalog.
+        selection = default_directory().parent / "catalog.json"
+        if selection.exists() or selection.is_symlink():
+            info = selection.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or getattr(info, "st_file_attributes", 0) & 0x400:
+                raise ValueError("Invalid operator desktop catalog file.")
+            desktop_security.private_file(selection)
+            value = decode(bounded_file(selection, 16384))
+            if not isinstance(value, dict) or set(value) != {"registry"} or not isinstance(value["registry"], str) \
+                    or not Path(value["registry"]).is_absolute():
+                raise ValueError("Invalid operator desktop catalog selection.")
+            return registry_argument_path(value["registry"])
     if sys.platform == "win32":
         return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData/Local") / "Vincula/nodes.json"
     return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "vincula/nodes.json"
@@ -548,9 +564,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("stdio", "stop-stdio", "status-stdio"))
     parser.add_argument("--directory", type=Path, default=default_directory())
-    parser.add_argument("--registry", type=Path, default=default_registry_path())
+    parser.add_argument("--registry", type=Path)
     args = parser.parse_args()
-    return serve(sys.stdin.buffer, sys.stdout.buffer, args.directory, args.registry,
+    # Emergency stop/status retain the instance already pinned by their caller;
+    # neither the catalog nor its local selection file is needed on that path.
+    registry_path = args.registry or default_registry_path(configured=args.mode == "stdio")
+    return serve(sys.stdin.buffer, sys.stdout.buffer, args.directory, registry_path,
                  mode={"stdio": "control", "stop-stdio": "stop", "status-stdio": "status"}[args.mode])
 
 

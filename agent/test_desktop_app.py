@@ -136,6 +136,8 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({payload["action"] for _, payload in self.calls}, {"inspect"})
         self.assertFalse(any(state == "ready" for state, _, _ in self.output.events))
         self.assertTrue(self.output.events[-1][2])
+        self.assertEqual(self.output.events[-1][0], "failed")
+        self.assertIn("Gruppo non disponibile", self.output.events[-1][1])
 
     async def test_stop_is_independent_of_pending_heartbeat_and_waits_for_terminal_cleanup(self):
         with ExitStack() as stack:

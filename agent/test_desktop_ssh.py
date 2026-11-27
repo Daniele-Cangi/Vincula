@@ -54,6 +54,23 @@ def unavailable_catalog(path):
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_emergency_catalog_location_ignores_a_broken_operator_selection(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            selection = root / "catalog.json"
+            selection.write_bytes(b"not-json")
+            if sys.platform != "win32":
+                selection.chmod(0o600)
+            with patch.object(bridge, "default_directory", return_value=root / "control"), \
+                 patch.dict(os.environ, {}, clear=True), patch.object(bridge.desktop_security, "private_file"):
+                with self.assertRaises(ValueError):
+                    bridge.default_registry_path()
+                # Stop/status do not parse this file or acquire the catalog mutex.
+                self.assertTrue(bridge.default_registry_path(configured=False).is_absolute())
+                registry = root / "core-nodes.json"
+                selection.write_text(json.dumps({"registry": str(registry)}))
+                self.assertEqual(bridge.default_registry_path(), registry)
+
     def test_scoped_readiness_lifetime_is_preserved_and_bounded(self):
         binding = self.binding()
         status = {"instance": binding["instance"], "session_id": binding["session_id"],

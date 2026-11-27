@@ -166,6 +166,7 @@ def watch_input(stopped):
 async def run(stopped, output):
     controller = transport = None
     stop_task = None
+    failure_message = None
     pending = set()
     try:
         before = nodes.snapshot(desktop_ssh.default_registry_path())
@@ -244,6 +245,8 @@ async def run(stopped, output):
             pending.discard(startup)
         while not stopped.is_set():
             report = await controller.heartbeat()
+            if stopped.is_set():
+                break
             if report["state"] in {"failed", "stopped", "stopping"}:
                 raise ValueError("A desktop member lost its connection, backend grant or fresh attestation.")
             output.send("ready" if report["ready"] else "waiting_ready",
@@ -257,7 +260,8 @@ async def run(stopped, output):
     except asyncio.CancelledError:
         pass
     except (OSError, ValueError, KeyError, TypeError, asyncio.TimeoutError):
-        output.send("failed", "Gruppo non disponibile. Verifica layout, runtime desktop e collegamenti dei nodi.")
+        failure_message = "Gruppo non disponibile. Verifica layout, runtime desktop e collegamenti dei nodi."
+        output.send("failed", failure_message)
     finally:
         output.send("stopping", "Arresto del gruppo in corso…")
         # Stop uses fresh purpose-bound channels, independently of a pending start
@@ -272,8 +276,11 @@ async def run(stopped, output):
         await asyncio.gather(*pending, return_exceptions=True)
         if transport is not None:
             await transport.close()
-        output.send("stopped" if complete else "failed",
-                    "Gruppo fermato." if complete else "Arresto non confermato su tutti i nodi; le lease restano limitate.", complete)
+        final_message = failure_message or "Gruppo fermato."
+        if not complete:
+            final_message = (failure_message + " " if failure_message else "") + \
+                "Arresto non confermato su tutti i nodi; le lease restano limitate."
+        output.send("failed" if failure_message or not complete else "stopped", final_message, complete)
         # Bounded drain; a GUI which stopped reading cannot prevent lease cleanup.
         for _ in range(10):
             if not output.queue.unfinished_tasks:
