@@ -24,8 +24,6 @@
   },
   "bytes_each_direction": 1073741824,
   "all_three_sha256": "8497aa7ddbf6be09e9c4b8fa1d583a06ca913532c4802f376ff93bc2b66648fc",
-  "gui_instantiated": false,
-  "clipboard_accessed": false,
   "limitations": [
     "Real transfers reported two unknown byte observations; both stayed indeterminate. A source-size metadata failure yielding an unknown total was not forced; unknown-total behavior is covered by the prior native fixture tests.",
     "This exercises native public transport callbacks, not the visible GUI bar or another header-stop test. Those have separate evidence."
@@ -39,6 +37,11 @@
   ],
   "header_stop_enabled_while_busy_in_fixture": true,
   "gui_candidate_manifest_sha256": "b5eb279a6275308afabbe3e1332410aa23c27b07df1275d85e7388c7545b8b2a",
-  "gui_rollout": "Staged; awaiting close/reload of the existing Windows window",
-  "core_or_other_nodes_changed": false
+  "gui_rollout": "Installed and launched on Windows; shortcut and visible owned window verified in interactive Session12",
+  "gui_visible_owned_window_verified": true,
+  "user_bar_confirmation_required_for_activation": false,
+  "gui_instantiated_in_api_test": false,
+  "clipboard_accessed_by_api_test": false,
+  "core_or_other_node_software_changed": false,
+  "generated_large_files_removed_after_integrity_checks": true
 }

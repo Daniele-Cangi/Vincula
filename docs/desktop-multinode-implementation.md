@@ -142,12 +142,22 @@ durante il lavoro. Le API reali aggiornate hanno inviato e ricevuto 1 GiB con
 12/14 callback, campioni intermedi e SHA256 identici: la
 [ricevuta del progresso](collaudi/2026-11-28-windows-transfer-progress.json)
 distingue questa prova del trasporto da quella della barra visibile. La nuova
-GUI Windows è preparata; manca la chiusura/ricarica della finestra esistente.
+GUI Windows è installata e avviata: collegamento, hash e finestra visibile nella
+sessione interattiva sono stati verificati. Ubuntu e Kali mantengono la GUI
+precedente con lo stesso bundle di supporto.
+
+La review Codex del commit `d329536` è completata senza rilievi. Gli alert
+automatici e il Quality Gate Sonar restano separati da questa review; il loro
+triage è documentato e non comporta archiviazione automatica. I quattro file
+sintetici da 1 GiB sono stati rimossi dopo controllo di hash e identità;
+i pannelli QA sono stati fermati tramite i loro job dedicati.
+La condivisione resta ferma su tutti i nodi; MCP è raggiungibile sui tre PC.
 
 Prima del rilascio restano:
 
-1. Ricaricare la GUI Windows preparata e confermare l'indicatore visibile.
-2. Completare la prova esplicita di revoca/disconnessione del nuovo motore.
-3. Pubblicare gli esiti, completare le review e autorizzare il merge della PR.
+1. Completare la prova esplicita di revoca/disconnessione del nuovo motore.
+2. Completare le review e autorizzare il merge della PR. Il
+   [triage delle quattro segnalazioni automatiche](collaudi/2026-11-28-desktop-security-triage.md)
+   documenta i confini esaminati; non modifica lo stato degli alert o il Quality Gate.
 
 Questa preparazione non ha richiesto riavvii o cambiamenti alle identità Core.

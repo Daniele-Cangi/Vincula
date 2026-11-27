@@ -25,7 +25,8 @@
       "patch_sha256": "654f8ed741cb5042bc02e0c68d1de5d4924bfaac06c01a1d2c395dfe075dc37c",
       "passed": true,
       "installed_for_this_test": false
-    }
+    },
+    "current_gui_exe_sha256": "a10537e94642680c265cb1f116db6a3ec6ab2ae6b9467935494228ecae88ab16"
   },
   "linux": {
     "artifact_manifest_sha256": "da6596758585aa286b67d9ce63a8b55e540341886bb1478b7892135f201a5dcc",
@@ -67,7 +68,6 @@
   },
   "vincula_support_commit": "aa96e357ab30ac67951a71902cddb19885ace83d",
   "latest_common_source_patch_sha256": "654f8ed741cb5042bc02e0c68d1de5d4924bfaac06c01a1d2c395dfe075dc37c",
-  "gui_manifest_sha256": "5d65e432a1ec55aee800665c49303b196006984967d1d79b92240300402dbb7d",
   "real_session_id": "127b0448-9313-4432-b9e2-1cf012da4402",
   "all_three_recent_engine_attestations_observed": true,
   "config_adapter": {
@@ -75,5 +75,11 @@
     "legacy_format_negative": true,
     "provider_started_by_parser_probe": false
   },
-  "read_only_final_review": "No actionable P1/P2 findings in c9b8943..aa96e35; real stop test is separately observed"
+  "read_only_final_review": "No actionable P1/P2 findings in c9b8943..aa96e35; real stop test is separately observed",
+  "gui_manifest_at_three_node_input_and_stop_test": "5d65e432a1ec55aee800665c49303b196006984967d1d79b92240300402dbb7d",
+  "gui_current_manifest_by_node": {
+    "ubuntu": "5d65e432a1ec55aee800665c49303b196006984967d1d79b92240300402dbb7d",
+    "kali": "5d65e432a1ec55aee800665c49303b196006984967d1d79b92240300402dbb7d",
+    "windows": "b5eb279a6275308afabbe3e1332410aa23c27b07df1275d85e7388c7545b8b2a"
+  }
 }
