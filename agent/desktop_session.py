@@ -143,6 +143,15 @@ def install(source, approved_sha256, registry, python):
 # Native Task Scheduler API, never desktop UI automation. Everything substituted
 # comes from the private, verified local setup; stdin is a small JSON document.
 TASK_ASSERT = r"""
+function Resolve-VinculaTaskSid([string]$value) {
+  if ([string]::IsNullOrWhiteSpace($value)) { return '' }
+  try {
+    if ($value.StartsWith('S-', [StringComparison]::OrdinalIgnoreCase)) {
+      return (New-Object Security.Principal.SecurityIdentifier($value)).Value
+    }
+    return (New-Object Security.Principal.NTAccount($value)).Translate([Security.Principal.SecurityIdentifier]).Value
+  } catch { throw 'Existing desktop task identity cannot be resolved' }
+}
 function Assert-VinculaDesktopTask([xml]$x,$c) {
   $ns=New-Object Xml.XmlNamespaceManager($x.NameTable);$ns.AddNamespace('t','http://schemas.microsoft.com/windows/2004/02/mit/task')
   $exec=$x.SelectNodes('//t:Actions/t:Exec',$ns)
@@ -151,9 +160,12 @@ function Assert-VinculaDesktopTask([xml]$x,$c) {
   $triggers=$x.SelectNodes('//t:Triggers/t:LogonTrigger',$ns)
   $allTriggers=$x.SelectNodes('//t:Triggers/*',$ns)
   $settings=$x.SelectSingleNode('//t:Settings',$ns)
+  $levels=$p.SelectNodes('t:RunLevel',$ns)
+  # Task Scheduler omits the default least-privilege RunLevel when exporting XML.
+  $leastPrivilege=$levels.Count -eq 0 -or ($levels.Count -eq 1 -and $levels[0].InnerText -eq 'LeastPrivilege')
   if ($actions.Count -ne 1 -or $exec.Count -ne 1 -or $exec[0].Command -ne $c.python -or $exec[0].Arguments -ne $c.arguments -or
-      $exec[0].WorkingDirectory -ne $c.root -or $p.UserId -ne $c.sid -or $p.LogonType -ne 'InteractiveToken' -or $p.RunLevel -ne 'LeastPrivilege' -or
-      $allTriggers.Count -ne 1 -or $triggers.Count -ne 1 -or $triggers[0].UserId -ne $c.sid -or $settings.ExecutionTimeLimit -ne 'PT0S' -or
+      $exec[0].WorkingDirectory -ne $c.root -or (Resolve-VinculaTaskSid $p.UserId) -ne $c.sid -or $p.LogonType -ne 'InteractiveToken' -or -not $leastPrivilege -or
+      $allTriggers.Count -ne 1 -or $triggers.Count -ne 1 -or (Resolve-VinculaTaskSid $triggers[0].UserId) -ne $c.sid -or $settings.ExecutionTimeLimit -ne 'PT0S' -or
       $settings.MultipleInstancesPolicy -ne 'IgnoreNew' -or $settings.DisallowStartIfOnBatteries -ne 'false' -or
       $settings.StopIfGoingOnBatteries -ne 'false' -or ($settings.Enabled -and $settings.Enabled -ne 'true') -or
       ($triggers[0].Enabled -and $triggers[0].Enabled -ne 'true')) {

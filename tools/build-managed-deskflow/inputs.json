@@ -4,7 +4,7 @@
   "upstream_commit": "081f6478e654a112168879e67a41ce7d7e4ae3af",
   "version": "1.27.0",
   "patch_file": "third_party/deskflow/vincula-managed-v1.patch",
-  "patch_sha256": "70afdffdba804e5bc95644f7ac27b24f8815857426d6737577d3d3e47d18ea5a",
+  "patch_sha256": "654f8ed741cb5042bc02e0c68d1de5d4924bfaac06c01a1d2c395dfe075dc37c",
   "python_version": "3.12.10",
   "msvc_toolset": "14.44.35207",
   "windows_sdk": "10.0.22621.0",

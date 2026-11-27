@@ -20,7 +20,7 @@ import desktop_backend as backend
 import desktop_deskflow as deskflow
 import desktop_security as security
 
-PATCH_SHA256 = "70afdffdba804e5bc95644f7ac27b24f8815857426d6737577d3d3e47d18ea5a"
+PATCH_SHA256 = "654f8ed741cb5042bc02e0c68d1de5d4924bfaac06c01a1d2c395dfe075dc37c"
 DEFAULT_PORT = 24807
 MAX_FILE_BYTES = 512 * 1024 * 1024
 MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024

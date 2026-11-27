@@ -5,7 +5,7 @@ desktop service. Apply it once to the official Deskflow repository at
 `081f6478e654a112168879e67a41ce7d7e4ae3af` (1.27.0).
 
 `vincula-managed-v1.patch` SHA256:
-`70afdffdba804e5bc95644f7ac27b24f8815857426d6737577d3d3e47d18ea5a`.
+`654f8ed741cb5042bc02e0c68d1de5d4924bfaac06c01a1d2c395dfe075dc37c`.
 It includes Vincula's earlier GNOME clipboard patch; do not apply that separately.
 
 The upstream copyright and license notices remain in the patch. New managed C++
@@ -45,7 +45,9 @@ ELF is dynamically linked; copying it alone is insufficient for another PC.
 The active, pinned native build is now in
 [managed-deskflow.yml](../../.github/workflows/managed-deskflow.yml), with its
 [build recipe](../../tools/build-managed-deskflow/README.md). Native Windows
-tests and real desktop acceptance remain release gates. The common patch
+tests and real desktop acceptance remain release gates. The earlier Windows
+artifact with patch `70afdffd…` passed 17 native Qt results and all six CTest
+suites; that result does not certify this updated patch until its next native CI run. The common patch
 includes the Windows private-file creation correction; it inherits the private
 profile ACL instead of translating POSIX permissions through Qt on Windows.
 
@@ -58,7 +60,9 @@ profile ACL instead of translating POSIX permissions through Qt on Windows.
 - Fresh certificates bind node and session identities. A consumed profile cannot
   restart; loss of an adopted peer, backend consent or live event loop is terminal.
 - The first supported topology has a Windows primary and Linux clients using
-  X11 or Wayland. Wayland still requires the local portal consent.
+  X11 or Wayland. Wayland still requires the local portal consent. Readiness requires resumed
+  keyboard, relative-pointer (buttons/wheel) and absolute-pointer devices. A
+  pause/removal of any required device after readiness revokes the session.
 - The external guardian must retain process-tree kill and independent leases:
   graceful pipe shutdown alone is insufficient when a peer stops reading.
 

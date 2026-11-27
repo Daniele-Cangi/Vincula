@@ -32,13 +32,28 @@ def task_fixture_script():
              (xml.replace("<Settings><Enabled>true", "<Settings><Enabled>false"), False),
              (xml.replace("<LogonTrigger><Enabled>true", "<LogonTrigger><Enabled>false"), False),
              (xml.replace("LeastPrivilege", "HighestAvailable"), False),
-             (xml.replace("<StopIfGoingOnBatteries>false", "<StopIfGoingOnBatteries>true"), False)]
+             (xml.replace("<StopIfGoingOnBatteries>false", "<StopIfGoingOnBatteries>true"), False),
+             (xml.replace("<RunLevel>LeastPrivilege</RunLevel>", ""), True),
+             (xml.replace("<RunLevel>LeastPrivilege</RunLevel>", "<RunLevel/>"), False),
+             (xml.replace("<RunLevel>LeastPrivilege</RunLevel>", "<RunLevel>LeastPrivilege</RunLevel><RunLevel>HighestAvailable</RunLevel>"), False),
+             (xml.replace("<UserId>S-1-5-21-1-2-3-1001</UserId>", "<UserId>S-1-5-21-1-2-3-1002</UserId>", 1), False),
+             (xml.replace("<UserId>S-1-5-21-1-2-3-1001</UserId>", "", 1), False),
+             (xml.replace("<UserId>S-1-5-21-1-2-3-1001</UserId>", "<UserId>S-invalid</UserId>", 1), False)]
     data = base64.b64encode(json.dumps({"config": config, "cases": [{"xml": text, "accept": accepted}
                                           for text, accepted in cases]}).encode()).decode()
     return session.TASK_ASSERT + "\n$ErrorActionPreference='Stop'\n" + \
         "$data=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + data + "')) | ConvertFrom-Json\n" + \
         "$count=0;foreach($case in $data.cases){$accepted=$true;try{Assert-VinculaDesktopTask ([xml]$case.xml) $data.config}catch{$accepted=$false};" + \
         "if($accepted -ne $case.accept){throw 'Unexpected task acceptance'};$count++};" + \
+        "$identity=[Security.Principal.WindowsIdentity]::GetCurrent();$sid=$identity.User.Value;" + \
+        "$account=[Security.SecurityElement]::Escape($identity.Name);" + \
+        "$c=@{sid=$sid;python=$data.config.python;arguments=$data.config.arguments;root=$data.config.root};" + \
+        "$native=$data.cases[0].xml.Replace('S-1-5-21-1-2-3-1001',$sid);" + \
+        "$asAccount='<UserId>'+$account+'</UserId>';$asSid='<UserId>'+$sid+'</UserId>';" + \
+        "$trigger=[xml]$native;$trigger.SelectSingleNode('//*[local-name()=\"LogonTrigger\"]/*[local-name()=\"UserId\"]').InnerText=$identity.Name;" + \
+        "Assert-VinculaDesktopTask $trigger $c;$count++;" + \
+        "$both=$native.Replace($asSid,$asAccount);Assert-VinculaDesktopTask ([xml]$both) $c;$count++;" + \
+        "$omitted=$both.Replace('<RunLevel>LeastPrivilege</RunLevel>','');Assert-VinculaDesktopTask ([xml]$omitted) $c;$count++;" + \
         "@{passed=$true;cases=$count;registered_tasks=0}|ConvertTo-Json -Compress\n"
 
 
@@ -50,7 +65,7 @@ class NativeTaskDefinitionTests(unittest.TestCase):
                                  base64.b64encode(bootstrap.encode("utf-16le")).decode()],
                                 input=task_fixture_script().encode(), capture_output=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
-        self.assertEqual(json.loads(result.stdout.decode("utf-8-sig")), {"passed": True, "cases": 8, "registered_tasks": 0})
+        self.assertEqual(json.loads(result.stdout.decode("utf-8-sig")), {"passed": True, "cases": 17, "registered_tasks": 0})
 
 
 class BundleTests(unittest.TestCase):

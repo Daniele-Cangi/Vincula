@@ -33,7 +33,9 @@ class DesktopLayoutTests(unittest.TestCase):
         for node_id, neighbors in result["links"].items():
             for direction, peer in neighbors.items():
                 self.assertEqual(result["links"][peer][opposites[direction]], node_id)
-        self.assertEqual(result["layout"].count("section: screens"), 1)
+        self.assertNotIn("section: screens", result["layout"])
+        for name in result["names"].values():
+            self.assertEqual(result["server_options"]["computer_" + name], {"name": name})
         self.assertNotIn("Untrusted", result["layout"])
         self.assertEqual(result["names"][self.ids[0]], "vincula-" + self.ids[0])
         self.assertTrue(result["server_options"]["security"]["checkPeerFingerprints"])

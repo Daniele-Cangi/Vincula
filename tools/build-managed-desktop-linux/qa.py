@@ -19,7 +19,7 @@ import sys
 import tempfile
 import uuid
 
-EXPECTED_PATCH = "70afdffdba804e5bc95644f7ac27b24f8815857426d6737577d3d3e47d18ea5a"
+EXPECTED_PATCH = "654f8ed741cb5042bc02e0c68d1de5d4924bfaac06c01a1d2c395dfe075dc37c"
 
 
 def qualify_source(manifest, contract):

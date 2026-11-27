@@ -20,8 +20,8 @@ import sys
 import tarfile
 
 UPSTREAM = "081f6478e654a112168879e67a41ce7d7e4ae3af"
-PATCH = "70afdffdba804e5bc95644f7ac27b24f8815857426d6737577d3d3e47d18ea5a"
-BINARY = "9a351ea90ab5fe1afb5a1cea1591a4e450351d754631a6ec5e1e7bad673f2785"
+PATCH = "654f8ed741cb5042bc02e0c68d1de5d4924bfaac06c01a1d2c395dfe075dc37c"
+BINARY = "7f01e328849496b5042399672c5bf452a751997c3698ad407af17a8c3ec55837"
 EPOCH = 1795737600  # 2026-11-27T00:00:00Z, deterministic archive metadata.
 BASE_LIBS = {"libc.so.6", "libm.so.6", "libdl.so.2", "libpthread.so.0", "librt.so.1", "ld-linux-x86-64.so.2"}
 PLUGINS = (
@@ -161,7 +161,7 @@ def freeze(args, roots):
     files.update(licenses)
     files["source/VINCULA-MANAGED-BUILD.txt"] = source_ref(roots, source / "VINCULA-MANAGED-BUILD.txt")
     files["source/vincula-managed-v1.patch"] = source_ref(roots, patch)
-    lock = {"schema_version": 1, "package_version": "1.27.0-vincula-managed-v1-linux-x86_64-20261127-acl1",
+    lock = {"schema_version": 1, "package_version": "1.27.0-vincula-managed-v1-linux-x86_64-20261127-eis1",
             "upstream_commit": UPSTREAM, "patch_sha256": PATCH, "input_binary_sha256": BINARY,
             "patchelf_sha256": sha(args.patchelf), "patchelf_version": run([args.patchelf, "--version"]).decode().strip(),
             "epoch": EPOCH, "files": files, "packages": packages,

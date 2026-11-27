@@ -36,9 +36,7 @@ def compile_layout(registry):
         raise ValueError("Unreachable desktop screens: " + missing
                          + ". Use adjacent grid cells; diagonals and gaps are not links.")
     names = {member.node_id: "vincula-" + member.node_id for member in members}
-    lines = ["section: screens"]
-    lines.extend(" " + names[member.node_id] + ":" for member in members)
-    lines.extend(("end", "section: links"))
+    lines = ["section: links"]
     for member in members:
         lines.append(" " + names[member.node_id] + ":")
         for direction, target in links[member.node_id].items():
@@ -50,7 +48,8 @@ def compile_layout(registry):
                 "core": {"computerName": names[desktop.primary], "interface": "127.0.0.1", "port": 24800},
                 "server": {"externalConfig": True, "protocol": "barrier", "enableClipboard": desktop.clipboard,
                            "clipboardSize": 3 if desktop.clipboard else 0},
-                "security": {"tlsEnabled": True, "checkPeerFingerprints": True}},
+                "security": {"tlsEnabled": True, "checkPeerFingerprints": True},
+                **{"computer_" + name: {"name": name} for name in names.values()}},
             "launchable": False}
 
 

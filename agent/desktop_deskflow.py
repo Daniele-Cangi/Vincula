@@ -179,7 +179,9 @@ def _ini_string(value):
 def _layout(group):
     positions = {(screen.x, screen.y): screen.node_id for screen in group.screens}
     names = {screen.node_id: "vincula-" + screen.node_id for screen in group.screens}
-    lines = ["section: screens", *(" " + names[screen.node_id] + ":" for screen in group.screens), "end", "section: links"]
+    # Deskflow 1.27 loads computer names from the general INI configuration;
+    # its legacy `screens` section is ignored by the actual Config parser.
+    lines = ["section: links"]
     for screen in group.screens:
         lines.append(" " + names[screen.node_id] + ":")
         for direction, dx, dy in DIRECTIONS:
@@ -244,6 +246,10 @@ def compile_profile(group, node_id, artifact, paths, network):
         sections += ["", "[server]"]
     sections += ["protocol=barrier", "enableClipboard=" + str(group.clipboard).lower(),
                  "clipboardSize=" + ("3" if group.clipboard else "0")]
+    if primary:
+        for screen in group.screens:
+            name = "vincula-" + screen.node_id
+            sections += ["", "[computer_" + name + "]", "name=" + _ini_string(name)]
     files[SETTINGS_FILENAME] = "\n".join([*sections, ""])
     return PreparedProfile(node_id, group.session_id, group.digest, "primary" if primary else "client",
                            (str(engine), "server" if primary else "client", "--settings", str(settings)), tuple(sorted(files.items())))

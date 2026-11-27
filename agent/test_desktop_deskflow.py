@@ -2,7 +2,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 from dataclasses import replace
+import configparser
+import json
+import os
 from pathlib import Path
+import subprocess
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
@@ -60,6 +65,15 @@ externalConfigFile="C:/Users/Admin/Vincula session/layout.conf"
 protocol=barrier
 enableClipboard=true
 clipboardSize=3
+
+[computer_vincula-{IDS[0]}]
+name="vincula-{IDS[0]}"
+
+[computer_vincula-{IDS[1]}]
+name="vincula-{IDS[1]}"
+
+[computer_vincula-{IDS[2]}]
+name="vincula-{IDS[2]}"
 ''')
         self.assertEqual(files["tls/trusted-clients"], "v2:sha256:" + "2" * 64 + "\nv2:sha256:" + "3" * 64 + "\n")
         self.assertEqual(files["tls/trusted-servers"], "")
@@ -81,6 +95,7 @@ clipboardSize=3
         self.assertEqual(files["tls/trusted-servers"], "v2:sha256:" + "1" * 64 + "\n")
         self.assertEqual(files["tls/trusted-clients"], "")
         self.assertNotIn("externalConfig", files["Deskflow.conf"])
+        self.assertNotIn("[computer_", files["Deskflow.conf"])
 
     def test_clipboard_off_is_explicit_for_every_role(self):
         manifest = group(False)
@@ -97,12 +112,59 @@ clipboardSize=3
         manifest = group(count=4)
         result = compile_profile(manifest, IDS[0], artifact(), paths(), NetworkProfile("192.0.2.1", 24800))
         files = dict(result.files)
-        self.assertEqual(files["layout.conf"].count("section: screens"), 1)
+        self.assertNotIn("section: screens", files["layout.conf"])
+        ini = configparser.ConfigParser()
+        ini.read_string(files["Deskflow.conf"])
+        computer_sections = {name for name in ini.sections() if name.startswith("computer_")}
+        self.assertEqual(computer_sections, {"computer_vincula-" + node for node in IDS[:4]})
         for node in IDS[:4]:
             self.assertIn(" vincula-" + node + ":", files["layout.conf"])
+            self.assertEqual(ini["computer_vincula-" + node]["name"], '"vincula-' + node + '"')
         self.assertIn("  left = vincula-" + IDS[2], files["layout.conf"])
         self.assertIn("  right = vincula-" + IDS[3], files["layout.conf"])
         self.assertEqual(len(files["tls/trusted-clients"].splitlines()), 3)
+
+    @unittest.skipUnless(os.environ.get("VINCULA_DESKFLOW_CONFIG_PROBE"), "Native Deskflow Config parser probe not selected")
+    def test_generated_profile_passes_actual_deskflow_config_parser(self):
+        probe = Path(os.environ["VINCULA_DESKFLOW_CONFIG_PROBE"])
+        self.assertTrue(probe.is_absolute() and probe.is_file())
+        manifest = group(count=4)
+        with TemporaryDirectory(prefix="vincula-config-parser-") as directory:
+            root = Path(directory)
+            result = compile_profile(manifest, IDS[0], artifact(),
+                LocalPaths("linux", "/opt/vincula-engine", str(root), str(root / "tls/identity.pem")),
+                NetworkProfile("192.0.2.1", 24800))
+            files = dict(result.files)
+            settings, layout = root / "Deskflow.conf", root / "layout.conf"
+            settings.write_text(files[settings.name], encoding="utf-8")
+            layout.write_text(files[layout.name], encoding="utf-8")
+            environment = dict(os.environ, XDG_CONFIG_HOME=str(root / "config"),
+                XDG_DATA_HOME=str(root / "data"), XDG_CACHE_HOME=str(root / "cache"),
+                XDG_STATE_HOME=str(root / "state"))
+            for name in ("DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "QT_QPA_PLATFORM"):
+                environment.pop(name, None)
+            completed = subprocess.run([str(probe), str(settings), str(layout)], capture_output=True,
+                                       timeout=10, env=environment)
+            self.assertEqual(completed.returncode, 0, completed.stderr.decode("utf-8", "replace"))
+            parsed = json.loads(completed.stdout)
+            self.assertEqual(set(parsed["computers"]), {"vincula-" + node for node in IDS[:4]})
+            expected = {"vincula-" + node: {} for node in IDS[:4]}
+            positions = {(screen.x, screen.y): screen.node_id for screen in manifest.screens}
+            for screen in manifest.screens:
+                for direction, dx, dy in (("left", -1, 0), ("right", 1, 0), ("up", 0, -1), ("down", 0, 1)):
+                    target = positions.get((screen.x + dx, screen.y + dy))
+                    if target is not None:
+                        expected["vincula-" + screen.node_id][direction] = "vincula-" + target
+            self.assertEqual(parsed["links"], expected)
+            # Real parser must still reject the old profile even though it lists
+            # all names in the obsolete layout `screens` section.
+            legacy_settings = files[settings.name].split("\n[computer_")[0]
+            settings.write_text(legacy_settings, encoding="utf-8")
+            legacy_screens = "section: screens\n" + "".join(" vincula-" + node + ":\n" for node in IDS[:4]) + "end\n"
+            layout.write_text(legacy_screens + files[layout.name], encoding="utf-8")
+            rejected = subprocess.run([str(probe), str(settings), str(layout)], capture_output=True,
+                                      timeout=10, env=environment)
+            self.assertNotEqual(rejected.returncode, 0)
 
     def test_unicode_spaces_and_quotes_stay_data_in_argv_and_ini(self):
         local = LocalPaths("linux", "/opt/engine's build", '/home/test/Schermo "à"', '/home/test/identity "à".pem')

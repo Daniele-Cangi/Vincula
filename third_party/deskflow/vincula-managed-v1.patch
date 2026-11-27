@@ -310,10 +310,10 @@ index 9e3607bf..0dea6dee 100644
    PUBLIC
 diff --git a/src/lib/common/ManagedSession.cpp b/src/lib/common/ManagedSession.cpp
 new file mode 100644
-index 00000000..9e0289ff
+index 00000000..58142296
 --- /dev/null
 +++ b/src/lib/common/ManagedSession.cpp
-@@ -0,0 +1,529 @@
+@@ -0,0 +1,533 @@
 +/*
 + * SPDX-FileCopyrightText: (C) 2026 Daniele Cangi
 + * SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-OpenSSL-Exception
@@ -785,6 +785,10 @@ index 00000000..9e0289ff
 +  return !m_revoked && (!m_loopRequired || m_loopReady) && m_clipboard && m_facts.value("clipboard_provider")
 +      && (m_graphics != "wayland" || m_facts.value("portal_clipboard"));
 +}
++void ManagedSession::eisDevices(bool keyboardResumed, bool pointerResumed, bool absoluteResumed)
++{
++  fact("eis_devices", keyboardResumed && pointerResumed && absoluteResumed);
++}
 +void ManagedSession::fact(const QString &name, bool value)
 +{
 +  if (!m_active) return;
@@ -845,10 +849,10 @@ index 00000000..9e0289ff
 +} // namespace deskflow
 diff --git a/src/lib/common/ManagedSession.h b/src/lib/common/ManagedSession.h
 new file mode 100644
-index 00000000..8bcb2b20
+index 00000000..51c6d4ff
 --- /dev/null
 +++ b/src/lib/common/ManagedSession.h
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,102 @@
 +/*
 + * SPDX-FileCopyrightText: (C) 2026 Daniele Cangi
 + * SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-OpenSSL-Exception
@@ -903,6 +907,7 @@ index 00000000..8bcb2b20
 +  void shutdown();
 +  void graphics(const QString &backend);
 +  void fact(const QString &name, bool value);
++  void eisDevices(bool keyboardResumed, bool pointerResumed, bool absoluteResumed);
 +  bool allowsPeer(const QString &screenName, const QString &fingerprint) const;
 +  bool allowsFingerprint(const QString &fingerprint) const;
 +  bool peerReady(const QString &screenName, const QString &fingerprint);
@@ -1146,7 +1151,7 @@ index 79d9f26b..b16cfb50 100644
    std::unique_ptr<Ssl> m_ssl;
    bool m_secureReady = false;
 diff --git a/src/lib/platform/EiComputer.cpp b/src/lib/platform/EiComputer.cpp
-index 80b16332..4a3a6373 100644
+index 80b16332..a095498e 100644
 --- a/src/lib/platform/EiComputer.cpp
 +++ b/src/lib/platform/EiComputer.cpp
 @@ -12,6 +12,7 @@
@@ -1245,7 +1250,7 @@ index 80b16332..4a3a6373 100644
    LOG_DEBUG("removing device %s", ei_device_get_name(device));
  
    bool wasTracked = false;
-@@ -686,6 +707,13 @@ void EiComputer::removeDevice(struct ei_device *device)
+@@ -686,6 +707,14 @@ void EiComputer::removeDevice(struct ei_device *device)
    }
  
    updateShape();
@@ -1255,11 +1260,12 @@ index 80b16332..4a3a6373 100644
 +void EiComputer::updateManagedDevices()
 +{
 +  const auto active = [this](ei_device *device) { return device && m_managedActiveDevices.contains(device); };
-+  deskflow::ManagedSession::instance().fact("eis_devices", active(m_eiKeyboard) && active(m_eiAbs));
++  // Buttons, wheel and relative motion use m_eiPointer, not m_eiAbs.
++  deskflow::ManagedSession::instance().eisDevices(active(m_eiKeyboard), active(m_eiPointer), active(m_eiAbs));
  }
  
  void EiComputer::sendEvent(EventTypes type, void *data)
-@@ -933,13 +961,19 @@ void EiComputer::handleConnectedToEisEvent(const Event &event)
+@@ -933,13 +962,19 @@ void EiComputer::handleConnectedToEisEvent(const Event &event)
    LOG_DEBUG("eis connection established, fd=%d", fd);
  
    auto rc = ei_setup_backend_fd(m_ei, fd);
@@ -1279,7 +1285,7 @@ index 80b16332..4a3a6373 100644
    // Portal may or may not EI_EVENT_DISCONNECT us before sending the DBus Closed
    // signal. Let's clean up either way.
    LOG_DEBUG("eis handling portal session closed");
-@@ -963,6 +997,7 @@ void EiComputer::handleSystemEvent(const Event &)
+@@ -963,6 +998,7 @@ void EiComputer::handleSystemEvent(const Event &)
  
      switch (type) {
      case EI_EVENT_CONNECT:
@@ -1287,7 +1293,7 @@ index 80b16332..4a3a6373 100644
        LOG_DEBUG("connected to eis");
        break;
      case EI_EVENT_SEAT_ADDED:
-@@ -992,6 +1027,11 @@ void EiComputer::handleSystemEvent(const Event &)
+@@ -992,6 +1028,11 @@ void EiComputer::handleSystemEvent(const Event &)
        }
        break;
      case EI_EVENT_DISCONNECT:
@@ -1299,7 +1305,7 @@ index 80b16332..4a3a6373 100644
        // We're using libei which emulates the various seat/device remove events
        // so by the time we get here our EiComputer should be in a neutral state.
        //
-@@ -1011,6 +1051,8 @@ void EiComputer::handleSystemEvent(const Event &)
+@@ -1011,6 +1052,8 @@ void EiComputer::handleSystemEvent(const Event &)
        this->handlePortalSessionClosed();
        break;
      case EI_EVENT_DEVICE_PAUSED:
@@ -1308,7 +1314,7 @@ index 80b16332..4a3a6373 100644
        LOG_DEBUG("device %s is paused", ei_device_get_name(device));
        m_isEmulating = false;
        // a paused device is reset to neutral by the EIS side and sends no
-@@ -1019,6 +1061,8 @@ void EiComputer::handleSystemEvent(const Event &)
+@@ -1019,6 +1062,8 @@ void EiComputer::handleSystemEvent(const Event &)
        cancelIdleEmulationTimer();
        break;
      case EI_EVENT_DEVICE_RESUMED:
@@ -1881,10 +1887,10 @@ index 7a2fd3f2..745de797 100644
    DEPENDS common
 diff --git a/src/unittests/common/ManagedSessionTests.cpp b/src/unittests/common/ManagedSessionTests.cpp
 new file mode 100644
-index 00000000..f17cc6c1
+index 00000000..679e5a5e
 --- /dev/null
 +++ b/src/unittests/common/ManagedSessionTests.cpp
-@@ -0,0 +1,380 @@
+@@ -0,0 +1,404 @@
 +/*
 + * SPDX-FileCopyrightText: (C) 2026 Daniele Cangi
 + * SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-OpenSSL-Exception
@@ -2056,12 +2062,36 @@ index 00000000..f17cc6c1
 +}
 +void ManagedSessionTests::requiresActualWaylandFacts()
 +{
++  // Exercise the same device-fact entry point as EiComputer: in particular,
++  // keyboard + absolute pointer alone cannot implement buttons or wheel.
++  for (int resumed = 0; resumed < 8; ++resumed) {
++    ManagedSession devices; devices.load(bootstrap(false, false)); devices.graphics("wayland");
++    for (const auto key : {"portal_started", "portal_keyboard", "portal_pointer", "eis_setup", "eis_connected", "eis_enabled"})
++      devices.fact(key, true);
++    devices.eisDevices(resumed & 1, resumed & 2, resumed & 4);
++    QCOMPARE(state(devices)["input_ready"].toBool(), resumed == 7);
++    QVERIFY(!state(devices)["revoked"].toBool());
++  }
++  // Once adopted as ready, pausing any one of the three devices is terminal.
++  for (const auto paused : {1, 2, 4}) {
++    ManagedSession devices; devices.load(bootstrap(false, false)); devices.graphics("wayland");
++    for (const auto key : {"portal_started", "portal_keyboard", "portal_pointer", "eis_setup", "eis_connected", "eis_enabled"})
++      devices.fact(key, true);
++    devices.eisDevices(true, true, true);
++    QVERIFY(state(devices)["input_ready"].toBool());
++    devices.eisDevices(paused != 1, paused != 2, paused != 4);
++    devices.eisDevices(true, true, true);
++    QVERIFY(state(devices)["revoked"].toBool());
++    QVERIFY(!state(devices)["input_ready"].toBool());
++    QCOMPARE(state(devices)["reason"].toString(), QString("graphical_backend_revoked"));
++  }
 +  ManagedSession s; s.load(bootstrap(true, false)); s.graphics("wayland");
-+  for (const auto key : {"portal_started", "portal_keyboard", "portal_pointer", "eis_setup", "eis_connected", "eis_devices", "eis_enabled"})
++  for (const auto key : {"portal_started", "portal_keyboard", "portal_pointer", "eis_setup", "eis_connected", "eis_enabled"})
 +    s.fact(key, true);
++  s.eisDevices(true, true, true);
 +  QVERIFY(state(s)["input_ready"].toBool()); QVERIFY(!state(s)["clipboard_ready"].toBool());
 +  s.fact("clipboard_provider", true); s.fact("portal_clipboard", true); QVERIFY(state(s)["clipboard_ready"].toBool());
-+  s.fact("eis_devices", false); s.fact("eis_devices", true); QVERIFY(state(s)["revoked"].toBool());
++  s.eisDevices(true, false, true); s.eisDevices(true, true, true); QVERIFY(state(s)["revoked"].toBool());
 +}
 +void ManagedSessionTests::provisionIsExclusiveAndSessionSpecific()
 +{
