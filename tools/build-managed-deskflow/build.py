@@ -57,6 +57,34 @@ def run_command(command, reports, environment, *, cwd=None):
     return "".join(output).strip()
 
 
+
+def native_cmake_options(inputs):
+    return ["-G", "Visual Studio 17 2022", "-A", "x64", "-T", "v143,version=" + inputs["msvc_toolset"],
+            "-DCMAKE_SYSTEM_VERSION=" + inputs["windows_sdk"], "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_CXX_FLAGS_INIT=/Brepro /utf-8 /GR", "-DCMAKE_EXE_LINKER_FLAGS_INIT=/Brepro"]
+
+
+def probe_native_toolchain(run, cmake, work, inputs):
+    source, build = work / "toolchain-probe-src", work / "toolchain-probe-build"
+    source.mkdir()
+    (source / "CMakeLists.txt").write_text(
+        "cmake_minimum_required(VERSION 3.24)\nproject(VinculaMsvcProbe LANGUAGES CXX)\n"
+        "set(CMAKE_CXX_STANDARD 20)\nset(CMAKE_CXX_STANDARD_REQUIRED ON)\n"
+        "add_executable(vincula-msvc-probe probe.cpp)\n", encoding="ascii")
+    (source / "probe.cpp").write_text(
+        '#include <stdexcept>\n#ifndef _CPPUNWIND\n#error C++ exception unwinding is required\n#endif\n'
+        '#ifndef _CPPRTTI\n#error C++ RTTI is required\n#endif\n'
+        'struct Base { virtual ~Base() = default; }; struct Derived : Base {};\n'
+        'int main() { Derived object; Base *base = &object;\n'
+        'if (dynamic_cast<Derived *>(base) != &object) return 2;\n'
+        'try { throw std::runtime_error("native probe"); }\n'
+        'catch (const std::runtime_error &) { return 0; } return 3; }\n', encoding="ascii")
+    run([cmake, "-S", source, "-B", build, *native_cmake_options(inputs)])
+    verify_cpp_flags(build / "CMakeCache.txt")
+    run([cmake, "--build", build, "--config", "Release", "--target", "vincula-msvc-probe"])
+    run([build / "Release/vincula-msvc-probe.exe"])
+
+
 def sha256(path):
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
@@ -118,7 +146,7 @@ def verify_configured_version(cache, version):
 def verify_cpp_flags(cache):
     values = re.findall(r"^CMAKE_CXX_FLAGS:STRING=(.*)$", cache.read_text(encoding="utf-8"), re.MULTILINE)
     if len(values) != 1 or not {"/EHsc", "/GR", "/utf-8", "/Brepro"} <= set(values[0].split()):
-        raise ValueError("Preserve MSVC exception unwinding/RTTI defaults and the approved UTF-8/repro flags")
+        raise ValueError("Preserve MSVC exception unwinding/RTTI defaults and the approved UTF-8/repro flags: " + repr(values))
     return values[0]
 
 
@@ -195,6 +223,7 @@ def main():
     unpack_zip(paths["cmake"], cmake_root)
     cmake = cmake_root / "cmake-4.2.3-windows-x86_64/bin/cmake.exe"
     ctest = cmake.with_name("ctest.exe")
+    probe_native_toolchain(run, cmake, work, inputs)
     perl_root = work / "perl"
     unpack_zip(paths["perl"], perl_root)
     perl = perl_root / "perl/bin/perl.exe"
@@ -235,12 +264,10 @@ def main():
     run([nmake, "/NOLOGO", "install_sw"], cwd=ssl_source)
     environment["PATH"] = str(ssl / "bin") + os.pathsep + environment["PATH"]
     build = work / "build"
-    run([cmake, "-S", source, "-B", build, "-G", "Visual Studio 17 2022", "-A", "x64",
-         "-T", "v143,version=" + inputs["msvc_toolset"], "-DCMAKE_SYSTEM_VERSION=" + inputs["windows_sdk"],
+    run([cmake, "-S", source, "-B", build, *native_cmake_options(inputs),
          "-DQt6_DIR=" + str(qt / "lib/cmake/Qt6"), "-DOPENSSL_ROOT_DIR=" + str(ssl),
          "-DOPENSSL_INCLUDE_DIR=" + str(ssl / "include"), "-DOPENSSL_CRYPTO_LIBRARY=" + str(ssl / "lib/libcrypto.lib"),
          "-DOPENSSL_SSL_LIBRARY=" + str(ssl / "lib/libssl.lib"), "-DOPENSSL_USE_STATIC_LIBS=OFF",
-         "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_CXX_FLAGS_INIT=/Brepro /utf-8", "-DCMAKE_EXE_LINKER_FLAGS_INIT=/Brepro",
          "-DBUILD_GUI=OFF", "-DBUILD_INSTALLER=OFF", "-DBUILD_TESTS=ON", "-DSKIP_BUILD_TESTS=ON"])
     compiled_version = verify_configured_version(build / "CMakeCache.txt", inputs["version"])
     cpp_flags = verify_cpp_flags(build / "CMakeCache.txt")
@@ -302,6 +329,7 @@ def main():
         "nmake_sha256": sha256(nmake), "cmake_sha256": sha256(cmake), "perl_sha256": sha256(perl),
         "python_sha256": sha256(sys.executable), "git_sha256": sha256(shutil.which("git.exe")),
         "runner_image": os.environ.get("ImageVersion", "unknown"), "openssl_no_asm": True,
+        "native_toolchain_probe_passed": True,
         "native_managed_qt_results": managed_count, "native_ctest_suites": list(TESTS),
         "sources": {path.name: sha256(path) for path in sorted(sources.iterdir())},
         "recipe_sha256": sha256(Path(__file__)),

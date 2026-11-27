@@ -19,7 +19,7 @@ import sys
 import tempfile
 import uuid
 
-EXPECTED_PATCH = "b7c51d981fda6aee2e4e0bc7f05a4fb7de9281e62fa0d98093ad72d1261dd7dc"
+EXPECTED_PATCH = "70afdffdba804e5bc95644f7ac27b24f8815857426d6737577d3d3e47d18ea5a"
 
 
 def qualify_source(manifest, contract):
@@ -37,6 +37,7 @@ def contract_regressions(manifest, contract):
         replace(manifest, upstream_repository=contract.UPSTREAM_REPOSITORY + ".git"),
         replace(manifest, upstream_commit="0" * 40), replace(manifest, version="0.0.0"),
         replace(manifest, patch_sha256="0" * 64), replace(manifest, capabilities=()),
+        replace(manifest, patch_sha256="b7c51d981fda6aee2e4e0bc7f05a4fb7de9281e62fa0d98093ad72d1261dd7dc"),
     )
     for bad in incompatible:
         try:
@@ -137,7 +138,7 @@ def main():
             raise ValueError("Exclusive provisioning did not preserve the first identity")
         # No identity bytes or PEM path are emitted by this QA report.
     print(json.dumps({"passed": True, "manifest_sha256": args.manifest_pin, "verified_files": len(expected),
-                      "runtime_known_source": True, "source_contract_regressions": 5,
+                      "runtime_known_source": True, "source_contract_regressions": 6,
                       "runtime_profile_compilation": "in-memory client profile accepted",
                       "managed_patch_sha256": verified.manifest.patch_sha256,
                       "elf_files": len(elf_files), "resolved_sonames": len(dependencies),

@@ -10,7 +10,7 @@ on:
       - 'tools/build-managed-deskflow/**'
       - 'third_party/deskflow/**'
   push:
-    branches: [main, codex/desktop-multinode]
+    branches: [main]
     paths:
       - '.github/workflows/managed-deskflow.yml'
       - 'tools/build-managed-deskflow/**'

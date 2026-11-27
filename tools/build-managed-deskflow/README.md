@@ -3,9 +3,11 @@
 `.github/workflows/managed-deskflow.yml` builds **Windows x64** and runs headless
 native tests. It does not run `deskflow-core.exe`, provision desktop sessions,
 install software/services/firewall rules, publish releases or deploy to a PC.
-Pushes to `codex/desktop-multinode` and relevant pull requests can start this build;
+Relevant pull requests and pushes to `main` can start this build;
 `workflow_dispatch` is also available once GitHub registers the workflow.
-Concurrency preserves an active build and keeps only the latest pending build.
+Development branches build through their pull request, avoiding a duplicate
+push/PR pair for the same commit. Concurrency preserves an active build and keeps
+only the latest pending build.
 Pull-request path filters inspect the entire PR diff, so later unrelated pushes
 can queue another build; they must not interrupt a useful native compilation.
 
@@ -24,7 +26,8 @@ an immutable VM image. The recipe pins toolset `14.44.35207` and SDK
 and the runner image version. `/Brepro` is enabled for the core, but bit-identical
 builds across different runner images are **not** claimed. Custom flags use CMake
 `*_FLAGS_INIT`, preserving MSVC defaults; a cache guard requires exception
-unwinding (`/EHsc`) and RTTI (`/GR`). UTF-8 compilation is
+unwinding (`/EHsc`) and RTTI (`/GR`). `/GR` is explicitly added because modern
+CMake policy CMP0117 leaves default compiler RTTI implicit. UTF-8 compilation is
 explicit, including the Qt/Python interoperability cases.
 
 OpenSSL **3.5.9 LTS** is built directly with its official Windows MSVC recipe,
@@ -42,7 +45,10 @@ case (17 Qt results), including the real Windows ACL/CreatePipe fixture.
 The ACL regression verifies that inherited private Windows ACLs remain strict;
 Qt's explicit POSIX permission overload creates additional metadata trustees,
 so managed Windows files inherit and validate their private parent before data
-is written. POSIX files still use explicit `0600` permissions. These tests use
+is written. POSIX files still use explicit `0600` permissions.
+Before compiling OpenSSL, a tiny native console probe uses the same CMake options
+as the core and verifies exception-unwinding/RTTI macros, `dynamic_cast` and a
+throw/catch at runtime. Invalid flags fail before the expensive dependency build. These tests use
 QCoreApplication/synthetic backend facts; they do not grant portal consent, read
 user clipboard contents or inject input. A green build does not replace testing
 real desktop sessions on the three PCs.

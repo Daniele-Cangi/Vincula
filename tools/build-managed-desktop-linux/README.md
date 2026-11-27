@@ -9,7 +9,7 @@ ELF import with the loader's trace mode, relative RPATHs, and fresh
 headless certificate provisioning. Neither script reads a clipboard or sends input.
 
 The package is versioned as
-`1.27.0-vincula-managed-v1-linux-x86_64-20261127`. Its supported ABI candidate is
+`1.27.0-vincula-managed-v1-linux-x86_64-20261127-acl1`. Its supported ABI candidate is
 Linux x86_64 with glibc 2.43. Ubuntu 26.04 and Kali 2026.3 both provide this ABI.
 It bundles Qt **6.10.2** libraries and matching XCB/Wayland/TLS plugins; system Qt
 plugins are not a substitute. Every packaged ELF has a local `$ORIGIN` RPATH,
@@ -25,6 +25,7 @@ Use Python 3.11+, `ldd`, `readelf`, `dpkg-query`, `dpkg-deb`, Git, and patchelf
 ```sh
 python3 -B tools/build-managed-desktop-linux/build.py freeze \
   --source /absolute/deskflow-upstream \
+  --patch /absolute/vincula-managed-v1-aclfix.patch \
   --sdk /absolute/resolute-dev/sysroot \
   --portal /absolute/portal \
   --portal-sdk /absolute/stonking-apt/sysroot \
@@ -38,11 +39,14 @@ python3 -B tools/build-managed-desktop-linux/build.py package \
   --portal /absolute/portal \
   --patchelf /absolute/private-tools/patchelf \
   --lock /absolute/frozen-inputs/inputs.lock.json \
-  --output /absolute/repro-a/deskflow-managed-linux-x86_64-1.27.0-v1
+  --output /absolute/repro-a/deskflow-managed-linux-x86_64-1.27.0-v1-acl1
 ```
 
 `freeze` resolves only the explicitly chosen trusted SDK and system libraries,
 records their exact hashes and package versions, and refuses existing locks.
+The ACL-corrected source patch is pinned to
+`70afdffdba804e5bc95644f7ac27b24f8815857426d6737577d3d3e47d18ea5a`; QA also
+rejects the earlier patch even when its repository/commit are otherwise valid.
 Review and preserve this lock outside the artifact trust boundary. `package`
 does not resolve dependencies again: it verifies every frozen input and the
 patchelf executable before copying. Its new output path must not exist. Repeat
@@ -64,7 +68,7 @@ Run the bounded headless gate with that already-approved pin:
 
 ```sh
 python3 -I -B tools/build-managed-desktop-linux/qa.py \
-  --artifact /absolute/deskflow-managed-linux-x86_64-1.27.0-v1 \
+  --artifact /absolute/deskflow-managed-linux-x86_64-1.27.0-v1-acl1 \
   --manifest-pin APPROVED_SHA256 \
   --agent-source /absolute/vincula/agent \
   --profile-parent /absolute/private-qa/profiles

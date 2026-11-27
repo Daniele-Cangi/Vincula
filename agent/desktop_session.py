@@ -187,9 +187,10 @@ def task(operation):
     config = verify_installed()
     root = desktop_node.home()
     sid = desktop_security.WindowsSecurity().user_sid
-    request = {"operation": operation, "sid": sid, "python": config["python"], "root": str(root),
+    interpreter = windowless_interpreter(config["python"])
+    request = {"operation": operation, "sid": sid, "python": str(interpreter), "root": str(root),
                "arguments": subprocess.list2cmdline(["-IB", str(root / "desktop_session.py"), "serve"])}
-    require(not any(c in str(root) + config["python"] for c in ("%", "\r", "\n", "\0")),
+    require(not any(c in str(root) + str(interpreter) for c in ("%", "\r", "\n", "\0")),
             "Task paths cannot contain environment expansions or control characters.")
     command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand",
                base64.b64encode(TASK_SCRIPT.encode("utf-16le")).decode("ascii")]
@@ -197,6 +198,15 @@ def task(operation):
                             stderr=subprocess.DEVNULL, timeout=20, creationflags=subprocess.CREATE_NO_WINDOW)
     require(result.returncode == 0 and len(result.stdout) <= 4096, "Desktop task setup rejected or unconfirmed.")
     require(desktop_ssh.decode(result.stdout).get("ok") is True, "Desktop task setup failed.")
+
+
+def windowless_interpreter(python):
+    interpreter = Path(python).with_name("pythonw.exe")
+    info = interpreter.lstat()
+    require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+            and not getattr(info, "st_file_attributes", 0) & 0x400,
+            "Install the matching windowless Python interpreter before enabling the desktop task.")
+    return interpreter
 
 
 def user_manager_environment(runtime=None):

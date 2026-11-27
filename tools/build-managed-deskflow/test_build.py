@@ -60,6 +60,42 @@ class BuildArtifactTests(unittest.TestCase):
         cache.write_text("CMAKE_CXX_FLAGS:STRING=" + flags + "\n", encoding="utf-8")
         self.assertEqual(recipe.verify_cpp_flags(cache), flags)
 
+    def test_probe_rejects_bad_flags_before_any_compile(self):
+        calls = []
+
+        def run(command):
+            calls.append(command)
+            build = self.root / "toolchain-probe-build"
+            build.mkdir()
+            (build / "CMakeCache.txt").write_text("CMAKE_CXX_FLAGS:STRING=/Brepro /utf-8 /GR\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, "exception unwinding"):
+            recipe.probe_native_toolchain(run, "cmake", self.root, self.inputs)
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("--build", calls[0])
+
+    def test_probe_compiles_and_runs_console_only_with_shared_options(self):
+        calls = []
+
+        def run(command):
+            calls.append(command)
+            if "-S" in command:
+                build = self.root / "toolchain-probe-build"
+                build.mkdir()
+                (build / "CMakeCache.txt").write_text(
+                    "CMAKE_CXX_FLAGS:STRING=/Brepro /utf-8 /GR /EHsc\n", encoding="utf-8")
+
+        recipe.probe_native_toolchain(run, "cmake", self.root, self.inputs)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[0][-len(recipe.native_cmake_options(self.inputs)):], recipe.native_cmake_options(self.inputs))
+        self.assertIn("--build", calls[1])
+        self.assertEqual(Path(calls[2][0]).parts[-2:], ("Release", "vincula-msvc-probe.exe"))
+        code = (self.root / "toolchain-probe-src/probe.cpp").read_text()
+        self.assertIn("_CPPUNWIND", code)
+        self.assertIn("_CPPRTTI", code)
+        self.assertIn("dynamic_cast", code)
+        self.assertIn("catch (const std::runtime_error &)", code)
+
     def test_runtime_mutation_changes_manifest_pin(self):
         output = self.root / "manifest.json"
         original = recipe.write_artifact_manifest(self.engine, output, self.inputs)

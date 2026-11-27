@@ -54,6 +54,17 @@ class NativeTaskDefinitionTests(unittest.TestCase):
 
 
 class BundleTests(unittest.TestCase):
+    def test_background_task_requires_the_matching_windowless_interpreter(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            python = root / "python.exe"
+            python.write_bytes(b"synthetic console interpreter; never executed")
+            with self.assertRaises(OSError):
+                session.windowless_interpreter(python)
+            windowless = root / "pythonw.exe"
+            windowless.write_bytes(b"synthetic windowless interpreter; never executed")
+            self.assertEqual(session.windowless_interpreter(python), windowless)
+
     def test_fixed_allowlist_excludes_credentials_and_rejects_missing_source(self):
         with TemporaryDirectory() as temporary:
             source = Path(temporary)

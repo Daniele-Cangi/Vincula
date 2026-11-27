@@ -20,8 +20,8 @@ import sys
 import tarfile
 
 UPSTREAM = "081f6478e654a112168879e67a41ce7d7e4ae3af"
-PATCH = "b7c51d981fda6aee2e4e0bc7f05a4fb7de9281e62fa0d98093ad72d1261dd7dc"
-BINARY = "f6c4f637b5e57bf60a83c0b6d3f92efad9d1dfe510e7e0bd25590c22b44d8267"
+PATCH = "70afdffdba804e5bc95644f7ac27b24f8815857426d6737577d3d3e47d18ea5a"
+BINARY = "9a351ea90ab5fe1afb5a1cea1591a4e450351d754631a6ec5e1e7bad673f2785"
 EPOCH = 1795737600  # 2026-11-27T00:00:00Z, deterministic archive metadata.
 BASE_LIBS = {"libc.so.6", "libm.so.6", "libdl.so.2", "libpthread.so.0", "librt.so.1", "ld-linux-x86-64.so.2"}
 PLUGINS = (
@@ -81,7 +81,8 @@ def freeze(args, roots):
     source, sdk, portal = roots["source"], roots["sdk"], roots["portal"]
     binary = source / "build-vincula-x11/bin/deskflow-core"
     check_pin(binary, BINARY)
-    check_pin(source / "vincula-managed-v1.patch", PATCH)
+    patch = args.patch or source / "vincula-managed-v1.patch"
+    check_pin(patch, PATCH)
     if run(["git", "-C", source, "rev-parse", "HEAD"]).decode().strip() != UPSTREAM:
         raise ValueError("The source checkout must retain the pinned upstream HEAD.")
     plugin_root = sdk / "usr/lib/x86_64-linux-gnu/qt6/plugins"
@@ -158,9 +159,9 @@ def freeze(args, roots):
         licenses["licenses/deskflow/" + path.name] = source_ref(roots, path)
     files = {name: source_ref(roots, path) for name, path in selected.items()}
     files.update(licenses)
-    for name in ("VINCULA-MANAGED-BUILD.txt", "vincula-managed-v1.patch"):
-        files["source/" + name] = source_ref(roots, source / name)
-    lock = {"schema_version": 1, "package_version": "1.27.0-vincula-managed-v1-linux-x86_64-20261127",
+    files["source/VINCULA-MANAGED-BUILD.txt"] = source_ref(roots, source / "VINCULA-MANAGED-BUILD.txt")
+    files["source/vincula-managed-v1.patch"] = source_ref(roots, patch)
+    lock = {"schema_version": 1, "package_version": "1.27.0-vincula-managed-v1-linux-x86_64-20261127-acl1",
             "upstream_commit": UPSTREAM, "patch_sha256": PATCH, "input_binary_sha256": BINARY,
             "patchelf_sha256": sha(args.patchelf), "patchelf_version": run([args.patchelf, "--version"]).decode().strip(),
             "epoch": EPOCH, "files": files, "packages": packages,
@@ -228,6 +229,7 @@ def package(args, roots):
     (args.output / "source/deskflow-upstream.tar.gz").write_bytes(gzip.compress(source_tar, mtime=0))
     provenance = {key: lock[key] for key in ("package_version", "upstream_commit", "patch_sha256", "input_binary_sha256", "patchelf_sha256", "patchelf_version", "baseline")}
     provenance.update({"lock_sha256": sha(args.lock), "build_tool_sha256": sha(Path(__file__)), "packaging": "ELF RPATH is relative to bundled lib; qt.conf selects bundled Qt 6.10 plugins. No wrapper or global LD_LIBRARY_PATH.",
+                       "source_notes": "VINCULA-MANAGED-BUILD.txt records the original SDK/build procedure. The patch and input ELF pins in this provenance supersede its historical validation state.",
                        "scope": "Linux x86_64 private QA, Ubuntu Wayland / Kali X11 candidate; no desktop-session acceptance claim."})
     (args.output / "provenance.json").write_bytes(canonical(provenance))
     (args.output / "source/inputs.lock.json").write_bytes(args.lock.read_bytes())
@@ -255,6 +257,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("freeze", "package"))
     parser.add_argument("--source", required=True, type=Path)
+    parser.add_argument("--patch", type=Path, help="Exact pinned source patch (freeze only; defaults to source/vincula-managed-v1.patch)")
     parser.add_argument("--sdk", required=True, type=Path)
     parser.add_argument("--portal", required=True, type=Path)
     parser.add_argument("--portal-sdk", type=Path)
