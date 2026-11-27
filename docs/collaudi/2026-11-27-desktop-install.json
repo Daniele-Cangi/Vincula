@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "scope": "Build, artifact integrity, installation, real three-node readiness and explicitly manual input/clipboard qualification",
+  "pull_request": 26,
+  "windows": {
+    "native_ci_run": 46071926979,
+    "artifact_id": 15233507117,
+    "native_qt_results_passed": 17,
+    "native_ctest_suites_passed": 6,
+    "artifact_manifest_sha256": "ada23f4a0fbd3f2f6542c143f0072a95b3dfd7bae941015713fff3f1c546aba6",
+    "engine_sha256": "649a6c29f9fef54af3896972b5469b1671f52c240ba5247b134c87ab3edb4499",
+    "native_provision_passed": true,
+    "reused_profile_rejected": true,
+    "task_xml_fixtures_passed": 17,
+    "real_task_xml_validated": true,
+    "graphical_task": "InteractiveToken, LeastPrivilege, idle",
+    "firewall": "TCP24807, installed engine only, exact approved local/client addresses",
+    "limited_context_private_metadata_verified": true,
+    "private_key_bytes_read_for_metadata_test": false,
+    "installed_engine_build_commit": "c9b8943af8fed25f00525491c7b707113db95eee",
+    "installed_source_patch_sha256": "70afdffdba804e5bc95644f7ac27b24f8815857426d6737577d3d3e47d18ea5a",
+    "updated_source_native_ci": {
+      "run": 46077829185,
+      "commit": "aa96e357ab30ac67951a71902cddb19885ace83d",
+      "patch_sha256": "654f8ed741cb5042bc02e0c68d1de5d4924bfaac06c01a1d2c395dfe075dc37c",
+      "passed": true,
+      "installed_for_this_test": false
+    }
+  },
+  "linux": {
+    "artifact_manifest_sha256": "da6596758585aa286b67d9ce63a8b55e540341886bb1478b7892135f201a5dcc",
+    "engine_sha256": "5c70b4f3d85f4f55a88ad420b2e8115ae4e1fdef1475a65ea7efb75b4b39103e",
+    "artifact_tar_sha256": "3485a4a1798a26422da7e71f813f5c6f1199a94a75875e7e1c9eb5ccd5e0b3f5",
+    "installed_nodes": [
+      "ubuntu",
+      "kali"
+    ],
+    "native_qt_results_passed": 17,
+    "native_ctest_suites_passed": 6,
+    "graphical_supervisors": "Existing user bus/environment, idle",
+    "source_patch_sha256": "654f8ed741cb5042bc02e0c68d1de5d4924bfaac06c01a1d2c395dfe075dc37c",
+    "two_package_productions_byte_identical": true,
+    "installed_native_tls_provision_and_reuse_refusal_verified": true
+  },
+  "support_bundle_sha256": "b8fd2705c0db961d52be13b9e457afcf79e857351c5c6037ec1fdfdb5e1f9213",
+  "support_file_count": 16,
+  "layout": "Ubuntu(-1,0), Windows primary(0,0), Kali(1,0); clipboard enabled",
+  "other_catalog_fields_preserved": true,
+  "core_changed": false,
+  "reboot_required": false,
+  "live_keyboard_mouse_six_clipboard_directions": {
+    "operator_confirmed": true,
+    "origin_for_mouse_keyboard": "windows",
+    "click_and_wheel_included": true,
+    "clipboard_directions_confirmed": 6,
+    "automatic_panel_token_matches": 0,
+    "claim": "manual confirmation; not automatically verified clipboard matches"
+  },
+  "live_windows_stop_during_transfer": "passed; see 2026-11-27-desktop-transfer-stop.json",
+  "local_desktop_regression": {
+    "total": 187,
+    "passed": 180,
+    "windows_only_skipped_on_linux": 6,
+    "optional_native_parser_probe_not_selected_in_this_run": 1,
+    "separate_native_probe_adapter_tests_passed": 20,
+    "warnings": "error"
+  },
+  "vincula_support_commit": "aa96e357ab30ac67951a71902cddb19885ace83d",
+  "latest_common_source_patch_sha256": "654f8ed741cb5042bc02e0c68d1de5d4924bfaac06c01a1d2c395dfe075dc37c",
+  "gui_manifest_sha256": "5d65e432a1ec55aee800665c49303b196006984967d1d79b92240300402dbb7d",
+  "real_session_id": "127b0448-9313-4432-b9e2-1cf012da4402",
+  "all_three_recent_engine_attestations_observed": true,
+  "config_adapter": {
+    "actual_cpp_settings_and_config_parser_positive": true,
+    "legacy_format_negative": true,
+    "provider_started_by_parser_probe": false
+  },
+  "read_only_final_review": "No actionable P1/P2 findings in c9b8943..aa96e35; real stop test is separately observed"
+}

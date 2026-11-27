@@ -1,0 +1,44 @@
+{
+  "protocol": 1,
+  "product_exe_sha256": "a10537e94642680c265cb1f116db6a3ec6ab2ae6b9467935494228ecae88ab16",
+  "execution": "Vincula MCP execute_process Windows worker, preconfigured Limited account",
+  "job_id": "c91af788-10b1-4639-bce4-33085ccd8771",
+  "exit_code": 0,
+  "upload": {
+    "samples": 12,
+    "intermediate": true,
+    "completed_once_last": true,
+    "no_early_100": true,
+    "null_total_indeterminate": true,
+    "elapsed_ms": 10692,
+    "unknown_total_transferring": 0
+  },
+  "download": {
+    "samples": 14,
+    "intermediate": true,
+    "completed_once_last": true,
+    "no_early_100": true,
+    "null_total_indeterminate": true,
+    "elapsed_ms": 9588,
+    "unknown_total_transferring": 0
+  },
+  "bytes_each_direction": 1073741824,
+  "all_three_sha256": "8497aa7ddbf6be09e9c4b8fa1d583a06ca913532c4802f376ff93bc2b66648fc",
+  "gui_instantiated": false,
+  "clipboard_accessed": false,
+  "limitations": [
+    "Real transfers reported two unknown byte observations; both stayed indeterminate. A source-size metadata failure yielding an unknown total was not forced; unknown-total behavior is covered by the prior native fixture tests.",
+    "This exercises native public transport callbacks, not the visible GUI bar or another header-stop test. Those have separate evidence."
+  ],
+  "source_sha256": "6e3031f05f666d2f7acbd832966575fb1356ee9f1b5c82e57ec96675a33fe554",
+  "support_bundle_unchanged": "b8fd2705c0db961d52be13b9e457afcf79e857351c5c6037ec1fdfdb5e1f9213",
+  "native_fixture_checks": 30,
+  "render_font_sizes_pt": [
+    11,
+    18
+  ],
+  "header_stop_enabled_while_busy_in_fixture": true,
+  "gui_candidate_manifest_sha256": "b5eb279a6275308afabbe3e1332410aa23c27b07df1275d85e7388c7545b8b2a",
+  "gui_rollout": "Staged; awaiting close/reload of the existing Windows window",
+  "core_or_other_nodes_changed": false
+}

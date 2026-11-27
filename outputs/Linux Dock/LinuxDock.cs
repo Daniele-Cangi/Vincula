@@ -31,6 +31,81 @@ internal sealed class InputStopException : IOException
     public InputStopException(string message) : base(message) { }
 }
 
+public enum TransferPhase { Preparing, Transferring, Publishing, Completed, Failed }
+
+public sealed class TransferUpdate
+{
+    public readonly TransferPhase Phase;
+    public readonly long? Bytes, Total;
+    public TransferUpdate(TransferPhase phase, long? bytes, long? total)
+    { Phase = phase; Bytes = bytes; Total = total; }
+}
+
+public sealed class TransferProgressState
+{
+    public long Generation { get; private set; }
+    public TransferPhase Phase { get; private set; }
+    public long Bytes { get; private set; }
+    public long? Total { get; private set; }
+    public bool HasSample { get; private set; }
+    public bool Terminal { get { return Phase == TransferPhase.Completed || Phase == TransferPhase.Failed; } }
+    public long Begin()
+    {
+        Generation++; Phase = TransferPhase.Preparing; Bytes = 0; Total = null; HasSample = false;
+        return Generation;
+    }
+    public bool Accept(long generation, TransferUpdate update)
+    {
+        if (generation != Generation || Terminal || (int)update.Phase < (int)Phase)
+            return false;
+        Phase = update.Phase;
+        if (update.Total.HasValue)
+            Total = Math.Max(0, update.Total.Value);
+        HasSample = update.Bytes.HasValue;
+        if (HasSample)
+            Bytes = Math.Max(Bytes, Math.Max(0, update.Bytes.Value));
+        if (Total.HasValue)
+            Bytes = Math.Min(Bytes, Total.Value);
+        return true;
+    }
+    public int? Percent
+    {
+        get
+        {
+            if (Phase == TransferPhase.Completed) return 100;
+            if (!HasSample || !Total.HasValue || Phase == TransferPhase.Preparing) return null;
+            if (Total.Value == 0) return 0;
+            return Math.Min(99, (int)((decimal)Bytes * 100 / Total.Value));
+        }
+    }
+}
+
+public sealed class TransferSampler : IDisposable
+{
+    private readonly CancellationTokenSource stop = new CancellationTokenSource();
+    private readonly Thread worker;
+    public TransferSampler(Func<long?> observe, Action<long?> publish, int intervalMilliseconds = 1000)
+    {
+        worker = new Thread(() => {
+            while (!stop.IsCancellationRequested)
+            {
+                long? size = null;
+                try { size = observe(); } catch (Exception) { }
+                if (stop.IsCancellationRequested) break;
+                try { publish(size); } catch (Exception) { }
+                if (stop.Token.WaitHandle.WaitOne(intervalMilliseconds)) break;
+            }
+        }) { IsBackground = true, Name = "Vincula transfer progress" };
+        worker.Start();
+    }
+    public void Dispose()
+    {
+        stop.Cancel();
+        worker.Join(); // Called only on the transfer worker, never the UI thread.
+        stop.Dispose();
+    }
+}
+
 public static class DockTransport
 {
     private static readonly string Root = Path.Combine(
@@ -197,8 +272,30 @@ printf '\nDischi\n'
 df -h -x tmpfs -x devtmpfs -x squashfs --output=target,used,avail,pcent"));
     }
 
-    public static void Upload(string local, string remote)
+    private static void TransferReport(Action<TransferUpdate> progress, TransferPhase phase, long? bytes, long? total)
     {
+        if (progress != null)
+            try { progress(new TransferUpdate(phase, bytes, total)); } catch (Exception) { }
+    }
+
+    private static long? RemoteFileSize(string path)
+    {
+        try
+        {
+            string quoted = BashName(path);
+            string value = Success(Bash("if [ -f " + quoted + " ] && [ ! -L " + quoted
+                + " ]; then stat -c %s -- " + quoted + "; fi", 2));
+            long size;
+            return Int64.TryParse(value, out size) && size >= 0 ? (long?)size : null;
+        }
+        catch (Exception) { return null; } // Observability must not abort a valid transfer.
+    }
+
+    public static void Upload(string local, string remote) { Upload(local, remote, null); }
+
+    public static void Upload(string local, string remote, Action<TransferUpdate> progress)
+    {
+        TransferReport(progress, TransferPhase.Preparing, null, null);
         local = Path.GetFullPath(local);
         if (!File.Exists(local))
             throw new FileNotFoundException("Il file su Windows non esiste.", local);
@@ -207,13 +304,19 @@ df -h -x tmpfs -x devtmpfs -x squashfs --output=target,used,avail,pcent"));
             + ".linux-dock-" + Guid.NewGuid().ToString("N") + ".part";
         string target = BashName(remote);
         string temporary = BashName(stage);
+        long total = new FileInfo(local).Length;
+        TransferReport(progress, TransferPhase.Preparing, null, total);
         Success(Bash("if [ -e " + target + " ] || [ -L " + target
             + " ]; then echo 'Il file Linux di destinazione esiste gia.' >&2; exit 1; fi"));
         try
         {
-            Sftp("put " + SftpName(local.Replace('\\', '/')) + " " + SftpName(stage));
+            using (var sampler = progress == null ? null : new TransferSampler(
+                () => RemoteFileSize(stage), bytes => TransferReport(progress, TransferPhase.Transferring, bytes, total)))
+                Sftp("put " + SftpName(local.Replace('\\', '/')) + " " + SftpName(stage));
+            TransferReport(progress, TransferPhase.Publishing, null, total);
             Success(Bash("python3 - " + temporary + " " + target + " <<'DOCK_PUBLISH'\n"
                 + LinuxPublish + "DOCK_PUBLISH"));
+            TransferReport(progress, TransferPhase.Completed, total, total);
         }
         catch (Exception error)
         {
@@ -225,23 +328,37 @@ df -h -x tmpfs -x devtmpfs -x squashfs --output=target,used,avail,pcent"));
         }
     }
 
-    public static void Download(string remote, string local)
+    public static void Download(string remote, string local) { Download(remote, local, null); }
+
+    public static void Download(string remote, string local, Action<TransferUpdate> progress)
     {
+        TransferReport(progress, TransferPhase.Preparing, null, null);
         remote = LinuxFile(remote);
         local = Path.GetFullPath(local);
         if (File.Exists(local) || Directory.Exists(local))
             throw new IOException("Il file Windows di destinazione esiste già. Scegli un altro nome.");
         string temporary = Path.Combine(Path.GetDirectoryName(local),
             ".linux-dock-" + Guid.NewGuid().ToString("N") + ".part");
+        // One metadata query for the selected source. Progress observes only our local temporary file.
+        long? total = progress == null ? null : RemoteFileSize(remote);
+        TransferReport(progress, TransferPhase.Preparing, null, total);
+        long completedBytes;
         try
         {
-            Sftp("get " + SftpName(remote) + " " + SftpName(temporary.Replace('\\', '/')));
+            using (var sampler = progress == null ? null : new TransferSampler(
+                () => File.Exists(temporary) ? (long?)new FileInfo(temporary).Length : null,
+                bytes => TransferReport(progress, TransferPhase.Transferring, bytes, total)))
+                Sftp("get " + SftpName(remote) + " " + SftpName(temporary.Replace('\\', '/')));
+            long actual = new FileInfo(temporary).Length;
+            TransferReport(progress, TransferPhase.Publishing, actual, actual);
             File.Move(temporary, local);
+            completedBytes = actual;
         }
         finally
         {
             File.Delete(temporary);
         }
+        TransferReport(progress, TransferPhase.Completed, completedBytes, completedBytes);
     }
 
     public static DockResult Script(string local)
@@ -818,6 +935,10 @@ internal sealed class DockWindow : Form
     private readonly Label systemMetric = MetricValue();
     private readonly Label cpuMetric = MetricValue();
     private readonly Label ramMetric = MetricValue();
+    private readonly TransferProgressState transferState = new TransferProgressState();
+    private readonly Label transferStatus = new Label { AutoSize = true, ForeColor = Muted, Text = "Nessun trasferimento avviato." };
+    private readonly Label transferBytes = new Label { AutoSize = true, ForeColor = Muted, Text = "La conferma finale resterà visibile qui." };
+    private readonly TransferBar transferBar = new TransferBar();
     private bool busy;
     private bool nodesBusy;
     private bool nodesLoaded;
@@ -858,6 +979,44 @@ internal sealed class DockWindow : Form
         internal bool CloseInput, Writing, StopSent, InputClosed;
         internal bool CleanupComplete, Terminal, ProtocolFault;
         internal string State = "starting", Message = "Avvio del gruppo…";
+    }
+
+    private sealed class TransferBar : Control
+    {
+        private readonly System.Windows.Forms.Timer animation = new System.Windows.Forms.Timer { Interval = 90 };
+        private int offset;
+        internal bool Indeterminate;
+        internal int Percent;
+        internal TransferBar()
+        {
+            Height = 26; MinimumSize = new Size(80, 24); Dock = DockStyle.Fill;
+            AccessibleRole = AccessibleRole.ProgressBar;
+            AccessibleName = "Avanzamento trasferimento";
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+            animation.Tick += delegate { offset = (offset + 1) % 24; Invalidate(); };
+        }
+        internal void Display(int? percent, bool active)
+        {
+            Percent = percent ?? 0; Indeterminate = !percent.HasValue && active;
+            animation.Enabled = Indeterminate && Visible;
+            AccessibleDescription = Indeterminate ? "Avanzamento in verifica" : Percent + "%";
+            Invalidate();
+        }
+        protected override void OnVisibleChanged(EventArgs args)
+        { base.OnVisibleChanged(args); animation.Enabled = Indeterminate && Visible; }
+        protected override void OnPaint(PaintEventArgs args)
+        {
+            var bounds = new Rectangle(1, 1, Math.Max(0, Width - 2), Math.Max(0, Height - 2));
+            using (var background = new SolidBrush(Inset)) args.Graphics.FillRectangle(background, bounds);
+            int width = Indeterminate ? bounds.Width / 4 : (int)((long)bounds.Width * Percent / 100);
+            int left = Indeterminate ? (bounds.Width + width) * offset / 24 - width : 0;
+            args.Graphics.SetClip(bounds);
+            using (var fill = new SolidBrush(Cyan)) args.Graphics.FillRectangle(fill, bounds.X + left, bounds.Y, width, bounds.Height);
+            args.Graphics.ResetClip();
+            using (var border = new Pen(ControlBorder)) args.Graphics.DrawRectangle(border, 0, 0, Math.Max(0, Width - 1), Math.Max(0, Height - 1));
+        }
+        protected override void Dispose(bool disposing)
+        { if (disposing) animation.Dispose(); base.Dispose(disposing); }
     }
     private CancellationTokenSource inputSession;
     private CancellationTokenSource desktopSession;
@@ -2868,14 +3027,87 @@ internal sealed class DockWindow : Form
         connection.Text = text;
     }
 
+    private static string TransferSize(long value)
+    {
+        string[] units = { "B", "KiB", "MiB", "GiB", "TiB" };
+        double size = value; int unit = 0;
+        while (size >= 1024 && unit < units.Length - 1) { size /= 1024; unit++; }
+        return size.ToString(unit == 0 ? "N0" : "N2") + " " + units[unit];
+    }
+
+    private void RenderTransfer()
+    {
+        string[] phases = { "Preparazione…", "Trasferimento in corso…", "Pubblicazione sul destinatario…",
+                            "Completato · file disponibile sul destinatario", "Errore · trasferimento non confermato" };
+        transferStatus.Text = phases[(int)transferState.Phase];
+        transferStatus.ForeColor = transferState.Phase == TransferPhase.Completed ? Online
+            : transferState.Phase == TransferPhase.Failed ? Danger : Waiting;
+        int? percent = transferState.Percent;
+        string total = transferState.Total.HasValue ? TransferSize(transferState.Total.Value) : "totale non disponibile";
+        transferBytes.Text = (percent.HasValue ? percent.Value + "% · " : "")
+            + (transferState.HasSample ? TransferSize(transferState.Bytes) : "Avanzamento in verifica") + " / " + total;
+        if (transferState.HasSample && transferState.Total.HasValue)
+            transferBytes.Text += "  (" + transferState.Bytes.ToString("N0") + " / " + transferState.Total.Value.ToString("N0") + " byte)";
+        transferBar.Display(percent, !transferState.Terminal);
+    }
+
+    private void PostTransfer(long generation, TransferUpdate update)
+    {
+        if (IsDisposed || Disposing || !IsHandleCreated) return;
+        try
+        {
+            BeginInvoke((Action)(() => {
+                if (!IsDisposed && transferState.Accept(generation, update)) RenderTransfer();
+            }));
+        }
+        catch (InvalidOperationException) { }
+    }
+
+    private void StartTransfer(bool upload, string source, string destination)
+    {
+        if (busy) return;
+        long generation = transferState.Begin();
+        RenderTransfer();
+        TransferUpdate completed = null;
+        Action<TransferUpdate> progress = update => {
+            // Only the successful Task return commits 100%; a queued observation is not publication proof.
+            if (update.Phase == TransferPhase.Completed) completed = update;
+            else PostTransfer(generation, update);
+        };
+        Start(upload ? "Invio verso Linux…" : "Download verso Windows…", () => {
+            if (upload) DockTransport.Upload(source, destination, progress);
+            else DockTransport.Download(source, destination, progress);
+            return destination;
+        }, path => {
+            if (completed != null && transferState.Accept(generation, completed)) RenderTransfer();
+            return (upload ? "Inviato su Linux · " : "Salvato su Windows · ") + path;
+        }, () => {
+            var failed = new TransferUpdate(TransferPhase.Failed,
+                transferState.HasSample ? (long?)transferState.Bytes : null, transferState.Total);
+            if (transferState.Accept(generation, failed)) RenderTransfer();
+        });
+    }
+
     private TabPage BuildTransfers()
     {
         var page = Page("Trasferimenti");
+        var outer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
+        outer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        page.Controls.Add(outer);
+        var progress = FileCard("Avanzamento del trasferimento", transferStatus, transferBytes, transferBar);
+        progress.Margin = new Padding(15, 10, 15, 0);
+        outer.Controls.Add(progress, 0, 0);
+        outer.SizeChanged += delegate {
+            int width = Math.Max(140, outer.ClientSize.Width - 65);
+            transferStatus.MaximumSize = transferBytes.MaximumSize = new Size(width, 0);
+            transferBar.Height = Math.Max(26, Font.Height + 8);
+        };
         var viewport = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
         var content = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 1, RowCount = 2,
             Padding = new Padding(15), AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
         viewport.Controls.Add(content);
-        page.Controls.Add(viewport);
+        outer.Controls.Add(viewport, 0, 1);
         content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         var uploadWindows = new TextBox();
@@ -2892,8 +3124,7 @@ internal sealed class DockWindow : Form
             Field("Destinazione su Linux", uploadLinux),
             ActionButton("Invia file", () => {
                 string local = uploadWindows.Text, remote = uploadLinux.Text;
-                Start("Invio verso Linux…", () => { DockTransport.Upload(local, remote); return remote; },
-                    path => "Inviato su Linux · " + path);
+                StartTransfer(true, local, remote);
             }));
         content.Controls.Add(upload, 0, 0);
 
@@ -2902,8 +3133,7 @@ internal sealed class DockWindow : Form
             Field("Destinazione su Windows", downloadWindows, () => Pick(downloadWindows, true)),
             ActionButton("Scarica file", () => {
                 string remote = downloadLinux.Text, local = downloadWindows.Text;
-                Start("Download verso Windows…", () => { DockTransport.Download(remote, local); return local; },
-                    path => "Salvato su Windows · " + path);
+                StartTransfer(false, remote, local);
             }));
         content.Controls.Add(download, 0, 1);
         return page;

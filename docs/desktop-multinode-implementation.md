@@ -1,8 +1,11 @@
 # Gruppo desktop: implementazione e prossimi collaudi
 
-Stato del 26 novembre 2026: codice in sviluppo, **non distribuito sui tre PC**.
-La PR #25 è stata unita su main. La condivisione precedente rimane quella
-installata; questo documento non attesta l'attivazione del nuovo gruppo.
+Stato del collaudo 27–28 novembre 2026: PR #26 in bozza. Motore gestito e helper sono
+installati su Ubuntu, Windows e Kali. Nella sessione reale i tre supervisor
+hanno riportato readiness recente contemporaneamente. L'operatore ha confermato
+mouse, tastiera, click, rotella e copia/incolla nelle sei direzioni. I pannelli
+QA non hanno registrato i sei token: questa verifica resta dichiaratamente
+manuale, distinta dalle attestazioni e dai test automatici. La PR #25 è già su main.
 
 La disposizione scelta dall'operatore è **Ubuntu — Windows — Kali**, con
 Windows principale. L'interfaccia permette di includere altri nodi registrati,
@@ -35,7 +38,8 @@ CAS; un cambiamento concorrente invalida la preparazione.
 La configurazione locale `Vincula-Desktop/deployment.json` deve essere privata e
 abilitata dall'operatore. Se manca, il pulsante non installa o sostituisce
 silenziosamente il motore: mostra il prerequisito mancante e termina senza
-avviare il gruppo. Mancano ancora l'installer verificato e il rollout.
+avviare il gruppo. L'[installer verificato](desktop-install.md) e il servizio
+grafico opzionale sono disponibili; il Core rimane separato.
 
 ## Motore e limiti operativi
 
@@ -62,23 +66,88 @@ transazione, audit e cleanup. Il sorgente della nuova integrazione è diverso
 dal sorgente congelato usato in quel collaudo.
 
 La fixture GTK isolata supera sette scenari del protocollo e dei pulsanti:
-[comando riproducibile](../tools/qa-desktop-ui/README.md). La GUI C# aggiornata
-compila su Windows; il suo eseguibile QA non è stato avviato né distribuito.
-La suite Python desktop aggiornata comprende 142 test: 138 passati e quattro
-esclusi perché richiedono Windows. Comprende stop con RPC pendente, scadenza della readiness
-prima della lease, errori di avvio e chiusura delle pipe.
+[comando riproducibile](../tools/qa-desktop-ui/README.md). La GUI C# aggiornata è
+avviata nella vera sessione Windows; le GUI GTK sono avviate nelle sessioni
+grafiche Ubuntu/Kali. L'operatore ha confermato layout e pulsanti leggibili.
+La matrice funzionale Windows/Linux con Python 3.10/3.14 è passata sul commit
+`aa96e35`. La suite desktop locale conta 187 test: 180 passati, sei esclusi
+perché richiedono Windows e uno perché seleziona un parser nativo esterno.
+Quest'ultimo è stato eseguito separatamente con tutti i 20 test dell'adapter
+passati, senza esclusioni. Comprende stop con RPC pendente, scadenza della readiness prima
+della lease, errori di avvio, installazione, privacy e chiusura delle pipe.
+
+Il [run nativo Windows](https://github.com/Daniele-Cangi/Vincula/actions/runs/46077829185)
+ha superato 17 risultati Qt, senza esclusioni, e sei suite CTest. La stessa
+patch è stata compilata e collaudata su Linux. I pacchetti comprendono
+dipendenze, licenze e manifest con tutti gli hash; gli input per riprodurli
+sono conservati separatamente dal runtime.
+
+Il primo avvio reale ha scoperto un formato di configurazione superato:
+Deskflow 1.27 ignora l'elenco nella sezione `screens` e legge invece
+`[computer_<nome>]/name` dal file INI generale. L'adapter ora emette questi
+gruppi e un layout con i soli collegamenti. Un
+[probe con i veri Settings e Config](../tools/qa-desktop-config/README.md)
+ha riletto tutti i nomi/vicini e respinto il vecchio formato, senza costruire
+server, client o provider di input. I due tentativi falliti si sono fermati
+con codice 4 sul principale; i processi originali dei client sono usciti prima
+del nuovo tentativo con identità di sessione fresca.
+
+La readiness EIS ora richiede keyboard, relative pointer e absolute pointer
+tutti ripresi. Sono verificate le otto combinazioni e la revoca terminale alla
+pausa di ciascun device; il test fallisce con il precedente predicato.
+Il pacchetto Linux corretto è installato su entrambi i Linux. Il Windows
+installato conserva il proprio artifact precedente, che non include EIS;
+la nuova build Windows con la patch aggiornata è qualificata dalla CI citata.
+
+L'Export XML del Task Scheduler reale omette `RunLevel=LeastPrivilege` e
+normalizza il trigger da SID al nome dell'account. Il controllo accetta
+queste due rappresentazioni solo se il livello resta limitato e il nome si
+risolve nello stesso SID. Diciassette fixture native e il confronto con il
+task reale sono passati senza modificare o avviare task durante la prova
+del validatore. Successivamente il supervisor è stato avviato nella vera
+sessione Windows interattiva. Entrambi i Linux usano il bus e l'ambiente
+grafico già presenti nel rispettivo user manager.
+
+La [ricevuta di installazione](collaudi/2026-11-27-desktop-install.json)
+riporta i pin distinti del motore e del bundle di supporto. Il layout iniziale
+è stato salvato con CAS sui tre cataloghi; le altre impostazioni sono rimaste
+identiche. La regola firewall Windows limita TCP 24807 al programma installato
+e agli indirizzi dei due client autorizzati.
+
+Il [pannello QA](../tools/qa-desktop-live/README.md) verifica testi sintetici
+solo su gesto dell'operatore. Il suo writer Windows crea file privati con
+integrità Medium prima di scrivere: `mkstemp` di Python 3.14 introduceva
+un'ACE aggiuntiva che il controllo privato rifiutava. Le sette fixture pure e
+tre prove filesystem sono passate sul Windows reale senza accedere a GUI o
+appunti durante quei test.
+
+Lo stop reale dalla GUI Windows è stato osservato durante l'invio di un file
+sintetico da 1 GiB: tutti i supervisor erano già `stopped` con il file temporaneo
+ancora a 726.118.400 byte. Il trasferimento ha continuato fino a 1.073.741.824
+byte, con SHA256 identico al sorgente. Un audit in sola lettura ha verificato
+l'assenza dei PID originali di guardian e motori sui tre PC, senza adottarli o
+terminare altri processi. Su Windows il codice di uscita del singolo motore
+resta nullo perché il guardian termina l'intero Job, incluso se stesso.
+Non è misurata la latenza dal click fisico. La
+[ricevuta del test](collaudi/2026-11-27-desktop-transfer-stop.json)
+distingue queste osservazioni dalla precedente sessione sintetica.
+
+L'operatore ha segnalato che mancava una barra di avanzamento del trasferimento
+nella GUI Windows. La nuova card fissa sopra i campi mostra percentuale,
+byte/totale e risultato persistente. Metadati non disponibili producono una
+barra indeterminata, non progressi stimati. Il 100% richiede pubblicazione e
+ritorno riusciti; generazione e terminalità respingono callback tardive.
+Trenta verifiche native includono rendering reale a 11/18 pt e Stop abilitato
+durante il lavoro. Le API reali aggiornate hanno inviato e ricevuto 1 GiB con
+12/14 callback, campioni intermedi e SHA256 identici: la
+[ricevuta del progresso](collaudi/2026-11-28-windows-transfer-progress.json)
+distingue questa prova del trasporto da quella della barra visibile. La nuova
+GUI Windows è preparata; manca la chiusura/ricarica della finestra esistente.
 
 Prima del rilascio restano:
 
-1. Review del nuovo codice e build/test nativi Windows del motore modificato.
-2. Pacchetti con dipendenze, licenze e manifest verificati per entrambi i Linux
-   e Windows; installer delle approvazioni locali e dei supervisor grafici.
-3. Avvio del supervisor nella vera sessione utente: task Interactive/Limited
-   Windows e ambiente della sessione grafica Linux. SSH non sostituisce quel
-   contesto. Nessun riavvio di Kali è necessario per la preparazione.
-4. Cutover esplicito dalla condivisione precedente e consenso Wayland, seguito
-   da mouse/tastiera e testi sintetici negli appunti nelle sei direzioni.
-5. Ripetere lo stop da Windows durante un trasferimento con il motore reale,
-   revoca/disconnessione e verifica dell'assenza di riavvii automatici.
+1. Ricaricare la GUI Windows preparata e confermare l'indicatore visibile.
+2. Completare la prova esplicita di revoca/disconnessione del nuovo motore.
+3. Pubblicare gli esiti, completare le review e autorizzare il merge della PR.
 
-La pausa richiesta dall'operatore precede questi interventi sui PC.
+Questa preparazione non ha richiesto riavvii o cambiamenti alle identità Core.
