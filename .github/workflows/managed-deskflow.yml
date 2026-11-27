@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: 2026 Daniele Cangi
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Managed Deskflow native Windows
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/managed-deskflow.yml'
+      - 'tools/build-managed-deskflow/**'
+      - 'third_party/deskflow/**'
+  push:
+    branches: [main, codex/desktop-multinode]
+    paths:
+      - '.github/workflows/managed-deskflow.yml'
+      - 'tools/build-managed-deskflow/**'
+      - 'third_party/deskflow/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: managed-deskflow-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  windows-x64:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      PYTHONUNBUFFERED: '1'
+      PYTHONWARNINGS: error
+    steps:
+      - name: Check out source without stored credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Select pinned Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12.10'
+          architecture: x64
+      - name: Select native MSVC and Windows SDK
+        uses: TheMrMilchmann/setup-msvc-dev@b01428496a7be6ea8716337c299ffccc9fadc0c8 # v4 branch, exact commit
+        with:
+          arch: amd64
+          toolset: '14.44.35207'
+          sdk: '10.0.22621.0'
+      - name: Check build and manifest guards
+        run: python -Werror -m unittest discover -s tools/build-managed-deskflow -p "test_*.py" -v
+      - name: Build pinned native dependencies, core and headless tests
+        shell: pwsh
+        run: python -Werror tools/build-managed-deskflow/build.py --work-root (Join-Path $env:RUNNER_TEMP 'vincula-managed-build')
+      - name: Upload verified runtime and canonical artifact manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: managed-deskflow-windows-x64
+          path: ${{ runner.temp }}/vincula-managed-build/dist/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve native build and test diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: managed-deskflow-windows-diagnostics
+          path: |
+            ${{ runner.temp }}/vincula-managed-build/reports/
+            ${{ runner.temp }}/vincula-managed-build/build/CMakeFiles/CMakeConfigureLog.yaml
+            ${{ runner.temp }}/vincula-managed-build/build/src/unittests/Testing/Temporary/LastTest.log
+          if-no-files-found: warn
+          retention-days: 14
