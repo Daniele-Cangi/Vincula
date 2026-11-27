@@ -3,7 +3,9 @@
 `build.py` packages the pinned, already tested managed Deskflow ELF and its
 dependency closure. It does not install or launch a desktop session. `qa.py`
 checks the canonical Vincula `ArtifactManifest` v1, all regular-file hashes,
-every ELF import with the loader's trace mode, relative RPATHs, and fresh
+the real `desktop_deskflow._known_source` runtime predicate (exact repository URL,
+commit and version), the pinned managed patch and required capabilities, every
+ELF import with the loader's trace mode, relative RPATHs, and fresh
 headless certificate provisioning. Neither script reads a clipboard or sends input.
 
 The package is versioned as

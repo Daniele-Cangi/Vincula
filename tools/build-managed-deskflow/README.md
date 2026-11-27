@@ -15,12 +15,16 @@ must match its committed SHA256 **before extraction or execution**. No `aqt`, pi
 packages or vcpkg dependency resolution runs. CMake and Perl are portable builds
 under the runner's temporary directory; the existing MSVC/SDK are selected,
 never installed or updated. If that exact toolset/SDK is absent the job fails.
+The configured CMake release version must also match the approved annotated tag;
+a shallow untagged `1.27.0.9999` build cannot be published as release `1.27.0`.
 
 The hosted `windows-2022` image itself is maintained by GitHub, rather than being
 an immutable VM image. The recipe pins toolset `14.44.35207` and SDK
 `10.0.22621.0`; provenance records the actual compiler, nmake and other tool hashes
 and the runner image version. `/Brepro` is enabled for the core, but bit-identical
-builds across different runner images are **not** claimed. UTF-8 compilation is
+builds across different runner images are **not** claimed. Custom flags use CMake
+`*_FLAGS_INIT`, preserving MSVC defaults; a cache guard requires exception
+unwinding (`/EHsc`) and RTTI (`/GR`). UTF-8 compilation is
 explicit, including the Qt/Python interoperability cases.
 
 OpenSSL **3.5.9 LTS** is built directly with its official Windows MSVC recipe,
@@ -64,7 +68,8 @@ python -Werror tools/build-managed-deskflow/build.py --work-root "$env:TEMP/vinc
 ```
 
 The work directory must not already exist. Diagnostics are uploaded even on
-failure. Native build command output is kept in `reports/commands.log`.
+failure. Native build command output is streamed and flushed to `reports/commands.log`,
+so a cancelled compiler preserves its partial diagnostics.
 
 Input provenance was checked on 2026-11-27 against primary sources:
 

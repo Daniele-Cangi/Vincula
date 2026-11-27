@@ -9,7 +9,7 @@ from pathlib import Path
 import tarfile
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import xml.etree.ElementTree as ET
 
 spec = importlib.util.spec_from_file_location("managed_build_recipe", Path(__file__).with_name("build.py"))
@@ -43,6 +43,23 @@ class BuildArtifactTests(unittest.TestCase):
         self.assertEqual(first.with_suffix(".sha256").read_text(), digest + "\n")
         self.assertNotIn(str(self.root).encode(), first.read_bytes())
 
+    def test_shallow_untagged_version_cannot_be_published_as_release(self):
+        cache = self.root / "CMakeCache.txt"
+        cache.write_text("CMAKE_PROJECT_VERSION:STATIC=1.27.0.9999\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "approved release tag"):
+            recipe.verify_configured_version(cache, "1.27.0")
+        cache.write_text("CMAKE_PROJECT_VERSION:STATIC=1.27.0.0\n", encoding="utf-8")
+        self.assertEqual(recipe.verify_configured_version(cache, "1.27.0"), "1.27.0.0")
+
+    def test_native_flags_keep_msvc_exception_and_rtti_defaults(self):
+        cache = self.root / "CMakeCache.txt"
+        cache.write_text("CMAKE_CXX_FLAGS:STRING=/Brepro /utf-8\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "exception unwinding"):
+            recipe.verify_cpp_flags(cache)
+        flags = "/Brepro /utf-8 /DWIN32 /D_WINDOWS /W3 /GR /EHsc"
+        cache.write_text("CMAKE_CXX_FLAGS:STRING=" + flags + "\n", encoding="utf-8")
+        self.assertEqual(recipe.verify_cpp_flags(cache), flags)
+
     def test_runtime_mutation_changes_manifest_pin(self):
         output = self.root / "manifest.json"
         original = recipe.write_artifact_manifest(self.engine, output, self.inputs)
@@ -65,6 +82,34 @@ class BuildArtifactTests(unittest.TestCase):
                 recipe.download(item, self.root)
         self.assertFalse((self.root / "tool.exe").exists())
         self.assertFalse((self.root / "tool.exe.partial").exists())
+
+    def test_native_output_is_flushed_before_command_completes(self):
+        process = MagicMock()
+        process.__enter__.return_value = process
+        process.returncode = 0
+
+        def native_lines():
+            yield "first compilation unit\n"
+            self.assertTrue((self.root / "commands.log").read_text().endswith("first compilation unit\n"))
+            yield "second compilation unit\n"
+
+        process.stdout = native_lines()
+        with patch.object(recipe.subprocess, "Popen", return_value=process), patch("builtins.print"):
+            value = recipe.run_command(["native-tool", "argument"], self.root, {})
+        self.assertEqual(value, "first compilation unit\nsecond compilation unit")
+        self.assertIn("native-tool argument", (self.root / "commands.log").read_text())
+
+    def test_failed_native_command_preserves_output_and_nonzero_exit(self):
+        process = MagicMock()
+        process.__enter__.return_value = process
+        process.returncode = 17
+        process.stdout = iter(["compiler diagnostic\n"])
+        with patch.object(recipe.subprocess, "Popen", return_value=process), patch("builtins.print"):
+            with self.assertRaises(recipe.subprocess.CalledProcessError) as failure:
+                recipe.run_command(["native-tool"], self.root, {})
+        self.assertEqual(failure.exception.returncode, 17)
+        self.assertEqual(failure.exception.output, "compiler diagnostic\n")
+        self.assertIn("compiler diagnostic", (self.root / "commands.log").read_text())
 
     def xml(self, *, remove=None, skip=None, duplicate=None):
         root = ET.Element("TestCase")

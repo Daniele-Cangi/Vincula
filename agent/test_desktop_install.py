@@ -3,6 +3,7 @@
 """Temporary artifact files only. Never starts an engine, service, GUI or connection."""
 from contextlib import ExitStack
 from dataclasses import replace
+import ctypes
 import hashlib
 import json
 import os
@@ -282,6 +283,30 @@ class ArtifactInstallTests(unittest.TestCase):
                 self.assertFalse(install.parent_ace_allowed(0,0,mask,False))
                 self.assertFalse(install.parent_ace_allowed(0,3,mask|0x1200a9,False))
         self.assertFalse(install.parent_ace_allowed(9,0,0,False))
+
+    def test_windows_parent_owner_rights_requires_current_trusted_owner(self):
+        trusted={"CURRENT","S-1-5-18","S-1-5-32-544"}
+        self.assertTrue(install.parent_sid_trusted("S-1-3-4","CURRENT",trusted))
+        self.assertFalse(install.parent_sid_trusted("S-1-3-4","OTHER",trusted))
+        self.assertFalse(install.parent_sid_trusted("OTHER","CURRENT",trusted))
+        security=install.InstallerWindowsSecurity.__new__(install.InstallerWindowsSecurity)
+        security.trusted=trusted
+        acl=(ctypes.c_ubyte*8)();ctypes.c_ushort.from_buffer(acl,4).value=1
+        ace=(ctypes.c_ubyte*16)();ace[1]=3;ctypes.c_uint32.from_buffer(ace,4).value=0x1f01ff
+        owner_sid=["CURRENT"]
+        security.sid_string=lambda value:owner_sid[0] if (value.value if hasattr(value,"value") else value)==1 else "S-1-3-4"
+        def descriptor(path,kind,flags,owner,group,dacl,sacl,result):
+            ctypes.cast(owner,ctypes.POINTER(ctypes.c_void_p))[0]=1
+            ctypes.cast(dacl,ctypes.POINTER(ctypes.c_void_p))[0]=ctypes.addressof(acl)
+            return 0
+        def get_ace(dacl,index,result):
+            ctypes.cast(result,ctypes.POINTER(ctypes.c_void_p))[0]=ctypes.addressof(ace)
+            return True
+        security.api=SimpleNamespace(GetNamedSecurityInfoW=descriptor,GetAce=get_ace)
+        security.kernel=SimpleNamespace(LocalFree=lambda value:None)
+        security.verify_parent(self.base)
+        owner_sid[0]="OTHER"
+        with self.assertRaises(ValueError):security.verify_parent(self.base)
 
     @unittest.skipUnless(sys.platform=="win32","Native Windows default parent metadata only")
     def test_windows_native_default_parent_integrity(self):

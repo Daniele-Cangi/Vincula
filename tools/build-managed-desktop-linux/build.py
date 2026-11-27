@@ -188,6 +188,18 @@ def package(args, roots):
     lock = json.loads(args.lock.read_bytes())
     if args.lock.read_bytes() != canonical(lock) or lock["schema_version"] != 1:
         raise ValueError("The input lock must be canonical v1 JSON.")
+    if (lock["upstream_commit"] != UPSTREAM or lock["patch_sha256"] != PATCH
+            or lock["input_binary_sha256"] != BINARY):
+        raise ValueError("The input lock differs from the supported managed source build.")
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "agent"))
+    from desktop_backend import ArtifactManifest, verify_artifact_manifest
+    import desktop_deskflow as contract
+    # Repository URLs are an exact runtime contract, not interchangeable Git URLs.
+    candidate = ArtifactManifest("deskflow", contract.UPSTREAM_REPOSITORY, UPSTREAM, "1.27.0", PATCH,
+                                 "linux", "x86_64", "bin/deskflow-core",
+                                 (("bin/deskflow-core", BINARY),), tuple(contract.MANAGED_CAPABILITIES))
+    if not contract._known_source(candidate) or contract.UPSTREAM_COMMIT != UPSTREAM:
+        raise ValueError("The package source does not satisfy the installed runtime contract.")
     check_pin(args.patchelf, lock["patchelf_sha256"])
     if args.output.exists():
         raise ValueError("Use a new output path; existing packages are never overwritten.")
@@ -219,11 +231,10 @@ def package(args, roots):
                        "scope": "Linux x86_64 private QA, Ubuntu Wayland / Kali X11 candidate; no desktop-session acceptance claim."})
     (args.output / "provenance.json").write_bytes(canonical(provenance))
     (args.output / "source/inputs.lock.json").write_bytes(args.lock.read_bytes())
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "agent"))
-    from desktop_backend import ArtifactManifest, verify_artifact_manifest
-    from desktop_deskflow import MANAGED_CAPABILITIES
     files = tuple((path.relative_to(args.output).as_posix(), sha(path)) for path in sorted(args.output.rglob("*")) if path.is_file())
-    manifest = ArtifactManifest("deskflow", "https://github.com/deskflow/deskflow.git", UPSTREAM, "1.27.0", PATCH, "linux", "x86_64", "bin/deskflow-core", files, tuple(MANAGED_CAPABILITIES))
+    manifest = ArtifactManifest("deskflow", contract.UPSTREAM_REPOSITORY, UPSTREAM, "1.27.0", PATCH, "linux", "x86_64", "bin/deskflow-core", files, tuple(contract.MANAGED_CAPABILITIES))
+    if not contract._known_source(manifest):
+        raise ValueError("The final manifest does not satisfy the runtime source contract.")
     raw = canonical(manifest.to_document())
     pin = hashlib.sha256(raw).hexdigest()
     verify_artifact_manifest(raw, approved_sha256=pin)

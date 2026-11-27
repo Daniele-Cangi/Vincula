@@ -7,6 +7,7 @@ Never starts a desktop server/client, loads a display, or reads any clipboard.
 Uses the glibc loader's trace mode for the engine and every Qt plugin/library.
 """
 import argparse
+from dataclasses import replace
 import hashlib
 import json
 import os
@@ -17,6 +18,32 @@ import subprocess
 import sys
 import tempfile
 import uuid
+
+EXPECTED_PATCH = "b7c51d981fda6aee2e4e0bc7f05a4fb7de9281e62fa0d98093ad72d1261dd7dc"
+
+
+def qualify_source(manifest, contract):
+    """Use the same known-source predicate as compile_profile/preflight."""
+    if (not contract._known_source(manifest) or manifest.patch_sha256 != EXPECTED_PATCH
+            or not contract.MANAGED_CAPABILITIES <= set(manifest.capabilities)
+            or manifest.platform != "linux" or manifest.architecture != "x86_64"
+            or manifest.engine_file != "bin/deskflow-core"):
+        raise ValueError("Artifact does not satisfy the managed Linux runtime source contract")
+
+
+def contract_regressions(manifest, contract):
+    """Metadata changes must fail before any ELF/provision execution."""
+    incompatible = (
+        replace(manifest, upstream_repository=contract.UPSTREAM_REPOSITORY + ".git"),
+        replace(manifest, upstream_commit="0" * 40), replace(manifest, version="0.0.0"),
+        replace(manifest, patch_sha256="0" * 64), replace(manifest, capabilities=()),
+    )
+    for bad in incompatible:
+        try:
+            qualify_source(bad, contract)
+        except ValueError:
+            continue
+        raise AssertionError("An incompatible managed source variant was accepted")
 
 
 def digest(path):
@@ -32,9 +59,25 @@ def main():
     parser.add_argument("--profile-parent", required=True, type=Path)
     args = parser.parse_args()
     sys.path.insert(0, str(args.agent_source.resolve()))
-    from desktop_backend import verify_artifact_manifest
+    from desktop_backend import GroupManifest, Screen, verify_artifact_manifest
+    import desktop_deskflow as contract
     root = args.artifact.resolve(strict=True)
     verified = verify_artifact_manifest((root / "artifact-manifest.json").read_bytes(), approved_sha256=args.manifest_pin)
+    qualify_source(verified.manifest, contract)
+    contract_regressions(verified.manifest, contract)
+    # Exercise the actual pure profile compiler as an integration gate. These are
+    # synthetic identities and documentation-only IPs; no files/sockets open.
+    primary, secondary = str(uuid.uuid4()), str(uuid.uuid4())
+    group = GroupManifest(str(uuid.uuid4()), primary,
+                          (Screen(primary, 0, 0), Screen(secondary, 1, 0)), False,
+                          ((primary, "1" * 64), (secondary, "2" * 64)),
+                          ((primary, "3" * 64), (secondary, "4" * 64)))
+    preview = args.profile_parent.resolve() / "source-contract-preview-not-created"
+    paths = contract.LocalPaths("linux", str(root), str(preview), str(preview / "tls/identity.pem"))
+    prepared = contract.compile_profile(group, secondary, verified, paths,
+                                        contract.NetworkProfile("192.0.2.2", 24800, "192.0.2.1"))
+    if prepared.role != "client" or prepared.argv[0] != str(root / verified.manifest.engine_file):
+        raise ValueError("The real runtime compiler selected an unexpected engine/profile")
     expected = dict(verified.manifest.files)
     observed = set()
     for path in root.rglob("*"):
@@ -94,6 +137,9 @@ def main():
             raise ValueError("Exclusive provisioning did not preserve the first identity")
         # No identity bytes or PEM path are emitted by this QA report.
     print(json.dumps({"passed": True, "manifest_sha256": args.manifest_pin, "verified_files": len(expected),
+                      "runtime_known_source": True, "source_contract_regressions": 5,
+                      "runtime_profile_compilation": "in-memory client profile accepted",
+                      "managed_patch_sha256": verified.manifest.patch_sha256,
                       "elf_files": len(elf_files), "resolved_sonames": len(dependencies),
                       "host_dependencies": sorted(name for name, where in dependencies.items() if where == "host-glibc"),
                       "provision": "fresh private identity; exclusive retry refused; first identity unchanged",

@@ -78,6 +78,11 @@ def parent_ace_allowed(kind, flags, mask, trusted):
     return kind == 0 and (trusted or not mask & PARENT_MUTATION_RIGHTS)
 
 
+def parent_sid_trusted(sid, owner, trusted_sids):
+    # OWNER RIGHTS denotes this object's current owner, not an additional principal.
+    return owner in trusted_sids and (sid in trusted_sids or sid == "S-1-3-4")
+
+
 class InstallerWindowsSecurity(security.WindowsSecurity):
     """Create new Medium objects; never relabel or repair existing storage."""
     def descriptor(self):
@@ -102,7 +107,8 @@ class InstallerWindowsSecurity(security.WindowsSecurity):
         if code:
             raise ctypes.WinError(code)
         try:
-            require(self.sid_string(owner) in self.trusted and bool(dacl), "Unsafe installation parent owner or DACL.")
+            owner_sid = self.sid_string(owner)
+            require(owner_sid in self.trusted and bool(dacl), "Unsafe installation parent owner or DACL.")
             count = ctypes.c_ushort.from_address(dacl.value + 4).value
             for index in range(count):
                 ace = ctypes.c_void_p()
@@ -114,7 +120,8 @@ class InstallerWindowsSecurity(security.WindowsSecurity):
                     continue
                 require(kind == 0, "Unsupported effective installation parent ACE.")
                 mask = ctypes.c_uint32.from_address(ace.value + 4).value
-                require(parent_ace_allowed(kind, flags, mask, self.sid_string(ace.value + 8) in self.trusted),
+                require(parent_ace_allowed(kind, flags, mask,
+                                          parent_sid_trusted(self.sid_string(ace.value + 8), owner_sid, self.trusted)),
                         "The installation parent permits another SID to mutate children or security.")
         finally:
             self.kernel.LocalFree(descriptor)

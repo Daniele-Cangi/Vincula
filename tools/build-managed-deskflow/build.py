@@ -34,6 +34,28 @@ MANAGED_TESTS = {
 }
 
 
+
+def run_command(command, reports, environment, *, cwd=None):
+    command = [str(value) for value in command]
+    rendered = subprocess.list2cmdline(command)
+    print("Running:", rendered, flush=True)
+    output = []
+    with (reports / "commands.log").open("a", encoding="utf-8", newline="\n") as log:
+        log.write(rendered + "\n")
+        log.flush()
+        with subprocess.Popen(command, cwd=cwd, env=environment, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace") as process:
+            for line in process.stdout:
+                output.append(line)
+                log.write(line)
+                log.flush()
+                print(line, end="", flush=True)
+            process.wait()
+            if process.returncode:
+                raise subprocess.CalledProcessError(process.returncode, command, output="".join(output))
+    return "".join(output).strip()
+
+
 def sha256(path):
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
@@ -81,6 +103,22 @@ def verify_managed_tests(path):
                 or any(item.get("type") == "skip" for item in function.findall("Message"))):
             raise ValueError("A native managed test failed or was skipped: " + str(function.get("name")))
     return len(functions)
+
+
+
+def verify_configured_version(cache, version):
+    values = re.findall(r"^CMAKE_PROJECT_VERSION:STATIC=(.+)$", cache.read_text(encoding="utf-8"), re.MULTILINE)
+    if values != [version + ".0"]:
+        raise ValueError("Compiled project version differs from the approved release tag")
+    return values[0]
+
+
+
+def verify_cpp_flags(cache):
+    values = re.findall(r"^CMAKE_CXX_FLAGS:STRING=(.*)$", cache.read_text(encoding="utf-8"), re.MULTILINE)
+    if len(values) != 1 or not {"/EHsc", "/GR", "/utf-8", "/Brepro"} <= set(values[0].split()):
+        raise ValueError("Preserve MSVC exception unwinding/RTTI defaults and the approved UTF-8/repro flags")
+    return values[0]
 
 
 def write_artifact_manifest(engine, output, inputs):
@@ -146,15 +184,7 @@ def main():
     environment = dict(os.environ)
 
     def run(command, *, cwd=None):
-        command = [str(value) for value in command]
-        print("Running:", subprocess.list2cmdline(command), flush=True)
-        result = subprocess.run(command, cwd=cwd, env=environment, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
-        with (reports / "commands.log").open("a", encoding="utf-8", newline="\n") as log:
-            log.write(subprocess.list2cmdline(command) + "\n" + result.stdout + "\n")
-        print(result.stdout, end="", flush=True)
-        result.check_returncode()
-        return result.stdout.strip()
+        return run_command(command, reports, environment, cwd=cwd)
 
     downloads = work / "downloads"
     downloads.mkdir()
@@ -209,16 +239,18 @@ def main():
          "-DQt6_DIR=" + str(qt / "lib/cmake/Qt6"), "-DOPENSSL_ROOT_DIR=" + str(ssl),
          "-DOPENSSL_INCLUDE_DIR=" + str(ssl / "include"), "-DOPENSSL_CRYPTO_LIBRARY=" + str(ssl / "lib/libcrypto.lib"),
          "-DOPENSSL_SSL_LIBRARY=" + str(ssl / "lib/libssl.lib"), "-DOPENSSL_USE_STATIC_LIBS=OFF",
-         "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_CXX_FLAGS=/Brepro /utf-8", "-DCMAKE_EXE_LINKER_FLAGS=/Brepro",
+         "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_CXX_FLAGS_INIT=/Brepro /utf-8", "-DCMAKE_EXE_LINKER_FLAGS_INIT=/Brepro",
          "-DBUILD_GUI=OFF", "-DBUILD_INSTALLER=OFF", "-DBUILD_TESTS=ON", "-DSKIP_BUILD_TESTS=ON"])
+    compiled_version = verify_configured_version(build / "CMakeCache.txt", inputs["version"])
+    cpp_flags = verify_cpp_flags(build / "CMakeCache.txt")
     run([cmake, "--build", build, "--config", "Release", "--parallel", "4", "--target", "deskflow-core", *TESTS])
     environment["QT_QPA_PLATFORM"] = "minimal"
-    run([ctest, "--test-dir", build / "src/unittests", "-C", "Release", "--no-tests=error",
-         "-R", "^(" + "|".join(TESTS) + ")$", "--output-on-failure", "--output-junit", reports / "ctest.xml"])
-    # Assert native ACL/CreatePipe tests actually passed; a skipped Qt case is not sufficient.
+    # Capture the native contract's own logs even if a later CTest run fails.
     run([build / "src/unittests/common/Release/ManagedSessionTests.exe",
          "-o", str(reports / "managed-tests.xml") + ",xml", "-o", str(reports / "managed-tests.txt") + ",txt"])
     managed_count = verify_managed_tests(reports / "managed-tests.xml")
+    run([ctest, "--test-dir", build / "src/unittests", "-C", "Release", "--no-tests=error",
+         "-R", "^(" + "|".join(TESTS) + ")$", "--output-on-failure", "--output-junit", reports / "ctest.xml"])
     dist = work / "dist"
     engine, sources = dist / "engine", dist / "sources"
     engine.mkdir(parents=True)
@@ -264,7 +296,8 @@ def main():
     if not match:
         raise ValueError("Missing native compiler version metadata")
     provenance = {
-        "schema_version": 1, "inputs": inputs, "compiler_version": match.group(1), "compiler_sha256": sha256(compiler),
+        "schema_version": 1, "inputs": inputs, "compiled_version": compiled_version, "cpp_flags": cpp_flags,
+        "compiler_version": match.group(1), "compiler_sha256": sha256(compiler),
         "nmake_sha256": sha256(nmake), "cmake_sha256": sha256(cmake), "perl_sha256": sha256(perl),
         "python_sha256": sha256(sys.executable), "git_sha256": sha256(shutil.which("git.exe")),
         "runner_image": os.environ.get("ImageVersion", "unknown"), "openssl_no_asm": True,
