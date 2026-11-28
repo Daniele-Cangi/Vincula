@@ -19,8 +19,8 @@ La base di questo incremento Core è `main` `be3989356c23`.
 | Stop del desktop | Nella PR #26 stop durante SFTP, perdita del collegamento desktop Kali e revoca reale del consenso GNOME; il Core continua a eseguire lavori | Mantenere distinzione fra test manuali, osservazioni automatiche e revisioni installate |
 | Crash worker e recupero piani | Prove isolate Linux con discendenti; recupero batch/capability da altre origini; CI Windows/Linux | Contenimento forte se viene ucciso anche il guardian; i test isolati non equivalgono a SIGKILL del servizio produttivo |
 | Benchmark | Dodici casi, diciotto lavori exit 0, digest uguali; totale mediano distribuito 24,637 s contro locale 20,491 s | Ripetere le misure quando cambiano scheduling e protocollo dei trasferimenti |
-| Scheduler e concorrenza | [PR #27](https://github.com/Daniele-Cangi/Vincula/pull/27) in bozza; [suite native e piano su tre receiver reali temporanei](collaudo-scheduler-risorse.md) qualificati | CI/review dell’head finale, rollout e benchmark aggiornato; quote cooperative, senza limiti OS CPU/RAM/GPU; un timeout intermittente osservato resta dichiarato |
-| Dataset grandi | [Disegno del protocollo](large-file-transfers.md) | Implementare budget, blocchi verificati, avanzamento, cancellazione e ripresa; il Core ha ancora limite 64 MiB |
+| Scheduler e concorrenza | [PR #27](https://github.com/Daniele-Cangi/Vincula/pull/27) in bozza; [suite native e piano su tre receiver reali temporanei](collaudo-scheduler-risorse.md) qualificati, CI/review dell’head `85f559a` passate | Rollout e benchmark aggiornato; quote cooperative, senza limiti OS CPU/RAM/GPU; un timeout intermittente osservato resta dichiarato |
+| Dataset grandi | [Primo incremento protocollo 2](large-file-protocol.md), disabilitato per impostazione predefinita: 137 controlli nativi per PC e [sei direzioni SSH reali](collaudo-file-grandi.md) con file oltre 64 MiB, hash, exit code e cleanup corretti; CI/review `e52914e` passate | Review dell’head documentale finale, crash reale del coordinatore e ripresa da altra origine fisica; controller automatico e relay con quote persistenti restano nel [piano completo](large-file-transfers.md). Nessun rollout; i tool legacy conservano 64 MiB |
 
 Il test GUI con file da 1 GiB non modifica il protocollo MCP dei file. Il recupero
 di un piano da un’altra origine non implica l’esecuzione automatica degli effetti
@@ -97,7 +97,7 @@ Il benchmark distingue tempo totale percepito e tempo di calcolo. Usa un carico 
 
 Lo scheduler userà requisiti dichiarati dal lavoro e capacità rilevate. Carico istantaneo, memoria libera e disponibilità GPU informano l’assegnazione, mentre quote locali e prenotazioni limitano l’esecuzione concorrente. I lavori già approvati mantengono la propria identità durante i cambi di coordinatore.
 
-I trasferimenti attuali hanno un limite di 64 MiB e il relay usa disco temporaneo sull’origine. Il protocollo per dataset grandi dovrà gestire quote, spazio libero, ripresa e verifica finale. La scelta fra relay e collegamento diretto dipenderà dalle rotte autorizzate e dalle misure, con verifiche di integrità per entrambe le modalità.
+I trasferimenti legacy hanno un limite di 64 MiB e il relay usa disco temporaneo sull’origine. Il primo incremento per dataset grandi aggiunge quote agli endpoint, spazio libero, checkpoint e verifica finale. Non include ancora un controller durevole o quote persistenti per il relay. La scelta fra relay e collegamento diretto dipenderà dalle rotte autorizzate e dalle misure, con verifiche di integrità per entrambe le modalità.
 
 Il [piano dei dataset grandi](large-file-transfers.md) separa manifest, prenotazioni, copie fuori dalle transazioni, ripresa verificata e pubblicazione finale.
 

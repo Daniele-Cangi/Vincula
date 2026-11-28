@@ -25,6 +25,9 @@ jobs:
     env:
       PYTHONWARNINGS: error::DeprecationWarning
       PYTHONUNBUFFERED: '1'
+      # Match the fixed SSH helper launcher to this matrix's dependencies.
+      # https://docs.python.org/3.14/using/windows.html#customization
+      PY_PYTHON3: ${{ matrix.python }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

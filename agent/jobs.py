@@ -59,6 +59,11 @@ resource_policy = load_adapter("resource_policy")
 worker_resources = load_adapter("worker_resources")
 direct_execution = load_adapter("direct_execution")
 execution_plans = load_adapter("execution_plans")
+transfer_state = load_adapter("transfer_state")
+transfer_storage = load_adapter("transfer_storage")
+transfer_wire = load_adapter("transfer_wire")
+large_transfer_plans = load_adapter("large_transfer_plans")
+large_files = load_adapter("large_files")
 
 LAUNCH_PROTOCOL_VERSION = 1
 WORKER_SCHEMA = """
@@ -67,6 +72,18 @@ CREATE TABLE IF NOT EXISTS worker_launches(
     launch_possible INTEGER NOT NULL CHECK(launch_possible IN (0,1))
 );
 """
+
+
+class _LocalRuntime:
+    def __getattr__(self, name):
+        # runpy-based private workers need not register their module name.
+        try:
+            return globals()[name]
+        except KeyError:
+            raise AttributeError(name) from None
+
+
+LOCAL_RUNTIME = _LocalRuntime()
 
 
 def initialize():
@@ -120,12 +137,15 @@ def initialize():
         db.executescript(direct_execution.SCHEMA)
         db.executescript(resource_policy.SCHEMA)
         db.executescript(WORKER_SCHEMA)
+        db.executescript(transfer_state.SCHEMA)
+        db.executescript(large_files.SCHEMA)
         # Older specialized jobs have no fixed argv or manifest the current worker can launch.
         with db:
             db.execute("UPDATE jobs SET state='cancelled',finished=? WHERE state IN ('pending','queued') "
                        "AND argv='[]' AND id NOT IN (SELECT id FROM capability_jobs)", (time.time(),))
     for name in ("vincula_files.py", "vincula_capabilities.py", "plan_journal.py", "wire_framing.py",
-                 "direct_execution.py", "resource_policy.py", "worker_resources.py", "execution_plans.py", "jobs.py"):
+                 "direct_execution.py", "resource_policy.py", "worker_resources.py", "execution_plans.py", "jobs.py",
+                 "transfer_state.py", "transfer_storage.py", "transfer_wire.py", "large_transfer_plans.py", "large_files.py"):
         source = Path(__file__).resolve().with_name(name)
         installed = ROOT / name
         if source == installed:
@@ -189,8 +209,13 @@ def enqueue(db, job_id, program):
 
 
 def request_stop(db, job_id):
-    db.execute("UPDATE jobs SET state='cancelled',finished=? WHERE id=? AND state IN ('pending','queued')",
-               (time.time(), job_id))
+    large_files.stop_job(db, job_id)
+    cancelled = db.execute("UPDATE jobs SET state='cancelled',finished=? WHERE id=? AND state IN ('pending','queued')",
+                           (time.time(), job_id))
+    if cancelled.rowcount:
+        # A queued job has not crossed the Core claim/launch transition. No
+        # future run_one callable will finalize its endpoint attempt for us.
+        large_files.finish_job(db, job_id, True, "cancelled", None)
     db.execute("UPDATE jobs SET state='stopping' WHERE id=? AND state='running'", (job_id,))
 
 
@@ -330,6 +355,10 @@ def dispatch_capability(operation, capability_id=None, job_id=None, revision=Non
 
 
 def dispatch(action, **payload):
+    if action == "large-files":
+        if payload.get("operation") in {"block-read", "block-write", "verify-block"}:
+            raise ValueError("Use the bounded binary large-file entrypoint.")
+        return large_files.dispatch(LOCAL_RUNTIME, **payload)[0]
     if action == "resources":
         if payload:
             raise ValueError("Resource status is read-only and accepts no parameters.")
@@ -449,6 +478,13 @@ def operator(args):
                                                        expected_revision=args.expected_revision)))
         elif args.command == "resource-status":
             print(json.dumps(resource_policy.status(db)))
+        elif args.command == "large-files-policy":
+            print(json.dumps(transfer_state.set_policy(db, args.document, args.expected_revision)))
+        elif args.command == "large-files-pending":
+            for row in transfer_state.pending(db):
+                print(json.dumps(row))
+        elif args.command in {"large-files-approve", "large-files-deny"}:
+            print(json.dumps(transfer_state.decide(db, args.id, args.command == "large-files-approve", args.sha256)))
         elif args.command in {"register", "remove"}:
             if not NAME.fullmatch(args.name):
                 raise ValueError("Invalid program name.")
@@ -471,6 +507,8 @@ def operator(args):
             if not NAME.fullmatch(args.alias):
                 raise ValueError("Invalid folder alias.")
             files.grant(db, args.alias, getattr(args, "directory", None), getattr(args, "write", False))
+            for job_id in transfer_state.revoke_root(db, args.alias):
+                request_stop(db, job_id)
         elif args.command == "files-pending":
             for row in files.permission_items(db):
                 print(json.dumps(dict(row)))
@@ -846,10 +884,46 @@ def windows_launch(payload):
     return 0
 
 
+def _read_windows_launch_status(path):
+    """Preserve native sharing errors and own the original handle exactly once."""
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+    import stat
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                  ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    handle = kernel.CreateFileW(str(path), 0x80000000, 0x00000007, None, 3, 0x00200000, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    except BaseException:
+        kernel.CloseHandle(handle)
+        raise
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+            raise ValueError("Native launch acknowledgment is not a regular non-reparse file.")
+        with os.fdopen(descriptor, "rb", buffering=0) as stream:
+            descriptor = None  # The stream owns the CRT descriptor and original handle.
+            return stream.read(LAUNCH_ACK_BYTES + 1)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def read_launch_status(path):
     try:
-        with path.open("rb") as stream:
-            raw = stream.read(8193)
+        if os.name == "nt":
+            raw = _read_windows_launch_status(path)
+        else:
+            with path.open("rb") as stream:
+                raw = stream.read(8193)
         if len(raw) > 8192:
             raise ValueError("Oversized native launch acknowledgment.")
         value = json.loads(raw)
@@ -866,7 +940,16 @@ def confirm_windows_launch(proc, status):
         try:
             value = read_launch_status(status)
         except (ValueError, OSError) as error:
-            raise UnconfirmedLaunchError("Windows could not confirm program launch.") from error
+            # A scanner may briefly hold our immutable acknowledgment. Retry
+            # only its read, never launch the program again or accept bad JSON.
+            if (WINDOWS and isinstance(error, OSError) and getattr(error, "winerror", None) in {32, 33}
+                    and time.monotonic() < deadline):
+                time.sleep(0.025)
+                continue
+            codes = ", ".join(f"{name}={getattr(error, name)}" for name in ("winerror", "errno")
+                              if type(getattr(error, name, None)) is int)
+            detail = type(error).__name__ + (", " + codes if codes else "")
+            raise UnconfirmedLaunchError(f"Windows could not confirm program launch ({detail}).") from error
         if value is not None:
             if set(value) == {"error"} and isinstance(value["error"], str):
                 raise RuntimeError(value["error"])
@@ -1069,6 +1152,8 @@ def run_one(row, worker_lock=None, generation=None):
                     if direct:
                         spec = direct_execution.launch_spec(db, job_id, os.environ)
                         argv = {"protocol_version": LAUNCH_PROTOCOL_VERSION, "request": spec}
+                    elif row["program"] == large_files.PROGRAM:
+                        argv = large_files.arguments(LOCAL_RUNTIME, db, job_id)
                     else:
                         argv = (capabilities.arguments(db, job_id, ROOT) if capabilities.ID.fullmatch(row["program"])
                                 else json.loads(row["argv"]))
@@ -1094,6 +1179,8 @@ def run_one(row, worker_lock=None, generation=None):
                     argv = {"protocol_version": LAUNCH_PROTOCOL_VERSION, "request": spec}
                 elif capabilities.ID.fullmatch(row["program"]):
                     argv = capabilities.arguments(db, job_id, ROOT)
+                elif row["program"] == large_files.PROGRAM:
+                    argv = large_files.arguments(LOCAL_RUNTIME, db, job_id)
                 if generation is not None:
                     nonce = resource_policy.claim_nonce(db, job_id, generation)
                     claim = {"job_id": job_id, "generation": generation, "cleanup_nonce": nonce}
@@ -1139,6 +1226,7 @@ def run_one(row, worker_lock=None, generation=None):
                     direct_execution.record_outcome(db, job_id, state, code, reason, started)
                 if generation is not None:
                     resource_policy.finish(db, job_id, generation, cleanup_confirmed=cleanup["confirmed"])
+                large_files.finish_job(db, job_id, cleanup["confirmed"], state, code)
 
 
 def submit_claimed(pool, rows, active, worker_lock, generation):
@@ -1190,6 +1278,7 @@ def work():
                     next_observation = time.monotonic() + 1.0
                 with transaction() as db:
                     resource_policy.heartbeat(db, generation, observation=latest_observation)
+                    transfer_state.worker_seen(db, generation)
                 if not shutdown.exists() and len(active) < resource_policy.MAX_JOBS:
                     rows, failures = claim_jobs(generation, resource_policy.MAX_JOBS - len(active), scan=scan)
                     for job_id, diagnostic in failures:
@@ -1226,6 +1315,7 @@ def reconcile_cleanup(active):
             if receipt is not None:
                 with transaction() as db:
                     resource_policy.reconcile(db, receipt)
+                    large_files.reconcile_job(db, claim["job_id"])
                     db.execute("UPDATE jobs SET state='unconfirmed',exit_code=NULL,finished=? "
                                "WHERE id=? AND state IN ('running','stopping')", (time.time(), claim["job_id"]))
         except (OSError, ValueError):
@@ -1255,7 +1345,7 @@ def claim_jobs(generation, limit, *, scan=None):
                 continue
             try:
                 demand = resource_policy.request_for_job(db, row["id"])
-                if row["program"] == getattr(direct_execution, "PROGRAM_V2", "@process-v2") and demand is None:
+                if row["program"] in {getattr(direct_execution, "PROGRAM_V2", "@process-v2"), large_files.PROGRAM} and demand is None:
                     raise ValueError("Native protocol2 requires its immutable resource request.")
                 admission = resource_policy.admission(db, row["id"], generation)
                 if not admission["admitted"]:
@@ -1273,6 +1363,7 @@ def claim_jobs(generation, limit, *, scan=None):
                 db.execute("UPDATE jobs SET state='failed',finished=? WHERE id=? AND state='queued'", (time.time(), row["id"]))
                 if row["program"] in {direct_execution.PROGRAM, getattr(direct_execution, "PROGRAM_V2", "@process-v2")}:
                     direct_execution.record_outcome(db, row["id"], "failed", None, "launch_error", False)
+                large_files.finish_job(db, row["id"], True, "failed", None)
                 failures.append((row["id"], str(error)))
     return rows, failures
 
@@ -1286,6 +1377,14 @@ def main():
     resource_config = commands.add_parser("resource-policy", help="Operator-only resource policy JSON file.")
     resource_config.add_argument("file", type=Path)
     resource_config.add_argument("--expected-revision")
+    file_config = commands.add_parser("large-files-policy", help="Operator-only large-file policy JSON.")
+    file_config.add_argument("file", type=Path)
+    file_config.add_argument("--expected-revision")
+    commands.add_parser("large-files-pending")
+    for name in ("large-files-approve", "large-files-deny"):
+        approval = commands.add_parser(name)
+        approval.add_argument("id")
+        approval.add_argument("--sha256")
     commands.add_parser("resource-status", help="Read destination-local admission and held cleanup claims.")
     register = commands.add_parser("register")
     register.add_argument("name")
@@ -1310,8 +1409,9 @@ def main():
     commands.add_parser("journal-stdin")
     commands.add_parser("journal-framed-stdin")
     commands.add_parser("process-stdin")
+    commands.add_parser("large-files-stdin")
     args = parser.parse_args()
-    if args.command == "resource-policy":
+    if args.command in {"resource-policy", "large-files-policy"}:
         with args.file.open("rb") as stream:
             raw = stream.read(16385)
         if len(raw) > 16384:
@@ -1323,6 +1423,19 @@ def main():
         work()
     elif args.command == "shutdown":
         (ROOT / "worker.stop").touch()
+    elif args.command == "large-files-stdin":
+        body = b""
+        try:
+            request, payload = transfer_wire.read(sys.stdin.buffer)
+            if not isinstance(request, dict) or request.pop("action", None) != "large-files":
+                raise ValueError("Only large-file operations are accepted by this binary entrypoint.")
+            result, body = large_files.dispatch(LOCAL_RUNTIME, payload=payload, **request)
+            reply = {"result": result}
+        except OSError:
+            reply = {"error": "Large-file storage is unavailable; preserve the handle and check its status."}
+        except (ValueError, KeyError, TypeError, sqlite3.Error, RuntimeError) as error:
+            reply = {"error": str(error)}
+        transfer_wire.write(sys.stdout.buffer, reply, body)
     elif args.command == "capability-register":
         raw = sys.stdin.buffer.read(capabilities.MAX_MANIFEST_BYTES + 1)
         if len(raw) > capabilities.MAX_MANIFEST_BYTES:

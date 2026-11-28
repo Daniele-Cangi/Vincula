@@ -50,6 +50,8 @@ async def check(topology, include_remotes: bool, env: dict[str, str]) -> None:
             "discover_capabilities", "submit_capability", "get_capability_run",
             "get_process_execution_info", "execute_process", "read_process",
             "get_node_resources", "submit_execution_plan", "get_execution_plan", "stop_execution_plan",
+            "get_large_file_info", "start_large_transfer", "advance_large_transfer", "get_large_transfer",
+            "stop_large_transfer", "resume_large_transfer", "cleanup_large_transfer",
         }
         assert {tool.name for tool in tools if tool.annotations and tool.annotations.read_only_hint} == {
             "list_nodes", "get_node_status", "list_jobs", "read_job",
@@ -57,6 +59,7 @@ async def check(topology, include_remotes: bool, env: dict[str, str]) -> None:
             "discover_capabilities", "get_capability_run",
             "get_process_execution_info", "read_process",
             "get_node_resources", "get_execution_plan",
+            "get_large_file_info", "get_large_transfer",
         }
 
         origin = topology.local_id
