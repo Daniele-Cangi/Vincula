@@ -4,7 +4,57 @@ Questo resoconto riguarda il [primo incremento](large-file-protocol.md),
 sviluppato sopra l’head `85f559a` della PR #27. Non è un rollout produttivo né
 il completamento del [piano per dataset grandi](large-file-transfers.md).
 
-## Risultati finali
+## Trasferimenti SSH nelle sei direzioni
+
+Il successivo collaudo del checkout `e52914e`, con sorgenti corretti in
+`b8e512b`, completa **sei trasferimenti fra i PC reali**. Ogni direzione usa un
+file sintetico distinto per sorgente, di 67.109.121 byte (64 MiB + 257 byte).
+Le [ricevute pubbliche](collaudi/2026-11-28-large-files-six-directions.json)
+riportano digest, contatori binari, tempi e cleanup verificati.
+
+| Direzione | Durata complessiva della prova |
+| --- | ---: |
+| Windows → Kali | 397,636 s |
+| Kali → Windows | 156,503 s |
+| Ubuntu → Windows | 39,906 s |
+| Windows → Ubuntu | 26,964 s |
+| Ubuntu → Kali | 358,143 s |
+| Kali → Ubuntu | 121,310 s |
+
+Tutti i file pubblicati hanno dimensione e SHA-256 corretti. Ogni trasferimento
+copia batch da otto blocchi, otto blocchi e una coda da 257 byte. Nel primo,
+il driver cambia journal e origine logica dopo otto blocchi: una sola chiamata
+ricontrolla quel prefisso senza ritrasmetterne il payload; vengono copiati
+soltanto i 33.554.689 byte restanti. Il cambio avviene **nello stesso processo
+Python**: non è un crash del coordinatore o una migrazione fisica fra agenti.
+
+Il driver usa le API Python del server e broker di controllo della fixture.
+Lettura, scrittura e verifica dei blocchi usano il percorso binario SSH reale;
+Ubuntu locale usa l'helper one-shot. Ogni sorgente invia e ogni destinatario
+riceve esattamente due file, senza ricopie nascoste. Sono verificati i job di
+export e pubblicazione con exit code 0 e cleanup confermato, il rehash dopo la
+pulizia dello staging e l'assenza di prenotazioni residue. Solo dopo il drain
+dei tre worker, tutti terminati con codice 0, vengono rimossi i tre nuovi TEMP.
+I profili dei tentativi precedenti restano conservati.
+
+La telemetria contiene 1.267 record senza errori. In questa campagna le chiamate
+di scrittura verso Kali pesano maggiormente sui tempi; non è stata isolata la
+causa fra rete, trasporto, fixture e disco. Le durate includono avvii degli helper
+one-shot, controlli dei loro hash e verifiche, ma iniziano
+dopo il bootstrap iniziale dei tre broker: **non sono un benchmark di throughput**.
+Il timeout binario resta 30 secondi per RPC. I budget di osservazione del driver,
+1.200 secondi totali e 120 senza progresso, sono verificati fra batch e possono
+essere superati durante una batch in corso; non sono deadline rigide.
+Il driver operativo e la telemetria integrale restano artefatti privati del
+collaudo, identificati per hash: la ricevuta pubblica aggregata non costituisce
+da sola un harness riproducibile su una nuova installazione.
+
+Le quattro combinazioni CI Windows/Linux e Python 3.10/3.14 del commit
+`e52914e` passano; la review Codex dello stesso head non ha rilievi aperti.
+Sonar registra gate OK, zero bug, vulnerabilità e hotspot classificati e
+41 rilievi attivi di manutenzione. La PR resta in bozza e non è installata.
+
+## Qualificazione nativa dopo le correzioni
 
 La prima qualificazione sotto si riferisce al commit `755a5f3`. Il controllo
 successivo della [PR #28](https://github.com/Daniele-Cangi/Vincula/pull/28) ha
@@ -168,12 +218,14 @@ fisico finale. Serve misurare separatamente handshake, bootstrap e controlli
 aggiuntivi della fixture prima di attribuire la durata al prodotto. Le
 [ricevute della storia del collaudo](collaudi/2026-11-28-large-files-network-first.json)
 distinguono dati consegnati, errore di controllo e mancato completamento del run.
-I worker sono drenati, lo staging e le prenotazioni sono conservati; nessun
-tentativo automatico e nessuna qualificazione delle sei direzioni sono dichiarati.
+I worker sono drenati, lo staging e le prenotazioni sono conservati. Quei due
+tentativi non qualificano le sei direzioni; la nuova campagna sopra usa profili
+distinti, telemetria per RPC e un budget di osservazione esplicito. Non viene
+presentata come un miglioramento prestazionale rispetto ai run precedenti.
 
-Prima del rollout servono CI e review dell’head finale e una prova dedicata di
-trasferimento tra receiver temporanei su Ethernet/Wi-Fi, con coordinatore
-interrotto e ripresa da un’altra origine. Le suite su tre PC non sostituiscono
-questa prova. Controller durevole, relay con quote persistenti, pulizia esplicita
-dei parziali abbandonati e benchmark restano separati. Nessun vantaggio di
-throughput o di calcolo è dichiarato da questi test.
+Prima del rollout restano CI e review dell’head documentale finale e una prova
+distinta con coordinatore realmente interrotto e ripresa da un’altra origine
+fisica. La ripresa emulata non sostituisce questa prova. Controller durevole,
+relay con quote persistenti, pulizia esplicita dei parziali abbandonati e benchmark
+restano separati. Nessun vantaggio di throughput o di calcolo è dichiarato da
+questi test.

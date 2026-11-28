@@ -1,0 +1,809 @@
+{
+  "version": 1,
+  "date": "2026-11-28",
+  "source_commit": "b8e512b6cbc42baeb7f5207866dd2abe91b404db",
+  "qualified_checkout": "e52914eb910d77f75162cec3326846cea3813359",
+  "script_sha256": "670b07a06ce24aa74e6e62a130f0929807e47e960f23bef1ce4ec20841ee593a",
+  "bundle_sha256": "0f347d22aa07db0a933c7c0093cf2826970c5927a166b0d393bd800bdd631e2f",
+  "receipt_sha256": "ae0f61b6d89d027a4c2335839e81f26111a1ddd9c2dd1b52bd0a39e436202f29",
+  "telemetry_sha256": "ba8463e802ad5cb73beff0aeba123a3b51daff582400f21bef0a9715b085dbf6",
+  "success": true,
+  "scope": "Local Python server APIs with three real TEMP receivers; remote binary operations use actual SSH and local Ubuntu uses a one-shot helper. Not native agent/MCP migration.",
+  "input_bytes_per_direction": 67109121,
+  "payload_bytes_six_directions": 402654726,
+  "transfers": [
+    {
+      "source": "windows",
+      "destination": "kali",
+      "transfer_id": "2ad525c3-1bf0-4864-8171-3a6157a435f7",
+      "manifest_sha256": "b1c7eef30f7d98205ed569726fc32ca98f29e8c4f0144554c2c9696100728179",
+      "size": 67109121,
+      "sha256": "6d34a05cc759d868580a0084d64f05fb76f101278f5dbfc55ba47507a1032b30",
+      "copied_bytes": 67109121,
+      "copy_batches": [
+        33554432,
+        33554432,
+        257
+      ],
+      "advance_calls": 16,
+      "max_blocks": 8,
+      "duration_seconds": 397.636,
+      "resumed_driver": true
+    },
+    {
+      "source": "kali",
+      "destination": "windows",
+      "transfer_id": "1840907a-10fd-4996-ba89-69dd42710e67",
+      "manifest_sha256": "0690f3a62deb2be9f27a81b86904732e05588bc0be8a47b612863c02f7b142bd",
+      "size": 67109121,
+      "sha256": "fb2f32739e352b7b3d32442687c851f3976d8bf203fd6ba87dbef42e0eb11eb5",
+      "copied_bytes": 67109121,
+      "copy_batches": [
+        33554432,
+        33554432,
+        257
+      ],
+      "advance_calls": 16,
+      "max_blocks": 8,
+      "duration_seconds": 156.503,
+      "resumed_driver": false
+    },
+    {
+      "source": "ubuntu",
+      "destination": "windows",
+      "transfer_id": "d8f97aa5-bfd8-4572-9203-8b376e571e41",
+      "manifest_sha256": "3561d23beec3393a5bc2892bffb2d592d72cc83b8b110938d878cc3739551efb",
+      "size": 67109121,
+      "sha256": "122d6e84192a78b577f90de0873f8fe8e09aa3ed0a218f074d32c445a8f7d598",
+      "copied_bytes": 67109121,
+      "copy_batches": [
+        33554432,
+        33554432,
+        257
+      ],
+      "advance_calls": 5,
+      "max_blocks": 8,
+      "duration_seconds": 39.906,
+      "resumed_driver": false
+    },
+    {
+      "source": "windows",
+      "destination": "ubuntu",
+      "transfer_id": "299add2f-c142-4694-95ac-679cfcfbbc57",
+      "manifest_sha256": "192f52404ea9ba4c11439cf5706b75c1b1df8139b2a54c4a75ec6e84bcaa9c5c",
+      "size": 67109121,
+      "sha256": "6d34a05cc759d868580a0084d64f05fb76f101278f5dbfc55ba47507a1032b30",
+      "copied_bytes": 67109121,
+      "copy_batches": [
+        33554432,
+        33554432,
+        257
+      ],
+      "advance_calls": 6,
+      "max_blocks": 8,
+      "duration_seconds": 26.964,
+      "resumed_driver": false
+    },
+    {
+      "source": "ubuntu",
+      "destination": "kali",
+      "transfer_id": "3478aa6a-1396-4dec-990f-a5637b91681e",
+      "manifest_sha256": "6105362dc9de2095be2e496357c7c063d31e68e124748dae30e4b892d464f482",
+      "size": 67109121,
+      "sha256": "122d6e84192a78b577f90de0873f8fe8e09aa3ed0a218f074d32c445a8f7d598",
+      "copied_bytes": 67109121,
+      "copy_batches": [
+        33554432,
+        33554432,
+        257
+      ],
+      "advance_calls": 15,
+      "max_blocks": 8,
+      "duration_seconds": 358.143,
+      "resumed_driver": false
+    },
+    {
+      "source": "kali",
+      "destination": "ubuntu",
+      "transfer_id": "255f7090-065c-4474-b87f-2fbcb4edfbeb",
+      "manifest_sha256": "aa8a14b42deaf11ccda8653511529a4fefdb33a4f3c5c73d5fec03b7da2a62bb",
+      "size": 67109121,
+      "sha256": "fb2f32739e352b7b3d32442687c851f3976d8bf203fd6ba87dbef42e0eb11eb5",
+      "copied_bytes": 67109121,
+      "copy_batches": [
+        33554432,
+        33554432,
+        257
+      ],
+      "advance_calls": 12,
+      "max_blocks": 8,
+      "duration_seconds": 121.31,
+      "resumed_driver": false
+    }
+  ],
+  "driver_resumption": {
+    "emulated_origin": true,
+    "same_python_process": true,
+    "actual_crash": false,
+    "physical_outage": false,
+    "after_blocks": 8,
+    "prefix_verified_calls": 1,
+    "prefix_verified_blocks": 8,
+    "same_manifest_sha256": "b1c7eef30f7d98205ed569726fc32ca98f29e8c4f0144554c2c9696100728179",
+    "remaining_bytes": 33554689,
+    "copied_after_resumption": 33554689
+  },
+  "binary_counters": {
+    "ubuntu": {
+      "reads": 34,
+      "writes": 34,
+      "read_bytes": 134218242,
+      "write_bytes": 134218242,
+      "verify": 34
+    },
+    "windows": {
+      "reads": 34,
+      "writes": 34,
+      "read_bytes": 134218242,
+      "write_bytes": 134218242,
+      "verify": 34
+    },
+    "kali": {
+      "reads": 34,
+      "writes": 34,
+      "read_bytes": 134218242,
+      "write_bytes": 134218242,
+      "verify": 42
+    }
+  },
+  "observation": {
+    "max_blocks": 8,
+    "total_seconds": 1200,
+    "inactivity_seconds": 120,
+    "checked_between_batches": true,
+    "one_inflight_batch_may_overrun": true,
+    "per_binary_rpc_timeout_seconds": 30
+  },
+  "rpc_timings": [
+    {
+      "node": "kali",
+      "channel": "binary",
+      "operation": "block-read",
+      "calls": 34,
+      "total_seconds": 229.000868,
+      "median_seconds": 7.072886,
+      "max_seconds": 8.448801,
+      "request_frame_bytes": 11744,
+      "response_frame_bytes": 134227522
+    },
+    {
+      "node": "kali",
+      "channel": "binary",
+      "operation": "block-write",
+      "calls": 34,
+      "total_seconds": 693.640826,
+      "median_seconds": 21.253023,
+      "max_seconds": 27.28805,
+      "request_frame_bytes": 134234098,
+      "response_frame_bytes": 9084
+    },
+    {
+      "node": "kali",
+      "channel": "binary",
+      "operation": "verify-block",
+      "calls": 42,
+      "total_seconds": 32.323188,
+      "median_seconds": 0.766852,
+      "max_seconds": 1.117839,
+      "request_frame_bytes": 19382,
+      "response_frame_bytes": 7132
+    },
+    {
+      "node": "kali",
+      "channel": "control",
+      "operation": "bind",
+      "calls": 7,
+      "total_seconds": 0.194473,
+      "median_seconds": 0.029022,
+      "max_seconds": 0.035511,
+      "request_frame_bytes": 4196,
+      "response_frame_bytes": 10053
+    },
+    {
+      "node": "kali",
+      "channel": "control",
+      "operation": "blocks",
+      "calls": 6,
+      "total_seconds": 0.135914,
+      "median_seconds": 0.02427,
+      "max_seconds": 0.028105,
+      "request_frame_bytes": 1466,
+      "response_frame_bytes": 6342
+    },
+    {
+      "node": "kali",
+      "channel": "control",
+      "operation": "bootstrap",
+      "calls": 1,
+      "total_seconds": 5.95421,
+      "median_seconds": 5.95421,
+      "max_seconds": 5.95421,
+      "request_frame_bytes": 733986,
+      "response_frame_bytes": 551
+    },
+    {
+      "node": "kali",
+      "channel": "control",
+      "operation": "cleanup",
+      "calls": 4,
+      "total_seconds": 0.478025,
+      "median_seconds": 0.054874,
+      "max_seconds": 0.320633,
+      "request_frame_bytes": 927,
+      "response_frame_bytes": 6474
+    },
+    {
+      "node": "kali",
+      "channel": "control",
+      "operation": "close",
+      "calls": 1,
+      "total_seconds": 0.092459,
+      "median_seconds": 0.092459,
+      "max_seconds": 0.092459,
+      "request_frame_bytes": 61,
+      "response_frame_bytes": 207
+    },
+    {
+      "node": "kali",
+      "channel": "control",
+      "operation": "counts",
+      "calls": 4,
+      "total_seconds": 0.663185,
+      "median_seconds": 0.022921,
+      "max_seconds": 0.600542,
+      "request_frame_bytes": 203,
+      "response_frame_bytes": 539
+    },
+    {
+      "node": "kali",
+      "channel": "control",
+      "operation": "drain",
+      "calls": 1,
+      "total_seconds": 0.19222,
+      "median_seconds": 0.19222,
+      "max_seconds": 0.19222,
+      "request_frame_bytes": 50,
+      "response_frame_bytes": 158
+    },
+    {
+      "node": "kali",
+      "channel": "control",
+      "operation": "get",
+      "calls": 89,
+      "total_seconds": 6.909269,
+      "median_seconds": 0.025177,
+      "max_seconds": 0.851328,
+      "request_frame_bytes": 13145,
+      "response_frame_bytes": 63325
+    },
+    {
+      "node": "kali",
+      "channel": "control",
+      "operation": "info",
+      "calls": 4,
+      "total_seconds": 0.130016,
+      "median_seconds": 0.030603,
+      "max_seconds": 0.043741,
+      "request_frame_bytes": 429,
+      "response_frame_bytes": 1941
+    },
+    {
+      "node": "kali",
+      "channel": "control",
+      "operation": "queue",
+      "calls": 15,
+      "total_seconds": 0.43592,
+      "median_seconds": 0.029405,
+      "max_seconds": 0.0404,
+      "request_frame_bytes": 3444,
+      "response_frame_bytes": 15894
+    },
+    {
+      "node": "kali",
+      "channel": "control",
+      "operation": "request",
+      "calls": 4,
+      "total_seconds": 0.156882,
+      "median_seconds": 0.041785,
+      "max_seconds": 0.053931,
+      "request_frame_bytes": 2628,
+      "response_frame_bytes": 4076
+    },
+    {
+      "node": "kali",
+      "channel": "control",
+      "operation": "reserve",
+      "calls": 35,
+      "total_seconds": 1.083552,
+      "median_seconds": 0.028652,
+      "max_seconds": 0.074029,
+      "request_frame_bytes": 8105,
+      "response_frame_bytes": 41866
+    },
+    {
+      "node": "kali",
+      "channel": "control",
+      "operation": "status",
+      "calls": 111,
+      "total_seconds": 4.475035,
+      "median_seconds": 0.028552,
+      "max_seconds": 0.441203,
+      "request_frame_bytes": 24488,
+      "response_frame_bytes": 157839
+    },
+    {
+      "node": "kali",
+      "channel": "control",
+      "operation": "store",
+      "calls": 4,
+      "total_seconds": 0.140916,
+      "median_seconds": 0.036911,
+      "max_seconds": 0.04362,
+      "request_frame_bytes": 3339,
+      "response_frame_bytes": 553
+    },
+    {
+      "node": "kali",
+      "channel": "control",
+      "operation": "verify",
+      "calls": 4,
+      "total_seconds": 1.145999,
+      "median_seconds": 0.292568,
+      "max_seconds": 0.296405,
+      "request_frame_bytes": 426,
+      "response_frame_bytes": 794
+    },
+    {
+      "node": "ubuntu",
+      "channel": "binary",
+      "operation": "block-read",
+      "calls": 34,
+      "total_seconds": 8.542356,
+      "median_seconds": 0.232426,
+      "max_seconds": 0.326431,
+      "request_frame_bytes": 11744,
+      "response_frame_bytes": 134227522
+    },
+    {
+      "node": "ubuntu",
+      "channel": "binary",
+      "operation": "block-write",
+      "calls": 34,
+      "total_seconds": 8.942381,
+      "median_seconds": 0.273726,
+      "max_seconds": 0.384443,
+      "request_frame_bytes": 134234098,
+      "response_frame_bytes": 9084
+    },
+    {
+      "node": "ubuntu",
+      "channel": "binary",
+      "operation": "verify-block",
+      "calls": 34,
+      "total_seconds": 7.783062,
+      "median_seconds": 0.215789,
+      "max_seconds": 0.318164,
+      "request_frame_bytes": 15694,
+      "response_frame_bytes": 5780
+    },
+    {
+      "node": "ubuntu",
+      "channel": "control",
+      "operation": "bind",
+      "calls": 6,
+      "total_seconds": 0.016207,
+      "median_seconds": 0.002496,
+      "max_seconds": 0.003714,
+      "request_frame_bytes": 3598,
+      "response_frame_bytes": 8620
+    },
+    {
+      "node": "ubuntu",
+      "channel": "control",
+      "operation": "blocks",
+      "calls": 6,
+      "total_seconds": 0.020713,
+      "median_seconds": 0.003335,
+      "max_seconds": 0.004342,
+      "request_frame_bytes": 1463,
+      "response_frame_bytes": 6339
+    },
+    {
+      "node": "ubuntu",
+      "channel": "control",
+      "operation": "bootstrap",
+      "calls": 1,
+      "total_seconds": 0.59253,
+      "median_seconds": 0.59253,
+      "max_seconds": 0.59253,
+      "request_frame_bytes": 733994,
+      "response_frame_bytes": 559
+    },
+    {
+      "node": "ubuntu",
+      "channel": "control",
+      "operation": "cleanup",
+      "calls": 4,
+      "total_seconds": 0.162504,
+      "median_seconds": 0.039877,
+      "max_seconds": 0.049143,
+      "request_frame_bytes": 927,
+      "response_frame_bytes": 6475
+    },
+    {
+      "node": "ubuntu",
+      "channel": "control",
+      "operation": "close",
+      "calls": 1,
+      "total_seconds": 0.067748,
+      "median_seconds": 0.067748,
+      "max_seconds": 0.067748,
+      "request_frame_bytes": 61,
+      "response_frame_bytes": 207
+    },
+    {
+      "node": "ubuntu",
+      "channel": "control",
+      "operation": "counts",
+      "calls": 4,
+      "total_seconds": 0.007042,
+      "median_seconds": 0.001649,
+      "max_seconds": 0.002422,
+      "request_frame_bytes": 203,
+      "response_frame_bytes": 539
+    },
+    {
+      "node": "ubuntu",
+      "channel": "control",
+      "operation": "drain",
+      "calls": 1,
+      "total_seconds": 0.066484,
+      "median_seconds": 0.066484,
+      "max_seconds": 0.066484,
+      "request_frame_bytes": 50,
+      "response_frame_bytes": 158
+    },
+    {
+      "node": "ubuntu",
+      "channel": "control",
+      "operation": "get",
+      "calls": 89,
+      "total_seconds": 0.177332,
+      "median_seconds": 0.002005,
+      "max_seconds": 0.005055,
+      "request_frame_bytes": 13110,
+      "response_frame_bytes": 44144
+    },
+    {
+      "node": "ubuntu",
+      "channel": "control",
+      "operation": "info",
+      "calls": 4,
+      "total_seconds": 0.009837,
+      "median_seconds": 0.002263,
+      "max_seconds": 0.004063,
+      "request_frame_bytes": 430,
+      "response_frame_bytes": 1942
+    },
+    {
+      "node": "ubuntu",
+      "channel": "control",
+      "operation": "queue",
+      "calls": 7,
+      "total_seconds": 0.044747,
+      "median_seconds": 0.006047,
+      "max_seconds": 0.008427,
+      "request_frame_bytes": 1609,
+      "response_frame_bytes": 8254
+    },
+    {
+      "node": "ubuntu",
+      "channel": "control",
+      "operation": "request",
+      "calls": 4,
+      "total_seconds": 0.015928,
+      "median_seconds": 0.004305,
+      "max_seconds": 0.004598,
+      "request_frame_bytes": 2630,
+      "response_frame_bytes": 4078
+    },
+    {
+      "node": "ubuntu",
+      "channel": "control",
+      "operation": "reserve",
+      "calls": 27,
+      "total_seconds": 0.137544,
+      "median_seconds": 0.005683,
+      "max_seconds": 0.007664,
+      "request_frame_bytes": 6255,
+      "response_frame_bytes": 33449
+    },
+    {
+      "node": "ubuntu",
+      "channel": "control",
+      "operation": "status",
+      "calls": 81,
+      "total_seconds": 0.273372,
+      "median_seconds": 0.003417,
+      "max_seconds": 0.00723,
+      "request_frame_bytes": 17878,
+      "response_frame_bytes": 115858
+    },
+    {
+      "node": "ubuntu",
+      "channel": "control",
+      "operation": "store",
+      "calls": 4,
+      "total_seconds": 0.011208,
+      "median_seconds": 0.002768,
+      "max_seconds": 0.003281,
+      "request_frame_bytes": 3342,
+      "response_frame_bytes": 554
+    },
+    {
+      "node": "ubuntu",
+      "channel": "control",
+      "operation": "verify",
+      "calls": 4,
+      "total_seconds": 0.248103,
+      "median_seconds": 0.06032,
+      "max_seconds": 0.077893,
+      "request_frame_bytes": 428,
+      "response_frame_bytes": 796
+    },
+    {
+      "node": "windows",
+      "channel": "binary",
+      "operation": "block-read",
+      "calls": 34,
+      "total_seconds": 33.408092,
+      "median_seconds": 0.932519,
+      "max_seconds": 1.334198,
+      "request_frame_bytes": 11744,
+      "response_frame_bytes": 134227522
+    },
+    {
+      "node": "windows",
+      "channel": "binary",
+      "operation": "block-write",
+      "calls": 34,
+      "total_seconds": 33.181932,
+      "median_seconds": 0.97463,
+      "max_seconds": 1.236232,
+      "request_frame_bytes": 134234098,
+      "response_frame_bytes": 9084
+    },
+    {
+      "node": "windows",
+      "channel": "binary",
+      "operation": "verify-block",
+      "calls": 34,
+      "total_seconds": 30.408665,
+      "median_seconds": 0.867467,
+      "max_seconds": 1.217455,
+      "request_frame_bytes": 15694,
+      "response_frame_bytes": 5780
+    },
+    {
+      "node": "windows",
+      "channel": "control",
+      "operation": "bind",
+      "calls": 6,
+      "total_seconds": 0.023354,
+      "median_seconds": 0.001909,
+      "max_seconds": 0.008807,
+      "request_frame_bytes": 3600,
+      "response_frame_bytes": 8622
+    },
+    {
+      "node": "windows",
+      "channel": "control",
+      "operation": "blocks",
+      "calls": 7,
+      "total_seconds": 0.04327,
+      "median_seconds": 0.002198,
+      "max_seconds": 0.027208,
+      "request_frame_bytes": 1706,
+      "response_frame_bytes": 8269
+    },
+    {
+      "node": "windows",
+      "channel": "control",
+      "operation": "bootstrap",
+      "calls": 1,
+      "total_seconds": 1.982357,
+      "median_seconds": 1.982357,
+      "max_seconds": 1.982357,
+      "request_frame_bytes": 734011,
+      "response_frame_bytes": 687
+    },
+    {
+      "node": "windows",
+      "channel": "control",
+      "operation": "cleanup",
+      "calls": 4,
+      "total_seconds": 0.103054,
+      "median_seconds": 0.024812,
+      "max_seconds": 0.037244,
+      "request_frame_bytes": 927,
+      "response_frame_bytes": 6474
+    },
+    {
+      "node": "windows",
+      "channel": "control",
+      "operation": "close",
+      "calls": 1,
+      "total_seconds": 0.019626,
+      "median_seconds": 0.019626,
+      "max_seconds": 0.019626,
+      "request_frame_bytes": 61,
+      "response_frame_bytes": 207
+    },
+    {
+      "node": "windows",
+      "channel": "control",
+      "operation": "counts",
+      "calls": 4,
+      "total_seconds": 0.010135,
+      "median_seconds": 0.002032,
+      "max_seconds": 0.004439,
+      "request_frame_bytes": 203,
+      "response_frame_bytes": 539
+    },
+    {
+      "node": "windows",
+      "channel": "control",
+      "operation": "drain",
+      "calls": 1,
+      "total_seconds": 0.076679,
+      "median_seconds": 0.076679,
+      "max_seconds": 0.076679,
+      "request_frame_bytes": 50,
+      "response_frame_bytes": 158
+    },
+    {
+      "node": "windows",
+      "channel": "control",
+      "operation": "get",
+      "calls": 178,
+      "total_seconds": 0.693664,
+      "median_seconds": 0.001927,
+      "max_seconds": 0.115812,
+      "request_frame_bytes": 26300,
+      "response_frame_bytes": 152820
+    },
+    {
+      "node": "windows",
+      "channel": "control",
+      "operation": "info",
+      "calls": 4,
+      "total_seconds": 0.008681,
+      "median_seconds": 0.002079,
+      "max_seconds": 0.002677,
+      "request_frame_bytes": 429,
+      "response_frame_bytes": 1939
+    },
+    {
+      "node": "windows",
+      "channel": "control",
+      "operation": "queue",
+      "calls": 10,
+      "total_seconds": 0.073727,
+      "median_seconds": 0.003646,
+      "max_seconds": 0.021833,
+      "request_frame_bytes": 2294,
+      "response_frame_bytes": 10862
+    },
+    {
+      "node": "windows",
+      "channel": "control",
+      "operation": "request",
+      "calls": 4,
+      "total_seconds": 0.044244,
+      "median_seconds": 0.007175,
+      "max_seconds": 0.024502,
+      "request_frame_bytes": 2629,
+      "response_frame_bytes": 4077
+    },
+    {
+      "node": "windows",
+      "channel": "control",
+      "operation": "reserve",
+      "calls": 28,
+      "total_seconds": 0.168604,
+      "median_seconds": 0.003542,
+      "max_seconds": 0.022417,
+      "request_frame_bytes": 6486,
+      "response_frame_bytes": 34305
+    },
+    {
+      "node": "windows",
+      "channel": "control",
+      "operation": "status",
+      "calls": 88,
+      "total_seconds": 0.934423,
+      "median_seconds": 0.002727,
+      "max_seconds": 0.240043,
+      "request_frame_bytes": 19417,
+      "response_frame_bytes": 127467
+    },
+    {
+      "node": "windows",
+      "channel": "control",
+      "operation": "store",
+      "calls": 10,
+      "total_seconds": 0.074696,
+      "median_seconds": 0.006079,
+      "max_seconds": 0.025496,
+      "request_frame_bytes": 8350,
+      "response_frame_bytes": 1384
+    },
+    {
+      "node": "windows",
+      "channel": "control",
+      "operation": "verify",
+      "calls": 4,
+      "total_seconds": 0.215154,
+      "median_seconds": 0.053429,
+      "max_seconds": 0.057093,
+      "request_frame_bytes": 428,
+      "response_frame_bytes": 796
+    }
+  ],
+  "cleanup": {
+    "ubuntu": {
+      "worker_exit_code": 0,
+      "resource_claims": 0,
+      "disk_claims": 0,
+      "unconfirmed_attempts": 0,
+      "temp_removed": true
+    },
+    "windows": {
+      "worker_exit_code": 0,
+      "resource_claims": 0,
+      "disk_claims": 0,
+      "unconfirmed_attempts": 0,
+      "temp_removed": true
+    },
+    "kali": {
+      "worker_exit_code": 0,
+      "resource_claims": 0,
+      "disk_claims": 0,
+      "unconfirmed_attempts": 0,
+      "temp_removed": true
+    }
+  },
+  "oracle_checks": [
+    "six_real_receiver_directions",
+    "windows_kali_double_ssh_relay",
+    "ubuntu_one_shot_binary_helper",
+    "distinct_source_seed_hashes",
+    "bounded_eight_block_advance",
+    "eight_block_driver_resumption_emulated",
+    "one_batch_exact_eight_block_prefix_reverification",
+    "per_rpc_and_advance_telemetry",
+    "between_batch_total_and_progress_observation_budgets",
+    "publication_exit0_and_hash",
+    "staging_cleanup_preserves_synthetic_target",
+    "no_registered_commands"
+  ],
+  "limits": [
+    "Metadata uses fixture control brokers; remote binary blocks use actual product SSH exchange and local Ubuntu uses a one-shot helper.",
+    "Logical origin and journal reset occur inside one Python process; no physical outage or coordinator crash.",
+    "Per-transfer timings start after initial broker bootstrap; they include one-shot helper startup/hash checks and shared network load. RPC aggregates also include broker setup. No throughput or compute speedup claim.",
+    "Observation budgets are checked between batches and can overrun by one in-flight batch.",
+    "No production, service, GUI, credential or network configuration change.",
+    "Previously failed synthetic profiles remain preserved; only this successful campaign is removed.",
+    "The operator harness and full telemetry are private hashed artifacts; the public aggregate is not a standalone reproduction harness."
+  ]
+}
