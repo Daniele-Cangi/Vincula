@@ -147,6 +147,14 @@ dopo Stop, resume senza riattivazione implicita, export già preparato,
 pubblicazione e cleanup. I worker originali sono drenati e le nuove fixture
 rimosse. Il fixture MCP verifica i 19 helper installati.
 
+Il successivo [collaudo della riapprovazione dopo Stop](collaudi/2026-11-28-stopped-transfer-reapproval.json)
+del sorgente `8e67088` porta la suite locale a 750 test con 21 esclusioni e
+quella nativa a 92 metodi su ciascun PC, con un'esclusione prevista per host.
+Include il passaggio reale `full` → Stop → `ask`, i comandi owner-local,
+le approvazioni separate e il nuovo CAS prima di I/O limitato. Tutti i worker
+originali sono drenati e i TEMP dei collaudi riusciti sono rimossi. Le prove
+precedenti restano disponibili come qualificazioni dei rispettivi sorgenti.
+
 La review ha corretto il limite delle proposte pendenti: gli intenti scaduti
 restano nella cronologia e non consumano capacità per nuovi intenti. Scadenza e
 conteggio non modificano binding, eventi o prenotazioni dei file. Due regressioni
