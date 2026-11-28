@@ -191,8 +191,9 @@ class CopyEndpointRuntimeTests(unittest.TestCase):
             status = self.call("status", endpoint_id=endpoint["id"])
             self.binding[side] = dict(binding_token=status["token"], binding_revision=status["binding_revision"])
 
+        current_export = self.f.status(self.export)
         with self.assertRaises(ValueError):
-            self.f.rpc("block-read", self.f.status(self.export), index=0, **previous["source"])
+            self.f.rpc("block-read", current_export, index=0, **previous["source"])
         reply, data = self.rpc("block-read", "source", index=0)
         self.assertEqual(len(data), self.size)
         self.rpc("block-write", "destination", index=0, expected=reply["block"], payload=data)
