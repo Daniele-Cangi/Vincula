@@ -120,13 +120,14 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
         stack.enter_context(patch.object(app, "NodeRequests", Requests))
         stack.enter_context(patch.object(app.desktop_ssh, "DesktopSSHTransport", Transport))
 
-    async def test_cancel_before_start_does_not_provision_or_contact_nodes(self):
+    async def test_stop_before_start_does_not_provision_or_contact_nodes(self):
         self.stopped.set()
         with ExitStack() as stack:
             self.patches(stack)
             await app.run(self.stopped, self.output)
         self.assertEqual(self.calls, [])
         self.assertTrue(self.output.events[-1][2])
+        self.assertEqual(self.output.events[-1][0], "stopped")
         self.assertFalse(self.transports)
 
     async def test_unavailable_runtime_does_not_provision_or_claim_ready(self):
@@ -158,9 +159,68 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
                 self.release.set()
                 await asyncio.wait_for(runner, 3)
         self.assertTrue(self.transports[0].closed)
+        self.assertFalse(runner.cancelled())
         self.assertEqual(self.output.events[-1][0], "stopped")
         self.assertTrue(self.output.events[-1][2])
         self.assertFalse(any(payload["action"] in {"stop", "shutdown"} for _, payload in self.transports[0].calls))
+
+    async def test_external_cancellation_propagates_after_scoped_cleanup(self):
+        with ExitStack() as stack:
+            self.patches(stack, block_heartbeat=True, delay_terminal=True)
+            runner = asyncio.create_task(app.run(self.stopped, self.output))
+            try:
+                await asyncio.wait_for(self.gate.wait(), 2)
+                runner.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(runner, 3)
+            finally:
+                self.stopped.set()
+                self.release.set()
+                if not runner.done():
+                    runner.cancel()
+                await asyncio.gather(runner, return_exceptions=True)
+        self.assertTrue(runner.cancelled())
+        self.assertTrue(self.transports[0].closed)
+        stopped_nodes = {node for node, payload in self.transports[0].calls
+                         if payload["action"] == "stop_session"}
+        self.assertEqual(stopped_nodes, set(self.ids))
+        self.assertEqual(self.output.events[-1][0], "stopped")
+        self.assertTrue(self.output.events[-1][2])
+
+    async def test_external_cancellation_during_inspect_cancels_pending_requests(self):
+        cancelled = set()
+        owner = self
+        class BlockedRequests:
+            def __init__(self, catalog):
+                pass
+
+            async def __call__(self, node, payload):
+                owner.calls.append((node, payload))
+                owner.gate.set()
+                try:
+                    await owner.release.wait()
+                finally:
+                    cancelled.add(node)
+
+        with ExitStack() as stack:
+            self.patches(stack)
+            stack.enter_context(patch.object(app, "NodeRequests", BlockedRequests))
+            runner = asyncio.create_task(app.run(self.stopped, self.output))
+            try:
+                await asyncio.wait_for(self.gate.wait(), 2)
+                runner.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(runner, 3)
+            finally:
+                self.release.set()
+                if not runner.done():
+                    runner.cancel()
+                await asyncio.gather(runner, return_exceptions=True)
+        self.assertTrue(runner.cancelled())
+        self.assertEqual(cancelled, set(self.ids))
+        self.assertEqual({payload["action"] for _, payload in self.calls}, {"inspect"})
+        self.assertFalse(self.transports)
+        self.assertTrue(self.output.events[-1][2])
 
 
 if __name__ == "__main__":

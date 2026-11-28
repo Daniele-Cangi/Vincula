@@ -52,6 +52,22 @@ def digest(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def elf_search_paths(output):
+    """Read readelf's RPATH/RUNPATH tags without backtracking over its output."""
+    paths = []
+    for line in output.splitlines():
+        _, opening_tag, tail = line.partition("(")
+        tag, closing_tag, detail = tail.partition(")")
+        if not opening_tag or not closing_tag or tag not in {"RPATH", "RUNPATH"}:
+            continue
+        _, opening_value, value = detail.partition("[")
+        value, closing_value, _ = value.partition("]")
+        if not opening_value or not closing_value:
+            raise ValueError("Malformed ELF search path tag")
+        paths.append(value)
+    return paths
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact", required=True, type=Path)
@@ -112,7 +128,7 @@ def main():
                 raise ValueError("Unexpected host dependency: " + soname + " => " + str(target))
             dependencies[soname] = "bundle" if target.is_relative_to(root) else "host-glibc"
         dynamic = subprocess.run(["readelf", "-d", str(path)], env=env, capture_output=True, text=True, timeout=10)
-        rpaths = re.findall(r"\((?:RPATH|RUNPATH)\).*?\[(.*?)\]", dynamic.stdout)
+        rpaths = elf_search_paths(dynamic.stdout)
         if not rpaths or any(not row.startswith("$ORIGIN") or ":" in row for row in rpaths):
             raise ValueError("Nonlocal or absent ELF search path: " + name)
         elf_files.append(name)

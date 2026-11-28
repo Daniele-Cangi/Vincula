@@ -153,6 +153,17 @@ sintetici da 1 GiB sono stati rimossi dopo controllo di hash e identità;
 i pannelli QA sono stati fermati tramite i loro job dedicati.
 La condivisione resta ferma su tutti i nodi; MCP è raggiungibile sui tre PC.
 
+Alla ripresa del 28 novembre la condivisione era stata riattivata
+dall'operatore. Il controllo Sonar completo ha identificato una cancellazione
+esterna assorbita dal controller: ora propaga dopo il cleanup, mentre lo
+Stop esplicito conserva l'esito normale. È corretto anche il parser `readelf`
+del QA e sono isolate le fixture d'installazione dal supervisor reale.
+La regressione locale passa 183 test desktop, con sette esclusioni native;
+passano anche i cinque test tool e il QA headless dei 118 ELF su Ubuntu e Kali.
+Il [triage aggiornato](collaudi/2026-11-28-desktop-security-triage.md)
+distingue questi rilievi corretti dai quattro alert statici e dal debito di
+manutenzione. L'aggiornamento delle app attende lo stop del gruppo attivo.
+
 Prima del rilascio restano:
 
 1. Completare la prova esplicita di revoca/disconnessione del nuovo motore.

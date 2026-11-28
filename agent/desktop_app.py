@@ -30,6 +30,10 @@ import node_ssh
 import nodes
 
 
+class _StopRequested(Exception):
+    """The owner's Stop event, distinct from cancellation by an async caller."""
+
+
 def registry(document):
     # Explicit registries need no MCP dependencies. Retain the original Windows
     # Ethernet alias while that operator-owned catalog is being migrated.
@@ -180,13 +184,13 @@ async def run(stopped, output):
         requests = NodeRequests(catalog)
         async def batch(payloads):
             if stopped.is_set():
-                raise asyncio.CancelledError()
+                raise _StopRequested()
             tasks = [asyncio.create_task(requests(node, payloads[node])) for node in members]
             pending.update(tasks)
             try:
                 while not all(task.done() for task in tasks):
                     if stopped.is_set():
-                        raise asyncio.CancelledError()
+                        raise _StopRequested()
                     await asyncio.sleep(0.05)
                 results = await asyncio.gather(*tasks)
                 return dict(zip(members, results))
@@ -216,13 +220,13 @@ async def run(stopped, output):
                                          "group": group.to_document()} for node in members})
         revisions = dict(group.revisions)
         if stopped.is_set():
-            raise asyncio.CancelledError()
+            raise _StopRequested()
         transport = desktop_ssh.DesktopSSHTransport(catalog, session, revisions, dict.fromkeys(members, pin))
         controller = desktop_coordinator.DesktopCoordinator(catalog, revisions,
             {node: [configured[node]["command"]] for node in members}, transport, session_id=session, timeout=2)
         if stopped.is_set():
             controller = None  # No coordinator operation has been scheduled.
-            raise asyncio.CancelledError()
+            raise _StopRequested()
         async def emergency_stop():
             while not stopped.is_set():
                 await asyncio.sleep(0.02)
@@ -257,7 +261,7 @@ async def run(stopped, output):
                 if stopped.is_set():
                     break
                 await asyncio.sleep(0.05)
-    except asyncio.CancelledError:
+    except _StopRequested:
         pass
     except (OSError, ValueError, KeyError, TypeError, asyncio.TimeoutError):
         failure_message = "Gruppo non disponibile. Verifica layout, runtime desktop e collegamenti dei nodi."

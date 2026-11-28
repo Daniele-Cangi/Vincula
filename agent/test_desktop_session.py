@@ -116,9 +116,14 @@ class SupportInstallTests(unittest.TestCase):
             (self.source / name).write_bytes(("# synthetic " + name + "\n").encode())
         self.digest, _, _ = session.bundle(self.source)
         self.registry = self.base / "nodes.json"
+        self.control = self.root / "control"
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         self.stack.enter_context(patch.object(session.desktop_node, "home", return_value=self.root))
+        self.stack.enter_context(patch.object(session.desktop_ssh, "default_directory", return_value=self.control))
+        self.supervisor_request = self.stack.enter_context(patch.object(session.desktop_supervisor, "request",
+            side_effect=AssertionError("The synthetic install must not contact a real supervisor.")))
+        self.addCleanup(self.supervisor_request.assert_not_called)
         self.stack.enter_context(patch.object(session.desktop_node, "deployment", return_value=({}, None, None)))
         self.stack.enter_context(patch.object(session.nodes, "snapshot", return_value={"registry": {"local": "synthetic"}}))
         self.stack.enter_context(patch.dict(os.environ, {"XDG_CONFIG_HOME": str(self.xdg)}))
@@ -152,6 +157,21 @@ class SupportInstallTests(unittest.TestCase):
             self.install()
         self.assertEqual(list(self.root.iterdir()), [conflict])
         self.assertEqual(conflict.read_bytes(), b"previous release")
+
+    def test_active_synthetic_endpoint_refuses_support_publication(self):
+        self.root.mkdir(mode=0o700)
+        self.control.mkdir(mode=0o700)
+        endpoint = self.control / "endpoint.json"
+        endpoint.write_bytes(b"synthetic endpoint; never opened by a real request")
+        before = {path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
+        with patch.object(session.desktop_supervisor, "request",
+                          return_value={"ok": True, "session": {"state": "running"}}) as request:
+            with self.assertRaisesRegex(ValueError, "Stop the desktop group"):
+                self.install()
+            request.assert_called_once_with(self.control, {"action": "status"})
+        self.assertEqual({path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}, before)
+        self.assertEqual(set(self.root.iterdir()), {self.control})
+        self.assertFalse(self.xdg.exists())
 
     def test_conflicting_autostart_is_found_before_support_publication(self):
         autostart = self.xdg / "autostart"
