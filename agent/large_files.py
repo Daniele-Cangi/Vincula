@@ -355,6 +355,14 @@ def dispatch(runtime, operation, protocol_version=2, request_id=None, payload=b"
         authorize = lambda: _authorize(runtime, key, epoch, expected_state=expected_state)
         if operation == "verify-block":
             valid = storage.verify_stored_block(base(runtime), key, header, index, fields["expected"], authorize=authorize)
+            if valid:
+                # A prior writer can exit after publishing the durable block
+                # and before its SQL checkpoint. Do not let the coordinator
+                # skip those bytes while the authoritative ledger is missing.
+                with runtime.transaction() as db:
+                    _pinned(db, key, expected_state)
+                    state.guard(db, key, epoch, grant=_grant(db, _endpoint(record)["root"]))
+                    state.checkpoint(db, key, epoch, None, **fields["expected"])
             return {"valid": valid}, b""
         def checkpoint(block):
             with runtime.transaction() as db:

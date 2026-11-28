@@ -884,10 +884,46 @@ def windows_launch(payload):
     return 0
 
 
+def _read_windows_launch_status(path):
+    """Preserve native sharing errors and own the original handle exactly once."""
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+    import stat
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                  ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    handle = kernel.CreateFileW(str(path), 0x80000000, 0x00000007, None, 3, 0x00200000, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    except BaseException:
+        kernel.CloseHandle(handle)
+        raise
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+            raise ValueError("Native launch acknowledgment is not a regular non-reparse file.")
+        with os.fdopen(descriptor, "rb", buffering=0) as stream:
+            descriptor = None  # The stream owns the CRT descriptor and original handle.
+            return stream.read(LAUNCH_ACK_BYTES + 1)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def read_launch_status(path):
     try:
-        with path.open("rb") as stream:
-            raw = stream.read(8193)
+        if os.name == "nt":
+            raw = _read_windows_launch_status(path)
+        else:
+            with path.open("rb") as stream:
+                raw = stream.read(8193)
         if len(raw) > 8192:
             raise ValueError("Oversized native launch acknowledgment.")
         value = json.loads(raw)
