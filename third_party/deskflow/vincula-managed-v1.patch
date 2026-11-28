@@ -1,0 +1,2297 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 5b170439..e99ab48a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -23,6 +23,7 @@ endif()
+ 
+ #Project level options
+ option(BUILD_INSTALLER "Build installer" ON)
++option(BUILD_GUI "Build the optional Deskflow GUI and translations" ON)
+ option(ENABLE_COVERAGE "Enable test coverage" OFF)
+ if(UNIX)
+   if(APPLE)
+@@ -238,7 +239,9 @@ endif()
+ add_subdirectory(docs)
+ 
+ # build translations before source, I18N unit tests fail if they are missing
+-add_subdirectory(translations)
++if(BUILD_GUI)
++  add_subdirectory(translations)
++endif()
+ 
+ add_subdirectory(src)
+ 
+diff --git a/src/apps/CMakeLists.txt b/src/apps/CMakeLists.txt
+index 2f7669de..c799610e 100644
+--- a/src/apps/CMakeLists.txt
++++ b/src/apps/CMakeLists.txt
+@@ -49,4 +49,6 @@ endif()
+ 
+ add_subdirectory(deskflow-core)
+ add_subdirectory(deskflow-daemon) #Only used on windows
+-add_subdirectory(deskflow-gui)
++if(BUILD_GUI)
++  add_subdirectory(deskflow-gui)
++endif()
+diff --git a/src/apps/deskflow-core/CoreArgParser.cpp b/src/apps/deskflow-core/CoreArgParser.cpp
+index 2959f2de..3fa46ceb 100644
+--- a/src/apps/deskflow-core/CoreArgParser.cpp
++++ b/src/apps/deskflow-core/CoreArgParser.cpp
+@@ -10,6 +10,8 @@
+ #include "common/Constants.h"
+ #include "common/ExitCodes.h"
+ #include "common/Settings.h"
++#include "common/ManagedSession.h"
++#include <stdexcept>
+ #include "common/VersionInfo.h"
+ #include "deskflow/ProtocolTypes.h"
+ 
+@@ -48,7 +50,23 @@ void CoreArgParser::parse()
+     exit(s_exitSuccess);
+   }
+ 
+-  if (m_parser.isSet(CoreArgs::configOption)) {
++  auto &managed = deskflow::ManagedSession::instance();
++  if (managed.active()) {
++    if (!m_parser.errorText().isEmpty() || managed.primary() != m_serverMode
++        || !m_parser.isSet(CoreArgs::configOption) || m_parser.value(CoreArgs::configOption) != managed.settingsFile())
++      throw std::runtime_error("managed role or settings argument differs from private bootstrap");
++    // Settings constructed directly at the private paths before any provider.
++    Settings::setValue(Settings::Core::ComputerName, "vincula-" + managed.localNode());
++    Settings::setValue(Settings::Core::UseHooks, true);
++    Settings::setValue(Settings::Core::EnableEnterCommand, false);
++    Settings::setValue(Settings::Core::EnableExitCommand, false);
++    Settings::setValue(Settings::Security::TlsEnabled, true);
++    Settings::setValue(Settings::Security::CheckPeers, true);
++    Settings::setValue(Settings::Security::Certificate, managed.certificateFile());
++    Settings::setValue(Settings::Server::Protocol, "barrier");
++    Settings::setValue(Settings::Server::EnableClipboard, managed.clipboardRequested());
++    if (!managed.clipboardRequested()) Settings::setValue(Settings::Server::ClipboardSize, 0);
++  } else if (m_parser.isSet(CoreArgs::configOption)) {
+     Settings::setSettingsFile(m_parser.value(CoreArgs::configOption));
+   }
+ }
+diff --git a/src/apps/deskflow-core/CoreArgs.h b/src/apps/deskflow-core/CoreArgs.h
+index f6bc00d2..99ac57f5 100644
+--- a/src/apps/deskflow-core/CoreArgs.h
++++ b/src/apps/deskflow-core/CoreArgs.h
+@@ -19,6 +19,8 @@ struct CoreArgs
+       QCommandLineOption("new-instance", "Skip the check for a running instance, always makes a new instance");
+   inline static const auto configOption =
+       QCommandLineOption({"s", "settings"}, "override configuration file to use", "configFile");
++  inline static const auto managedInputOption = QCommandLineOption("vincula-managed-in", "Private owner control pipe", "handle");
++  inline static const auto managedOutputOption = QCommandLineOption("vincula-managed-out", "Private owner facts pipe", "handle");
+ 
+-  inline static const auto options = {helpOption, versionOption, multiInstanceOption, configOption};
++  inline static const auto options = {helpOption, versionOption, multiInstanceOption, configOption, managedInputOption, managedOutputOption};
+ };
+diff --git a/src/apps/deskflow-core/deskflow-core.cpp b/src/apps/deskflow-core/deskflow-core.cpp
+index 325c9750..42488979 100644
+--- a/src/apps/deskflow-core/deskflow-core.cpp
++++ b/src/apps/deskflow-core/deskflow-core.cpp
+@@ -13,6 +13,7 @@
+ #include "base/Log.h"
+ #include "common/Constants.h"
+ #include "common/ExitCodes.h"
++#include "common/ManagedSession.h"
+ #include "deskflow/ClientApp.h"
+ #include "deskflow/ServerApp.h"
+ #include "deskflow/ipc/CoreIpcServer.h"
+@@ -26,6 +27,18 @@
+ #include <QSharedMemory>
+ #include <QTextStream>
+ #include <QThread>
++#include <cstring>
++#include <memory>
++#include <stdexcept>
++
++namespace {
++class ManagedProbeData final : public EventData
++{
++public:
++  explicit ManagedProbeData(quint64 value) : sequence(value) {}
++  const quint64 sequence;
++};
++}
+ 
+ void qtMessageHandler(QtMsgType type, const QMessageLogContext &context, const QString &message)
+ {
+@@ -69,12 +82,31 @@ App *createApp(const CoreArgParser &parser, EventQueue &events, const QString &p
+ 
+ int main(int argc, char **argv)
+ {
++  // Provisioning uses no GUI platform plugin, input backend or default settings.
++  for (int i = 1; i < argc; ++i) if (std::strcmp(argv[i], "--vincula-provision") == 0) {
++    QCoreApplication provisionApp(argc, argv);
++    const auto args = provisionApp.arguments();
++    try {
++      if (args.size() != 7 || args[1] != "--vincula-provision" || args[3] != "--vincula-session" || args[5] != "--vincula-node")
++        throw std::runtime_error("invalid managed provision arguments");
++      return deskflow::ManagedSession::provision(args[2], args[4], args[6]);
++    } catch (const std::exception &) {
++      QTextStream(stderr) << "Vincula provisioning failed; existing files preserved.\n";
++      return 2;
++    }
++  }
+ #if defined(Q_OS_WIN)
+   ArchMiscWindows::setInstanceWin32(GetModuleHandle(nullptr));
+ #endif
+ 
+   QApplication::setApplicationName(QStringLiteral("%1 Core").arg(kAppName));
+   QApplication app(argc, argv);
++  auto &managed = deskflow::ManagedSession::instance();
++  try { managed.initialize(QCoreApplication::arguments()); }
++  catch (const std::exception &) {
++    QTextStream(stderr) << "Vincula private bootstrap was rejected.\n";
++    return 2;
++  }
+ 
+   Arch arch;
+   arch.init();
+@@ -102,30 +134,45 @@ int main(int argc, char **argv)
+   // Before we check any more args we need to check for a duplicate process.
+   // Create a shared memory segment with a unique key
+   // This is to prevent a new instance from running if one is already running
+-  QSharedMemory sharedMemory(kCoreBinName);
++  std::unique_ptr<QSharedMemory> sharedMemory;
++  if (!managed.active()) {
++    sharedMemory = std::make_unique<QSharedMemory>(kCoreBinName);
+ 
+   // Attempt to attach first and detach in order to clean up stale shm chunks
+   // This can happen if the previous instance was killed or crashed
+-  if (sharedMemory.attach())
+-    sharedMemory.detach();
++  if (sharedMemory->attach())
++    sharedMemory->detach();
+ 
+-  if (!sharedMemory.create(1) && parser.singleInstanceOnly()) {
++  if (!sharedMemory->create(1) && parser.singleInstanceOnly()) {
+     LOG_WARN("an instance of deskflow core is already running");
+     return s_exitDuplicate;
+   }
++  }
+ 
+-  parser.parse();
++  try { parser.parse(); }
++  catch (const std::exception &) { QTextStream(stderr) << "Vincula private launch configuration was rejected.\n"; return 2; }
+ 
+   EventQueue events;
+   const auto processName = QFileInfo(argv[0]).fileName();
+ 
+   App *coreApp = createApp(parser, events, processName);
++  if (!coreApp) return 2;
+ 
++  if (!managed.active()) {
+   const auto ipcServer = new deskflow::core::ipc::CoreIpcServer(&app); // NOSONAR - Qt managed
+   QObject::connect(
+       ipcServer, &deskflow::core::ipc::IpcServer::stopProcessRequested, coreApp, &App::quit, Qt::DirectConnection
+   );
+   ipcServer->listen();
++  } else {
++    events.addHandler(EventTypes::ManagedReadinessProbe, &managed, [&managed](const Event &event) {
++      const auto data = dynamic_cast<const ManagedProbeData *>(event.getDataObject());
++      if (data) managed.confirmProbe(data->sequence);
++    });
++    managed.startControl([coreApp] { coreApp->quit(); }, [&events, &managed](quint64 sequence) {
++      events.addEvent(Event(EventTypes::ManagedReadinessProbe, &managed, new ManagedProbeData(sequence)));
++    });
++  }
+ 
+   QThread coreThread;
+   QObject::connect(&coreThread, &QThread::finished, &app, &QApplication::quit);
+@@ -133,6 +180,8 @@ int main(int argc, char **argv)
+ 
+   int exitCode = QApplication::exec();
+   coreThread.wait();
++  if (managed.active()) managed.shutdown();
++  if (managed.active()) events.removeHandler(EventTypes::ManagedReadinessProbe, &managed);
+ 
+   if (exitCode == s_exitSuccess) {
+     exitCode = coreApp->getExitCode();
+diff --git a/src/lib/CMakeLists.txt b/src/lib/CMakeLists.txt
+index d007a890..f114faf5 100644
+--- a/src/lib/CMakeLists.txt
++++ b/src/lib/CMakeLists.txt
+@@ -13,4 +13,6 @@ add_subdirectory(mt)
+ add_subdirectory(net)
+ add_subdirectory(platform)
+ add_subdirectory(server)
+-add_subdirectory(gui)
++if(BUILD_GUI)
++  add_subdirectory(gui)
++endif()
+diff --git a/src/lib/base/EventTypes.h b/src/lib/base/EventTypes.h
+index 9b1cb487..2ef9f59b 100644
+--- a/src/lib/base/EventTypes.h
++++ b/src/lib/base/EventTypes.h
+@@ -25,6 +25,9 @@ enum class EventTypes : uint32_t
+   /// This event is sent when a timer event occurs. The data is pointer to TimerInfo.
+   Timer,
+ 
++  /// Owner-local managed readiness rendezvous; never injects input or reads clipboard.
++  ManagedReadinessProbe,
++
+   /// This event is sent when the client has successfully connected to the server.
+   ClientConnected,
+ 
+diff --git a/src/lib/client/Client.cpp b/src/lib/client/Client.cpp
+index 7c956269..21ba246e 100644
+--- a/src/lib/client/Client.cpp
++++ b/src/lib/client/Client.cpp
+@@ -7,6 +7,8 @@
+  */
+ 
+ #include "client/Client.h"
++#include "common/ManagedSession.h"
++#include "net/SecureSocket.h"
+ 
+ #include "arch/Arch.h"
+ #include "base/IEventQueue.h"
+@@ -168,6 +170,11 @@ void Client::refuseConnection(deskflow::core::ConnectionRefusal reason, const ch
+ 
+ void Client::handshakeComplete()
+ {
++  auto &managed = deskflow::ManagedSession::instance();
++  if (managed.active() && !managed.peerReady("vincula-" + managed.primaryNode(), SecureSocket::verifiedFingerprintOf(m_stream))) {
++    managed.revoke("primary_identity_mismatch");
++    return;
++  }
+   m_ready = true;
+   m_computer->enable();
+   if (m_relativeMouseMoves && !m_hasRelativeRestorePosition) {
+@@ -525,6 +532,8 @@ void Client::cleanupConnecting()
+ 
+ void Client::cleanupConnection()
+ {
++  auto &managed = deskflow::ManagedSession::instance();
++  if (managed.active()) managed.peerDisconnected("vincula-" + managed.primaryNode());
+   if (m_stream != nullptr) {
+     using enum EventTypes;
+     m_events->removeHandler(StreamInputReady, m_stream->getEventTarget());
+@@ -613,6 +622,8 @@ void Client::handleOutputError()
+ 
+ void Client::handleDisconnected()
+ {
++  auto &managed = deskflow::ManagedSession::instance();
++  if (managed.active()) managed.peerDisconnected("vincula-" + managed.primaryNode());
+   cleanupTimer();
+   cleanupComputer();
+   cleanupConnection();
+diff --git a/src/lib/common/CMakeLists.txt b/src/lib/common/CMakeLists.txt
+index 9e3607bf..0dea6dee 100644
+--- a/src/lib/common/CMakeLists.txt
++++ b/src/lib/common/CMakeLists.txt
+@@ -1,6 +1,7 @@
+ # SPDX-FileCopyrightText: (C) 2024 - 2025 Chris Rizzitello <sithlord48@gmail.com>
+ # SPDX-License-Identifier: MIT
+ 
++find_package(OpenSSL 3.0 REQUIRED COMPONENTS Crypto)
+ set(CORE_BINARY "${CMAKE_PROJECT_NAME}-core")
+ if(WIN32)
+   string(APPEND CORE_BINARY ".exe")
+@@ -30,12 +31,17 @@ add_library(common STATIC
+   Settings.cpp
+   QSettingsProxy.cpp
+   QSettingsProxy.h
++  ManagedSession.cpp
++  ManagedSession.h
+   UrlConstants.h
+   ${CMAKE_CURRENT_BINARY_DIR}/Constants.h
+   ${CMAKE_CURRENT_BINARY_DIR}/VersionInfo.h
+ )
+ 
+-target_link_libraries(common PUBLIC Qt6::Core)
++target_link_libraries(common PUBLIC Qt6::Core OpenSSL::Crypto)
++if(WIN32)
++  target_link_libraries(common PUBLIC advapi32)
++endif()
+ 
+ target_include_directories(common
+   PUBLIC
+diff --git a/src/lib/common/ManagedSession.cpp b/src/lib/common/ManagedSession.cpp
+new file mode 100644
+index 00000000..58142296
+--- /dev/null
++++ b/src/lib/common/ManagedSession.cpp
+@@ -0,0 +1,533 @@
++/*
++ * SPDX-FileCopyrightText: (C) 2026 Daniele Cangi
++ * SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-OpenSSL-Exception
++ */
++#include "ManagedSession.h"
++#include <QCoreApplication>
++#include <QDir>
++#include <QElapsedTimer>
++#include <QFile>
++#include <QFileInfo>
++#include <QJsonArray>
++#include <QJsonDocument>
++#include <QJsonParseError>
++#include <QRegularExpression>
++#include <QSet>
++#include <QTextStream>
++#include <QUuid>
++#include <algorithm>
++#include <chrono>
++#include <cstdio>
++#include <memory>
++#include <stdexcept>
++#include <openssl/evp.h>
++#include <openssl/pem.h>
++#include <openssl/x509.h>
++#ifdef Q_OS_WIN
++#include <windows.h>
++#include <aclapi.h>
++#include <io.h>
++#else
++#include <fcntl.h>
++#include <poll.h>
++#include <sys/stat.h>
++#include <unistd.h>
++#endif
++
++namespace deskflow {
++namespace {
++constexpr qsizetype kLimit = 65536;
++void require(bool ok, const char *message)
++{
++  if (!ok) throw std::runtime_error(message);
++}
++bool keys(const QJsonObject &o, std::initializer_list<const char *> expected)
++{
++  QSet<QString> names;
++  for (const auto name : expected) names.insert(QString::fromLatin1(name));
++  const auto actual = o.keys();
++  return QSet<QString>(actual.begin(), actual.end()) == names;
++}
++#ifdef Q_OS_WIN
++void windowsPrivateAcl(const QString &path)
++{
++  const auto wide = path.toStdWString();
++  const auto attributes = GetFileAttributesW(wide.c_str());
++  require(attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_REPARSE_POINT),
++          "managed profile is a reparse point");
++  HANDLE token = nullptr;
++  require(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token), "cannot inspect managed owner");
++  DWORD size = 0; GetTokenInformation(token, TokenUser, nullptr, 0, &size);
++  QByteArray data(int(size), '\0');
++  const auto tokenOk = GetTokenInformation(token, TokenUser, data.data(), size, &size);
++  CloseHandle(token); require(tokenOk, "cannot inspect managed owner");
++  const auto user = reinterpret_cast<TOKEN_USER *>(data.data())->User.Sid;
++  BYTE systemStorage[SECURITY_MAX_SID_SIZE], adminStorage[SECURITY_MAX_SID_SIZE];
++  DWORD systemSize = sizeof(systemStorage), adminSize = sizeof(adminStorage);
++  require(CreateWellKnownSid(WinLocalSystemSid, nullptr, systemStorage, &systemSize)
++          && CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr, adminStorage, &adminSize), "cannot inspect managed trustees");
++  PACL acl = nullptr; PSID owner = nullptr; PSECURITY_DESCRIPTOR descriptor = nullptr;
++  require(GetNamedSecurityInfoW(const_cast<wchar_t *>(wide.c_str()), SE_FILE_OBJECT,
++          OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &owner, nullptr, &acl, nullptr, &descriptor) == ERROR_SUCCESS,
++          "cannot inspect managed profile ACL");
++  bool safe = owner && acl && (EqualSid(owner, user) || EqualSid(owner, adminStorage) || EqualSid(owner, systemStorage));
++  if (acl) for (DWORD i = 0; i < acl->AceCount; ++i) {
++    void *raw = nullptr; if (!GetAce(acl, i, &raw)) { safe = false; break; }
++    const auto header = static_cast<ACE_HEADER *>(raw);
++    if (header->AceType == ACCESS_DENIED_ACE_TYPE) continue;
++    if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) { safe = false; break; }
++    const auto ace = static_cast<ACCESS_ALLOWED_ACE *>(raw);
++    const auto sid = reinterpret_cast<PSID>(const_cast<DWORD *>(&ace->SidStart));
++    if (ace->Mask && !(EqualSid(sid, user) || EqualSid(sid, adminStorage) || EqualSid(sid, systemStorage))) safe = false;
++  }
++  LocalFree(descriptor); require(safe, "managed profile ACL grants another account access");
++}
++#endif
++void openExclusivePrivate(QFile &file, const char *message)
++{
++#ifdef Q_OS_WIN
++  // Qt's explicit POSIX-permission overload adds Everyone/group metadata ACEs
++  // on Windows. Inherit the already verified private parent instead, and check
++  // the new file's ACL before any private key or session data is written.
++  require(file.open(QIODevice::WriteOnly | QIODevice::NewOnly), message);
++  windowsPrivateAcl(file.fileName());
++#else
++  require(file.open(QIODevice::WriteOnly | QIODevice::NewOnly, QFileDevice::ReadOwner | QFileDevice::WriteOwner), message);
++#endif
++}
++void privateFile(const QString &path)
++{
++  const QFileInfo info(path);
++  require(info.exists() && info.isFile() && !info.isSymLink(), "managed file is not regular");
++#ifdef Q_OS_WIN
++  windowsPrivateAcl(path);
++  const auto name = path.toStdWString();
++  const auto handle = CreateFileW(name.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ, nullptr,
++                                  OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
++  require(handle != INVALID_HANDLE_VALUE, "cannot inspect managed file identity");
++  BY_HANDLE_FILE_INFORMATION metadata{};
++  const auto ok = GetFileInformationByHandle(handle, &metadata); CloseHandle(handle);
++  require(ok && metadata.nNumberOfLinks == 1 && !(metadata.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)),
++          "managed file is linked or not regular");
++#else
++  struct stat item{};
++  const auto name = QFile::encodeName(path);
++  require(lstat(name.constData(), &item) == 0 && S_ISREG(item.st_mode) && item.st_uid == getuid()
++          && item.st_nlink == 1 && !(item.st_mode & 0077), "managed file is not private");
++#endif
++}
++QString certificatePin(const QString &path, const QString &session = {}, const QString &node = {})
++{
++  QFile file(path);
++  require(file.open(QIODevice::ReadOnly), "cannot open managed certificate");
++  auto bytes = file.read(1024 * 1024 + 1);
++  require(bytes.size() <= 1024 * 1024, "managed certificate is too large");
++  auto bio = std::unique_ptr<BIO, decltype(&BIO_free)>(BIO_new_mem_buf(bytes.constData(), int(bytes.size())), BIO_free);
++  auto cert = std::unique_ptr<X509, decltype(&X509_free)>(PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr), X509_free);
++  require(bool(cert), "cannot parse managed certificate");
++  if (!session.isEmpty()) {
++    const auto subject = X509_get_subject_name(cert.get());
++    const auto field = [subject](int nid) {
++      const auto index = X509_NAME_get_index_by_NID(subject, nid, -1);
++      require(index >= 0 && X509_NAME_get_index_by_NID(subject, nid, index) < 0, "ambiguous managed certificate identity");
++      const auto text = X509_NAME_ENTRY_get_data(X509_NAME_get_entry(subject, index));
++      return QString::fromLatin1(reinterpret_cast<const char *>(ASN1_STRING_get0_data(text)), ASN1_STRING_length(text));
++    };
++    require(field(NID_commonName) == node && field(NID_organizationalUnitName) == session,
++            "managed certificate belongs to another session or node");
++  }
++  unsigned char digest[EVP_MAX_MD_SIZE];
++  unsigned int length = 0;
++  require(X509_digest(cert.get(), EVP_sha256(), digest, &length) == 1 && length == 32,
++          "cannot fingerprint managed certificate");
++  return QByteArray(reinterpret_cast<const char *>(digest), int(length)).toHex();
++}
++}
++
++ManagedSession::~ManagedSession() { shutdown(); }
++ManagedSession &ManagedSession::instance() { static ManagedSession value; return value; }
++bool ManagedSession::canonicalUuid(const QString &v)
++{
++  static const QRegularExpression pattern("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
++  return pattern.match(v).hasMatch() && QUuid(v).toString(QUuid::WithoutBraces) == v;
++}
++bool ManagedSession::hexDigest(const QString &v)
++{
++  static const QRegularExpression pattern("^[0-9a-f]{64}$");
++  return pattern.match(v).hasMatch();
++}
++QJsonObject ManagedSession::parseCanonical(const QByteArray &raw)
++{
++  require(!raw.isEmpty() && raw.size() <= kLimit, "managed frame size is invalid");
++  QJsonParseError error;
++  const auto doc = QJsonDocument::fromJson(raw, &error);
++  require(error.error == QJsonParseError::NoError && doc.isObject()
++          && doc.toJson(QJsonDocument::Compact) == raw, "managed JSON must be canonical UTF-8");
++  return doc.object();
++}
++void ManagedSession::validateBootstrap(const QJsonObject &o)
++{
++  require(keys(o, {"type", "protocol", "session_id", "node_id", "primary", "engine_nonce", "manifest_sha256",
++                   "settings_file", "state_file", "clipboard", "members", "tls_pins", "owner_consent"}),
++          "managed bootstrap fields are invalid");
++  require(o.value("type") == "bootstrap" && o.value("protocol").isDouble() && o.value("protocol").toDouble() == 1,
++          "managed protocol is unsupported");
++  for (const auto field : {"session_id", "node_id", "primary"})
++    require(o.value(field).isString() && canonicalUuid(o.value(field).toString()), "managed UUID is invalid");
++  require(o.value("engine_nonce").isString() && hexDigest(o.value("engine_nonce").toString())
++          && o.value("manifest_sha256").isString() && hexDigest(o.value("manifest_sha256").toString()),
++          "managed nonce or manifest digest is invalid");
++  require(o.value("clipboard").isBool() && o.value("owner_consent").isBool() && o.value("owner_consent").toBool(),
++          "managed owner consent is required");
++  require(o.value("members").isArray() && o.value("tls_pins").isObject(), "managed member maps are invalid");
++  const auto members = o.value("members").toArray();
++  const auto pins = o.value("tls_pins").toObject();
++  require(members.size() >= 2 && members.size() <= 64 && pins.size() == members.size(), "managed group size is invalid");
++  QSet<QString> ids, fingerprints;
++  for (const auto member : members) {
++    const auto id = member.toString();
++    require(member.isString() && canonicalUuid(id) && !ids.contains(id) && pins.value(id).isString(),
++            "managed member is invalid");
++    const auto pin = pins.value(id).toString();
++    require(hexDigest(pin) && !fingerprints.contains(pin), "managed pins must be distinct");
++    ids.insert(id); fingerprints.insert(pin);
++  }
++  require(ids.contains(o.value("node_id").toString()) && ids.contains(o.value("primary").toString()),
++          "managed group omits local or primary node");
++  const auto settings = o.value("settings_file").toString();
++  const auto state = o.value("state_file").toString();
++  require(o.value("settings_file").isString() && o.value("state_file").isString()
++          && QDir::isAbsolutePath(settings) && QDir::isAbsolutePath(state) && settings != state
++          && QFileInfo(settings).absolutePath() == QFileInfo(state).absolutePath(), "managed paths are invalid");
++  for (const auto &path : {settings, state})
++    require(!path.contains(QChar::Null) && QDir::cleanPath(QDir::fromNativeSeparators(path)) == QDir::fromNativeSeparators(path), "managed paths must be canonical");
++}
++void ManagedSession::load(const QJsonObject &o)
++{
++  validateBootstrap(o);
++  require(!m_active, "managed identity cannot be replaced");
++  m_bootstrap = o; m_primary = o.value("node_id") == o.value("primary"); m_clipboard = o.value("clipboard").toBool();
++  const auto pins = o.value("tls_pins").toObject();
++  for (auto it = pins.begin(); it != pins.end(); ++it)
++    if (it.key() != localNode() && (m_primary || it.key() == primaryNode())) m_expected.insert(it.key(), it.value().toString());
++  m_localPin = pins.value(localNode()).toString();
++  m_active = true;
++}
++QString ManagedSession::profileRoot() const { return QFileInfo(settingsFile()).absolutePath(); }
++QString ManagedSession::certificateFile() const { return profileRoot() + "/tls/identity.pem"; }
++QString ManagedSession::certificateFingerprint(const QString &path) { privateFile(path); return certificatePin(path); }
++
++void ManagedSession::privateDirectory(const QString &path)
++{
++  const QFileInfo info(path);
++  require(QDir::isAbsolutePath(path) && QDir::cleanPath(QDir::fromNativeSeparators(path)) == QDir::fromNativeSeparators(path) && info.isDir() && !info.isSymLink(),
++          "managed profile directory is invalid");
++#ifdef Q_OS_WIN
++  windowsPrivateAcl(path);
++#else
++  struct stat item{}; const auto name = QFile::encodeName(path);
++  require(lstat(name.constData(), &item) == 0 && S_ISDIR(item.st_mode) && item.st_uid == getuid()
++          && !(item.st_mode & 0077), "managed profile directory is not private");
++#endif
++  // Every existing ancestor must remain a real directory. The leaf's protected
++  // permissions prevent traversal into the private session by another account.
++  auto parent = info.absoluteDir();
++  do {
++    require(!QFileInfo(parent.absolutePath()).isSymLink(), "managed ancestor is a symlink");
++#ifdef Q_OS_WIN
++    const auto wide = parent.absolutePath().toStdWString();
++    const auto attributes = GetFileAttributesW(wide.c_str());
++    require(attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_REPARSE_POINT), "managed ancestor is a reparse point");
++#endif
++  } while (parent.cdUp());
++}
++
++int ManagedSession::provision(const QString &directory, const QString &session, const QString &node)
++{
++  require(canonicalUuid(session) && canonicalUuid(node), "provision identity is invalid");
++  privateDirectory(directory);
++  const auto tls = directory + "/tls";
++  require(!QFileInfo::exists(tls) && QDir().mkdir(tls), "provision TLS directory already exists");
++#ifndef Q_OS_WIN
++  require(QFile::setPermissions(tls, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner), "cannot protect TLS directory");
++#endif
++  privateDirectory(tls);
++  const auto path = tls + "/identity.pem";
++  QFile file(path);
++  openExclusivePrivate(file, "provision certificate already exists");
++  auto key = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>(EVP_RSA_gen(2048), EVP_PKEY_free);
++  auto cert = std::unique_ptr<X509, decltype(&X509_free)>(X509_new(), X509_free);
++  require(key && cert, "cannot allocate provision certificate");
++  require(X509_set_version(cert.get(), 2) == 1 && ASN1_INTEGER_set(X509_get_serialNumber(cert.get()), 1) == 1
++          && X509_gmtime_adj(X509_getm_notBefore(cert.get()), -60) && X509_gmtime_adj(X509_getm_notAfter(cert.get()), 86400)
++          && X509_set_pubkey(cert.get(), key.get()) == 1, "cannot construct provision certificate");
++  auto subject = X509_get_subject_name(cert.get());
++  const auto cn = node.toUtf8();
++  const auto ou = session.toUtf8();
++  require(X509_NAME_add_entry_by_txt(subject, "CN", MBSTRING_ASC,
++          reinterpret_cast<const unsigned char *>(cn.constData()), int(cn.size()), -1, 0) == 1
++          && X509_NAME_add_entry_by_txt(subject, "OU", MBSTRING_ASC,
++          reinterpret_cast<const unsigned char *>(ou.constData()), int(ou.size()), -1, 0) == 1
++          && X509_set_issuer_name(cert.get(), subject) == 1 && X509_sign(cert.get(), key.get(), EVP_sha256()) > 0,
++          "cannot sign provision certificate");
++  // Private material exists only in this engine and the exclusive local file.
++  // A memory BIO avoids confusing a Windows HANDLE with a CRT descriptor.
++  auto bio = std::unique_ptr<BIO, decltype(&BIO_free)>(BIO_new(BIO_s_mem()), BIO_free);
++  require(bio && PEM_write_bio_PrivateKey(bio.get(), key.get(), nullptr, nullptr, 0, nullptr, nullptr) == 1
++          && PEM_write_bio_X509(bio.get(), cert.get()) == 1 && BIO_flush(bio.get()) == 1,
++          "cannot publish provision certificate");
++  char *encoded = nullptr;
++  const auto count = BIO_get_mem_data(bio.get(), &encoded);
++  require(count > 0 && file.write(encoded, count) == count && file.flush(), "cannot write provision certificate");
++  OPENSSL_cleanse(encoded, size_t(count));
++  file.close(); privateFile(path);
++  const auto pin = certificatePin(path);
++  const QJsonObject result{{"protocol", 1}, {"session_id", session}, {"node_id", node},
++                           {"fingerprint_sha256", pin}, {"certificate_reference", path}};
++  QTextStream(stdout) << QJsonDocument(result).toJson(QJsonDocument::Compact) << "\n";
++  return 0;
++}
++
++void ManagedSession::validateFiles()
++{
++  privateDirectory(profileRoot()); privateDirectory(profileRoot() + "/tls");
++  privateFile(settingsFile());
++  if (QFileInfo::exists(stateFile())) privateFile(stateFile());
++  privateFile(certificateFile());
++  require(certificatePin(certificateFile(), m_bootstrap.value("session_id").toString(), localNode()) == m_localPin,
++          "managed local certificate differs from enrolled pin");
++}
++bool ManagedSession::initialize(const QStringList &arguments)
++{
++  const auto incoming = arguments.indexOf("--vincula-managed-in"), outgoing = arguments.indexOf("--vincula-managed-out");
++  if (incoming < 0 && outgoing < 0) return false;
++  require(arguments.count("--vincula-managed-in") == 1 && arguments.count("--vincula-managed-out") == 1,
++          "managed pipe selectors may not repeat");
++  require(incoming >= 0 && outgoing >= 0 && incoming + 1 < arguments.size() && outgoing + 1 < arguments.size(), "managed pipe arguments are incomplete");
++  bool a = false, b = false;
++  m_in = qintptr(arguments[incoming + 1].toULongLong(&a)); m_out = qintptr(arguments[outgoing + 1].toULongLong(&b));
++  require(a && b && m_in > 2 && m_out > 2 && m_in != m_out, "managed pipe handles are invalid");
++#ifdef Q_OS_WIN
++  for (auto handle : {m_in, m_out})
++    require(GetFileType(reinterpret_cast<HANDLE>(handle)) == FILE_TYPE_PIPE
++            && SetHandleInformation(reinterpret_cast<HANDLE>(handle), HANDLE_FLAG_INHERIT, 0), "managed handle is not a private pipe");
++#else
++  for (const auto descriptor : {m_in, m_out}) {
++    struct stat item{};
++    require(fstat(int(descriptor), &item) == 0 && S_ISFIFO(item.st_mode)
++            && fcntl(int(descriptor), F_SETFD, FD_CLOEXEC) == 0, "managed descriptor is not a private pipe");
++  }
++#endif
++  load(parseCanonical(readFrame(5000))); validateFiles();
++  // Session profiles are consumed once, including after a crash. A new engine
++  // requires new enrollment and a freshly provisioned local certificate.
++  QFile claim(profileRoot() + "/runtime.claim");
++  openExclusivePrivate(claim, "managed profile was already started");
++  const auto identity = QJsonDocument(QJsonObject{{"session_id", m_bootstrap.value("session_id")},
++          {"node_id", localNode()}, {"engine_nonce", m_bootstrap.value("engine_nonce")}}).toJson(QJsonDocument::Compact);
++  require(claim.write(identity) == identity.size() && claim.flush(), "cannot consume managed profile");
++  claim.close(); privateFile(claim.fileName());
++  return true;
++}
++bool ManagedSession::readExact(char *data, qsizetype size, int timeoutMs)
++{
++  QElapsedTimer clock; clock.start(); qsizetype offset = 0;
++  while (offset < size && !m_stopping && clock.elapsed() < timeoutMs) {
++#ifdef Q_OS_WIN
++    DWORD available = 0, count = 0;
++    if (!PeekNamedPipe(reinterpret_cast<HANDLE>(m_in), nullptr, 0, nullptr, &available, nullptr)) return false;
++    if (!available) { std::this_thread::sleep_for(std::chrono::milliseconds(5)); continue; }
++    if (!ReadFile(reinterpret_cast<HANDLE>(m_in), data + offset, DWORD(std::min<qsizetype>(available, size - offset)), &count, nullptr) || !count) return false;
++    offset += count;
++#else
++    pollfd ready{int(m_in), POLLIN, 0}; const auto polled = poll(&ready, 1, 20);
++    if (polled < 0) { if (errno == EINTR) continue; return false; }
++    if (!polled) continue;
++    const auto count = ::read(int(m_in), data + offset, size_t(size - offset));
++    if (count <= 0) { if (count < 0 && errno == EINTR) continue; return false; }
++    offset += count;
++#endif
++  }
++  return offset == size;
++}
++QByteArray ManagedSession::readFrame(int timeoutMs)
++{
++  unsigned char header[4];
++  require(readExact(reinterpret_cast<char *>(header), 4, timeoutMs), "managed input closed or timed out");
++  const auto size = (quint32(header[0]) << 24) | (quint32(header[1]) << 16) | (quint32(header[2]) << 8) | header[3];
++  require(size > 0 && size <= kLimit, "managed input frame is oversized");
++  QByteArray raw(int(size), '\0');
++  require(readExact(raw.data(), size, timeoutMs), "managed input frame was truncated");
++  return raw;
++}
++void ManagedSession::writeFrame(const QJsonObject &object)
++{
++  const auto raw = QJsonDocument(object).toJson(QJsonDocument::Compact);
++  require(!raw.isEmpty() && raw.size() <= kLimit, "managed snapshot is oversized");
++  const auto size = quint32(raw.size());
++  QByteArray frame;
++  for (int shift : {24, 16, 8, 0}) frame.append(char((size >> shift) & 255));
++  frame += raw; qsizetype offset = 0;
++  while (offset < frame.size()) {
++#ifdef Q_OS_WIN
++    DWORD count = 0;
++    require(WriteFile(reinterpret_cast<HANDLE>(m_out), frame.constData() + offset, DWORD(frame.size() - offset), &count, nullptr) && count,
++            "managed output closed");
++#else
++    const auto count = ::write(int(m_out), frame.constData() + offset, size_t(frame.size() - offset));
++    if (count < 0 && errno == EINTR) continue;
++    require(count > 0, "managed output closed");
++#endif
++    offset += count;
++  }
++}
++void ManagedSession::startControl(std::function<void()> quit, std::function<void(quint64)> probe)
++{
++  require(m_active && !m_thread.joinable(), "managed control cannot be restarted");
++  m_quit = std::move(quit); m_probe = std::move(probe); m_loopRequired = bool(m_probe);
++  m_thread = std::thread([this] { control(); });
++  bool revoked = false;
++  { std::scoped_lock lock(m_mutex); revoked = m_revoked; }
++  if (revoked) notifyQuit();
++}
++void ManagedSession::control()
++{
++  try {
++    while (!m_stopping) {
++      const auto object = parseCanonical(readFrame(5000));
++      if (keys(object, {"type"}) && object.value("type") == "stop") { revoke("owner_stop"); return; }
++      require(keys(object, {"type", "challenge"}) && object.value("type") == "snapshot"
++              && object.value("challenge").isString() && hexDigest(object.value("challenge").toString()), "managed request is invalid");
++      probeEventLoop();
++      writeFrame(snapshot(object.value("challenge").toString()));
++    }
++  } catch (const std::exception &) {
++    if (!m_stopping) revoke("control_channel_lost");
++  }
++}
++void ManagedSession::shutdown()
++{
++  m_stopping = true;
++  m_probeCondition.notify_all();
++  if (m_thread.joinable()) m_thread.join();
++}
++void ManagedSession::confirmProbe(quint64 sequence)
++{
++  { std::scoped_lock lock(m_mutex);
++    if (sequence != m_requestedProbe || m_revoked || m_stopping) return;
++    m_completedProbe = sequence;
++  }
++  m_probeCondition.notify_all();
++}
++void ManagedSession::probeEventLoop()
++{
++  if (!m_probe) return;
++  quint64 sequence = 0;
++  { std::scoped_lock lock(m_mutex); sequence = ++m_requestedProbe; }
++  m_probe(sequence);
++  bool lost = false;
++  { std::unique_lock lock(m_mutex);
++    m_probeCondition.wait_for(lock, std::chrono::milliseconds(750), [this, sequence] {
++      return m_completedProbe == sequence || m_revoked || m_stopping;
++    });
++    const bool ready = m_completedProbe == sequence && !m_revoked && !m_stopping;
++    lost = m_loopReady && !ready && !m_revoked && !m_stopping;
++    m_loopReady = ready;
++    m_hadInput |= inputReadyLocked(); m_hadClipboard |= clipboardReadyLocked();
++  }
++  if (lost) revoke("event_loop_unresponsive");
++}
++void ManagedSession::notifyQuit()
++{
++  if (m_quit && QCoreApplication::instance())
++    QMetaObject::invokeMethod(QCoreApplication::instance(), m_quit, Qt::QueuedConnection);
++}
++void ManagedSession::revoke(const QString &reason)
++{
++  if (!m_active) return;
++  { std::scoped_lock lock(m_mutex); if (!m_revoked) { m_revoked = true; m_reason = reason; } }
++  m_probeCondition.notify_all();
++  notifyQuit();
++}
++void ManagedSession::graphics(const QString &backend)
++{
++  if (!m_active) return;
++  { std::scoped_lock lock(m_mutex); m_graphics = backend; }
++  if (backend == "wayland" && m_primary) revoke("wayland_primary_unsupported");
++}
++bool ManagedSession::inputReadyLocked() const
++{
++  if (m_revoked || (m_loopRequired && !m_loopReady)) return false;
++  if (m_graphics == "windows") return m_facts.value("windows_enabled") && m_facts.value("windows_hook") && m_facts.value("windows_desktop");
++  if (m_graphics == "x11") return m_facts.value("x11_enabled") && m_facts.value("x11_display") && m_facts.value("x11_xtest") && m_facts.value("x11_events");
++  if (m_graphics == "wayland") return !m_primary && m_facts.value("portal_started") && m_facts.value("portal_keyboard") && m_facts.value("portal_pointer")
++      && m_facts.value("eis_setup") && m_facts.value("eis_connected") && m_facts.value("eis_devices") && m_facts.value("eis_enabled");
++  return false;
++}
++bool ManagedSession::clipboardReadyLocked() const
++{
++  return !m_revoked && (!m_loopRequired || m_loopReady) && m_clipboard && m_facts.value("clipboard_provider")
++      && (m_graphics != "wayland" || m_facts.value("portal_clipboard"));
++}
++void ManagedSession::eisDevices(bool keyboardResumed, bool pointerResumed, bool absoluteResumed)
++{
++  fact("eis_devices", keyboardResumed && pointerResumed && absoluteResumed);
++}
++void ManagedSession::fact(const QString &name, bool value)
++{
++  if (!m_active) return;
++  bool lost = false;
++  { std::scoped_lock lock(m_mutex);
++    m_facts.insert(name, value);
++    const auto input = inputReadyLocked(), clipboard = clipboardReadyLocked();
++    lost = (m_hadInput && !input) || (m_clipboard && m_hadClipboard && !clipboard);
++    m_hadInput |= input; m_hadClipboard |= clipboard;
++  }
++  if (lost) revoke("graphical_backend_revoked");
++}
++bool ManagedSession::allowsPeer(const QString &screen, const QString &pin) const
++{
++  if (!m_active) return true;
++  std::scoped_lock lock(m_mutex);
++  const auto id = screen.startsWith("vincula-") ? screen.mid(8) : QString();
++  return !m_revoked && canonicalUuid(id) && m_expected.value(id) == pin && hexDigest(pin);
++}
++bool ManagedSession::allowsFingerprint(const QString &pin) const
++{
++  if (!m_active) return true;
++  std::scoped_lock lock(m_mutex);
++  return !m_revoked && hexDigest(pin) && m_expected.values().contains(pin);
++}
++bool ManagedSession::peerReady(const QString &screen, const QString &pin)
++{
++  if (!m_active) return true;
++  if (!allowsPeer(screen, pin)) return false;
++  std::scoped_lock lock(m_mutex);
++  const auto id = screen.mid(8);
++  if (m_revoked || m_peers.contains(id)) return false;
++  m_peers.insert(id, pin); return true;
++}
++void ManagedSession::peerDisconnected(const QString &screen)
++{
++  if (!m_active) return;
++  bool adopted = false;
++  { std::scoped_lock lock(m_mutex); adopted = m_peers.remove(screen.mid(8)) > 0; }
++  if (adopted) revoke("authenticated_peer_disconnected");
++}
++QJsonObject ManagedSession::snapshot(const QString &challenge)
++{
++  require(hexDigest(challenge), "managed challenge is invalid");
++  std::scoped_lock lock(m_mutex);
++  require(++m_sequence <= 9007199254740991ULL, "managed sequence exhausted");
++  QJsonArray peers;
++  if (!m_revoked) for (auto it = m_peers.begin(); it != m_peers.end(); ++it)
++    peers.append(QJsonObject{{"node_id", it.key()}, {"pin_sha256", it.value()}, {"handshake", true}});
++  return {{"type", "snapshot"}, {"protocol", 1}, {"session_id", m_bootstrap.value("session_id")},
++          {"node_id", localNode()}, {"engine_nonce", m_bootstrap.value("engine_nonce")},
++          {"manifest_sha256", m_bootstrap.value("manifest_sha256")}, {"challenge", challenge},
++          {"sequence", qint64(m_sequence)}, {"revoked", m_revoked}, {"reason", m_reason},
++          {"role", m_primary ? "primary" : "client"}, {"input_ready", inputReadyLocked()},
++          {"clipboard_ready", clipboardReadyLocked()}, {"peers", peers}, {"local_pin_sha256", m_localPin}};
++}
++
++} // namespace deskflow
+diff --git a/src/lib/common/ManagedSession.h b/src/lib/common/ManagedSession.h
+new file mode 100644
+index 00000000..51c6d4ff
+--- /dev/null
++++ b/src/lib/common/ManagedSession.h
+@@ -0,0 +1,102 @@
++/*
++ * SPDX-FileCopyrightText: (C) 2026 Daniele Cangi
++ * SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-OpenSSL-Exception
++ */
++#pragma once
++
++#include <QByteArray>
++#include <QJsonObject>
++#include <QMap>
++#include <QString>
++#include <QStringList>
++#include <atomic>
++#include <condition_variable>
++#include <functional>
++#include <mutex>
++#include <thread>
++
++namespace deskflow {
++
++// Owner-local session facts. No clipboard contents, input probes or global IPC.
++class ManagedSession
++{
++public:
++  ManagedSession() = default;
++  ~ManagedSession();
++  ManagedSession(const ManagedSession &) = delete;
++  ManagedSession &operator=(const ManagedSession &) = delete;
++  static ManagedSession &instance();
++
++  static QJsonObject parseCanonical(const QByteArray &raw);
++  static void validateBootstrap(const QJsonObject &object);
++  static bool canonicalUuid(const QString &value);
++  static bool hexDigest(const QString &value);
++  static void privateDirectory(const QString &path);
++  static int provision(const QString &directory, const QString &session, const QString &node);
++  static QString certificateFingerprint(const QString &path);
++
++  void load(const QJsonObject &object); // pure state initialization; also used by unit tests
++  bool initialize(const QStringList &arguments);
++  bool active() const { return m_active; }
++  bool primary() const { return m_primary; }
++  bool clipboardRequested() const { return m_clipboard; }
++  QString settingsFile() const { return m_bootstrap.value("settings_file").toString(); }
++  QString stateFile() const { return m_bootstrap.value("state_file").toString(); }
++  QString profileRoot() const;
++  QString certificateFile() const;
++  QString localNode() const { return m_bootstrap.value("node_id").toString(); }
++  QString primaryNode() const { return m_bootstrap.value("primary").toString(); }
++
++  void startControl(std::function<void()> quit, std::function<void(quint64)> probe = {});
++  void confirmProbe(quint64 sequence);
++  void shutdown();
++  void graphics(const QString &backend);
++  void fact(const QString &name, bool value);
++  void eisDevices(bool keyboardResumed, bool pointerResumed, bool absoluteResumed);
++  bool allowsPeer(const QString &screenName, const QString &fingerprint) const;
++  bool allowsFingerprint(const QString &fingerprint) const;
++  bool peerReady(const QString &screenName, const QString &fingerprint);
++  void peerDisconnected(const QString &screenName);
++  void revoke(const QString &reason);
++  QJsonObject snapshot(const QString &challenge);
++
++private:
++  bool inputReadyLocked() const;
++  bool clipboardReadyLocked() const;
++  void notifyQuit();
++  void control();
++  QByteArray readFrame(int timeoutMs);
++  void writeFrame(const QJsonObject &object);
++  bool readExact(char *data, qsizetype size, int timeoutMs);
++  void validateFiles();
++  void probeEventLoop();
++
++  bool m_active = false;
++  bool m_primary = false;
++  bool m_clipboard = false;
++  QJsonObject m_bootstrap;
++  QMap<QString, QString> m_expected;
++  QMap<QString, QString> m_peers;
++  QMap<QString, bool> m_facts;
++  QString m_graphics;
++  QString m_localPin;
++  QString m_reason;
++  bool m_revoked = false;
++  bool m_hadInput = false;
++  bool m_hadClipboard = false;
++  quint64 m_sequence = 0;
++  qintptr m_in = -1;
++  qintptr m_out = -1;
++  std::atomic<bool> m_stopping{false};
++  std::thread m_thread;
++  std::function<void()> m_quit;
++  std::function<void(quint64)> m_probe;
++  std::condition_variable m_probeCondition;
++  quint64 m_requestedProbe = 0;
++  quint64 m_completedProbe = 0;
++  bool m_loopRequired = false;
++  bool m_loopReady = false;
++  mutable std::mutex m_mutex;
++};
++
++} // namespace deskflow
+diff --git a/src/lib/common/Settings.cpp b/src/lib/common/Settings.cpp
+index 67afc212..75638cf3 100644
+--- a/src/lib/common/Settings.cpp
++++ b/src/lib/common/Settings.cpp
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "Settings.h"
++#include "ManagedSession.h"
+ 
+ #include "LogLevel.h"
+ #include "NetworkProtocol.h"
+@@ -70,6 +71,10 @@ void Settings::clearState()
+ Settings::Settings(QObject *parent) : QObject(parent), m_settingsWatcher{new QFileSystemWatcher(this)}
+ {
+   QString fileToLoad;
++  const auto &managed = deskflow::ManagedSession::instance();
++  if (managed.active()) {
++    fileToLoad = managed.settingsFile();
++  } else {
+ #ifdef Q_OS_WIN
+   const auto portableFile = portableSettingsFile();
+   qDebug().noquote() << "checking for portable settings file at:" << portableFile;
+@@ -85,6 +90,7 @@ Settings::Settings(QObject *parent) : QObject(parent), m_settingsWatcher{new QFi
+     fileToLoad = SystemSettingFile;
+   else
+     fileToLoad = UserSettingFile;
++  }
+ 
+   m_settings = new QSettings(fileToLoad, QSettings::IniFormat, this);
+   m_settingsWritable = m_settings->isWritable();
+@@ -98,7 +104,7 @@ Settings::Settings(QObject *parent) : QObject(parent), m_settingsWatcher{new QFi
+   const auto stateBase = !xdgStateHome.isEmpty()
+                              ? xdgStateHome
+                              : QStandardPaths::standardLocations(QStandardPaths::GenericStateLocation).at(0);
+-  const auto stateFile = QStringLiteral("%1/%2.state").arg(stateBase, kAppName);
++  const auto stateFile = managed.active() ? managed.stateFile() : QStringLiteral("%1/%2.state").arg(stateBase, kAppName);
+ 
+   m_stateSettings = new QSettings(stateFile, QSettings::IniFormat, this);
+ 
+@@ -433,6 +439,8 @@ QString Settings::settingsFile()
+ 
+ QString Settings::settingsPath()
+ {
++  if (deskflow::ManagedSession::instance().active())
++    return deskflow::ManagedSession::instance().profileRoot();
+ #ifdef Q_OS_WIN
+   if (!isPortableMode())
+     return SystemDir;
+@@ -484,6 +492,16 @@ void Settings::setValue(const QString &key, const QVariant &value)
+ 
+ QVariant Settings::value(const QString &key)
+ {
++  const auto &managed = deskflow::ManagedSession::instance();
++  if (managed.active()) {
++    if (key == Core::ComputerName) return "vincula-" + managed.localNode();
++    if (key == Core::UseHooks || key == Security::TlsEnabled || key == Security::CheckPeers) return true;
++    if (key == Core::EnableEnterCommand || key == Core::EnableExitCommand) return false;
++    if (key == Security::Certificate) return managed.certificateFile();
++    if (key == Server::Protocol) return QStringLiteral("barrier");
++    if (key == Server::EnableClipboard) return managed.clipboardRequested();
++    if (key == Server::ClipboardSize && !managed.clipboardRequested()) return 0;
++  }
+   const bool useState = Settings::m_stateKeys.contains(key) && !instance()->isPortableMode();
+   auto settings = useState ? instance()->m_stateSettings : instance()->m_settings;
+   return settings->value(key, defaultValue(key));
+diff --git a/src/lib/deskflow/ipc/CoreIpc.cpp b/src/lib/deskflow/ipc/CoreIpc.cpp
+index 2afef69e..364b27db 100644
+--- a/src/lib/deskflow/ipc/CoreIpc.cpp
++++ b/src/lib/deskflow/ipc/CoreIpc.cpp
+@@ -7,11 +7,13 @@
+ #include "CoreIpc.h"
+ 
+ #include "CoreIpcServer.h"
++#include "common/ManagedSession.h"
+ 
+ #include <QMetaEnum>
+ 
+ void ipcSendToClient(const QString &command, const QString &args)
+ {
++  if (deskflow::ManagedSession::instance().active()) return;
+   // Queued because callers may not be on the main thread,
+   // and QLocalSocket can only be written to from its owning thread.
+   auto &server = deskflow::core::ipc::CoreIpcServer::instance();
+diff --git a/src/lib/net/SecureSocket.cpp b/src/lib/net/SecureSocket.cpp
+index 78290309..15aedc77 100644
+--- a/src/lib/net/SecureSocket.cpp
++++ b/src/lib/net/SecureSocket.cpp
+@@ -12,6 +12,8 @@
+ #include "base/IEventQueue.h"
+ #include "base/Log.h"
+ #include "common/Settings.h"
++#include "common/ManagedSession.h"
++#include "io/StreamFilter.h"
+ #include "deskflow/ipc/CoreIpc.h"
+ #include "mt/Lock.h"
+ #include "net/FingerprintDatabase.h"
+@@ -613,7 +615,7 @@ void SecureSocket::disconnect()
+   sendEvent(StreamInputShutdown);
+ }
+ 
+-bool SecureSocket::verifyCertFingerprint(const QString &FingerprintDatabasePath) const
++bool SecureSocket::verifyCertFingerprint(const QString &FingerprintDatabasePath)
+ {
+   const auto cert = SSL_get_peer_certificate(m_ssl->m_ssl);
+   const auto sha256 = deskflow::sslCertFingerprint(cert, QCryptographicHash::Sha256);
+@@ -624,6 +626,14 @@ bool SecureSocket::verifyCertFingerprint(const QString &FingerprintDatabasePath)
+   if (!sha256.isValid())
+     return false;
+ 
++  const auto pin = QString::fromLatin1(sha256.data.toHex());
++  if (deskflow::ManagedSession::instance().active()) {
++    if (m_securityLevel != SecurityLevel::PeerAuth || !deskflow::ManagedSession::instance().allowsFingerprint(pin))
++      return false;
++    m_verifiedFingerprint = pin;
++    return true;
++  }
++
+   const auto fingerprint = deskflow::formatSSLFingerprint(sha256.data, false);
+   LOG_DEBUG("peer fingerprint: %s", qPrintable(fingerprint));
+   ipcSendToClient("peerFingerprint", fingerprint);
+@@ -650,9 +660,26 @@ bool SecureSocket::verifyCertFingerprint(const QString &FingerprintDatabasePath)
+   }
+ 
+   LOG_DEBUG("fingerprint matches trusted fingerprint");
++  m_verifiedFingerprint = pin;
+   return true;
+ }
+ 
++QString SecureSocket::verifiedFingerprint() const
++{
++  std::scoped_lock lock(ssl_mutex_);
++  return m_secureReady && !m_fatal && m_securityLevel == SecurityLevel::PeerAuth ? m_verifiedFingerprint : QString();
++}
++
++QString SecureSocket::verifiedFingerprintOf(deskflow::IStream *stream)
++{
++  for (unsigned int depth = 0; stream && depth < 8; ++depth) {
++    if (auto secure = dynamic_cast<SecureSocket *>(stream)) return secure->verifiedFingerprint();
++    const auto filter = dynamic_cast<StreamFilter *>(stream);
++    stream = filter ? filter->getStream() : nullptr;
++  }
++  return {};
++}
++
+ ISocketMultiplexerJob *SecureSocket::serviceConnect(ISocketMultiplexerJob *const, bool, bool, bool)
+ {
+   Lock lock(&getMutex());
+diff --git a/src/lib/net/SecureSocket.h b/src/lib/net/SecureSocket.h
+index 79d9f26b..b16cfb50 100644
+--- a/src/lib/net/SecureSocket.h
++++ b/src/lib/net/SecureSocket.h
+@@ -12,12 +12,14 @@
+ 
+ #include <memory>
+ #include <mutex>
++#include <QString>
+ 
+ class Event;
+ class IEventQueue;
+ class SocketMultiplexer;
+ class ISocketMultiplexerJob;
+ class QString;
++namespace deskflow { class IStream; }
+ 
+ struct Ssl;
+ 
+@@ -67,6 +69,8 @@ public:
+   JobResult doWrite() override;
+   void initSsl(bool server);
+   bool loadCertificate(const QString &filename);
++  QString verifiedFingerprint() const;
++  static QString verifiedFingerprintOf(deskflow::IStream *stream);
+ 
+ private:
+   // SSL
+@@ -78,7 +82,7 @@ private:
+   bool showCertificate() const;
+   void checkResult(int n, int &retry);
+   void disconnect();
+-  bool verifyCertFingerprint(const QString &FingerprintDatabasePath) const;
++  bool verifyCertFingerprint(const QString &FingerprintDatabasePath);
+ 
+   ISocketMultiplexerJob *serviceConnect(ISocketMultiplexerJob *const socket, bool, bool, bool);
+ 
+@@ -90,7 +94,8 @@ private:
+   // all accesses to m_ssl must be protected by this mutex. The only function that is called
+   // from outside SocketMultiplexer thread is close(), so we mostly care about things accessed
+   // by it.
+-  std::mutex ssl_mutex_;
++  mutable std::mutex ssl_mutex_;
++  QString m_verifiedFingerprint;
+ 
+   std::unique_ptr<Ssl> m_ssl;
+   bool m_secureReady = false;
+diff --git a/src/lib/platform/EiComputer.cpp b/src/lib/platform/EiComputer.cpp
+index 80b16332..a095498e 100644
+--- a/src/lib/platform/EiComputer.cpp
++++ b/src/lib/platform/EiComputer.cpp
+@@ -12,6 +12,7 @@
+ #include "base/Log.h"
+ #include "common/Constants.h"
+ #include "common/Settings.h"
++#include "common/ManagedSession.h"
+ #include "deskflow/App.h"
+ #include "deskflow/IComputer.h"
+ #include "deskflow/OptionTypes.h"
+@@ -47,6 +48,14 @@ EiComputer::EiComputer(bool isPrimary, IEventQueue *events, bool usePortal)
+       m_h{1},
+       m_isOnComputer{isPrimary}
+ {
++  auto &managed = deskflow::ManagedSession::instance();
++  managed.graphics("wayland");
++  if (managed.active() && (isPrimary || !usePortal))
++    throw std::runtime_error("managed Wayland requires a portal secondary");
++#ifndef HAVE_LIBPORTAL_CLIPBOARD
++  if (managed.active() && managed.clipboardRequested())
++    throw std::runtime_error("managed Wayland clipboard provider is unavailable");
++#endif
+   initEi();
+   m_keyState = new EiKeyState(this, events);
+   // install event handlers
+@@ -61,6 +70,13 @@ EiComputer::EiComputer(bool isPrimary, IEventQueue *events, bool usePortal)
+     if (isPrimary) {
+       // Portal input capture manages its own clipboard
+       m_portalInputCapture = new PortalInputCapture(this, m_events);
++#ifdef HAVE_LIBPORTAL_CLIPBOARD
++      // GNOME before InputCapture v3 exposes clipboard through RemoteDesktop.
++      if (qEnvironmentVariableIntValue("VINCULA_REMOTE_DESKTOP_CLIPBOARD") == 1) {
++        m_clipboard = new EiClipboard(kClipboardClipboard);
++        m_portalRemoteDesktop = new PortalRemoteDesktop(this, m_events, true);
++      }
++#endif
+ #ifdef HAVE_LIBPORTAL_SHORTCUTS
+       m_portalGlobalShortcuts = new PortalGlobalShortcuts(this, m_events);
+ #endif
+@@ -70,7 +86,7 @@ EiComputer::EiComputer(bool isPrimary, IEventQueue *events, bool usePortal)
+       });
+       m_portalRemoteDesktop = new PortalRemoteDesktop(this, m_events);
+       // Create clipboard for remote desktop (secondary computer)
+-      m_clipboard = new EiClipboard(kClipboardClipboard);
++      if (!managed.active() || managed.clipboardRequested()) m_clipboard = new EiClipboard(kClipboardClipboard);
+     }
+   } else {
+     // Note: socket backend does not support reconnections
+@@ -82,6 +98,8 @@ EiComputer::EiComputer(bool isPrimary, IEventQueue *events, bool usePortal)
+     m_clipboard = new EiClipboard(kClipboardClipboard);
+   }
+ 
++  if (managed.active() && managed.clipboardRequested()) managed.fact("clipboard_provider", m_clipboard != nullptr);
++
+   // disable sleep if the flag is set
+   if (Settings::value(Settings::Core::PreventSleep).toBool()) {
+     m_powerManager.disableSleep();
+@@ -178,7 +196,7 @@ void *EiComputer::getEventTarget() const
+ bool EiComputer::getClipboard(ClipboardID id, IClipboard *clipboard) const
+ {
+   // If using portal input capture, get clipboard from there
+-  if (m_portalInputCapture) {
++  if (m_portalInputCapture && !m_portalRemoteDesktop) {
+     const auto sourceClipboard = m_portalInputCapture->getClipboard(id);
+     if (!sourceClipboard) {
+       return false;
+@@ -393,12 +411,14 @@ void EiComputer::fakeKey(uint32_t keycode, bool isDown) const
+ 
+ void EiComputer::enable()
+ {
++  deskflow::ManagedSession::instance().fact("eis_enabled", true);
+   m_activated = true;
+   updatePortalGlobalShortcuts();
+ }
+ 
+ void EiComputer::disable()
+ {
++  deskflow::ManagedSession::instance().fact("eis_enabled", false);
+   m_activated = false;
+ }
+ 
+@@ -486,7 +506,7 @@ bool EiComputer::setClipboard(ClipboardID id, const IClipboard *clipboard)
+   }
+ 
+   // If using portal input capture, set clipboard there
+-  if (m_portalInputCapture) {
++  if (m_portalInputCapture && !m_portalRemoteDesktop) {
+     IClipboard *targetClipboard = m_portalInputCapture->getClipboard(id);
+     if (!targetClipboard) {
+       return false;
+@@ -650,6 +670,7 @@ void EiComputer::addDevice(struct ei_device *device)
+ 
+ void EiComputer::removeDevice(struct ei_device *device)
+ {
++  m_managedActiveDevices.erase(device);
+   LOG_DEBUG("removing device %s", ei_device_get_name(device));
+ 
+   bool wasTracked = false;
+@@ -686,6 +707,14 @@ void EiComputer::removeDevice(struct ei_device *device)
+   }
+ 
+   updateShape();
++  updateManagedDevices();
++}
++
++void EiComputer::updateManagedDevices()
++{
++  const auto active = [this](ei_device *device) { return device && m_managedActiveDevices.contains(device); };
++  // Buttons, wheel and relative motion use m_eiPointer, not m_eiAbs.
++  deskflow::ManagedSession::instance().eisDevices(active(m_eiKeyboard), active(m_eiPointer), active(m_eiAbs));
+ }
+ 
+ void EiComputer::sendEvent(EventTypes type, void *data)
+@@ -933,13 +962,19 @@ void EiComputer::handleConnectedToEisEvent(const Event &event)
+   LOG_DEBUG("eis connection established, fd=%d", fd);
+ 
+   auto rc = ei_setup_backend_fd(m_ei, fd);
++  deskflow::ManagedSession::instance().fact("eis_setup", rc == 0);
+   if (rc != 0) {
++    deskflow::ManagedSession::instance().revoke("eis_setup_failed");
+     LOG_WARN("failed to set up ei: %s", strerror(-rc));
+   }
+ }
+ 
+ void EiComputer::handlePortalSessionClosed()
+ {
++  if (deskflow::ManagedSession::instance().active()) {
++    deskflow::ManagedSession::instance().revoke("portal_session_closed");
++    return;
++  }
+   // Portal may or may not EI_EVENT_DISCONNECT us before sending the DBus Closed
+   // signal. Let's clean up either way.
+   LOG_DEBUG("eis handling portal session closed");
+@@ -963,6 +998,7 @@ void EiComputer::handleSystemEvent(const Event &)
+ 
+     switch (type) {
+     case EI_EVENT_CONNECT:
++      deskflow::ManagedSession::instance().fact("eis_connected", true);
+       LOG_DEBUG("connected to eis");
+       break;
+     case EI_EVENT_SEAT_ADDED:
+@@ -992,6 +1028,11 @@ void EiComputer::handleSystemEvent(const Event &)
+       }
+       break;
+     case EI_EVENT_DISCONNECT:
++      if (deskflow::ManagedSession::instance().active()) {
++        deskflow::ManagedSession::instance().fact("eis_connected", false);
++        deskflow::ManagedSession::instance().revoke("eis_disconnected");
++        break;
++      }
+       // We're using libei which emulates the various seat/device remove events
+       // so by the time we get here our EiComputer should be in a neutral state.
+       //
+@@ -1011,6 +1052,8 @@ void EiComputer::handleSystemEvent(const Event &)
+       this->handlePortalSessionClosed();
+       break;
+     case EI_EVENT_DEVICE_PAUSED:
++      m_managedActiveDevices.erase(device);
++      updateManagedDevices();
+       LOG_DEBUG("device %s is paused", ei_device_get_name(device));
+       m_isEmulating = false;
+       // a paused device is reset to neutral by the EIS side and sends no
+@@ -1019,6 +1062,8 @@ void EiComputer::handleSystemEvent(const Event &)
+       cancelIdleEmulationTimer();
+       break;
+     case EI_EVENT_DEVICE_RESUMED:
++      m_managedActiveDevices.insert(device);
++      updateManagedDevices();
+       LOG_DEBUG("device %s is resumed", ei_device_get_name(device));
+       if (!m_isPrimary && m_isOnComputer) {
+         ensureEmulating();
+diff --git a/src/lib/platform/EiComputer.h b/src/lib/platform/EiComputer.h
+index 01b0b948..a2cb682f 100644
+--- a/src/lib/platform/EiComputer.h
++++ b/src/lib/platform/EiComputer.h
+@@ -18,6 +18,7 @@
+ #include <climits>
+ #include <libei.h>
+ #include <map>
++#include <set>
+ #include <mutex>
+ #include <vector>
+ 
+@@ -111,6 +112,7 @@ protected:
+   void updateShape();
+   void addDevice(ei_device *device);
+   void removeDevice(ei_device *device);
++  void updateManagedDevices();
+ 
+ private:
+   void initEi();
+@@ -158,6 +160,7 @@ private:
+   size_t m_maximumClipboardSize = INT_MAX;
+ 
+   std::vector<ei_device *> m_eiDevices;
++  std::set<ei_device *> m_managedActiveDevices;
+ 
+   ei *m_ei = nullptr;
+   ei_seat *m_eiSeat = nullptr;
+diff --git a/src/lib/platform/MSWindowsComputer.cpp b/src/lib/platform/MSWindowsComputer.cpp
+index 6178517a..4668c135 100644
+--- a/src/lib/platform/MSWindowsComputer.cpp
++++ b/src/lib/platform/MSWindowsComputer.cpp
+@@ -7,6 +7,7 @@
+  */
+ 
+ #include "platform/MSWindowsComputer.h"
++#include "common/ManagedSession.h"
+ 
+ #include "arch/Arch.h"
+ #include "arch/win32/ArchMiscWindows.h"
+@@ -174,6 +175,8 @@ MSWindowsComputer::getWindowInstance()
+ 
+ void MSWindowsComputer::enable()
+ {
++  auto &managed = deskflow::ManagedSession::instance();
++  managed.graphics("windows");
+   LOG_DEBUG("enabling %s computer", m_isPrimary ? "primary" : "secondary");
+   m_isEnabled = true;
+ 
+@@ -184,12 +187,16 @@ void MSWindowsComputer::enable()
+   m_events->addHandler(EventTypes::Timer, m_fixTimer, [this](const auto &) { handleFixes(); });
+ 
+   // install our clipboard snooper
+-  if (!AddClipboardFormatListener(m_window)) {
++  if ((!managed.active() || managed.clipboardRequested()) && !AddClipboardFormatListener(m_window)) {
+     LOG_WARN("failed to add the clipboard format listener: %d", GetLastError());
++    managed.fact("clipboard_provider", false);
++  } else if (!managed.active() || managed.clipboardRequested()) {
++    managed.fact("clipboard_provider", true);
+   }
+ 
+   // track the active desk and (re)install the hooks
+   m_desks->enable();
++  managed.fact("windows_enabled", true);
+ 
+   if (m_isPrimary) {
+     // set jump zones
+@@ -202,6 +209,7 @@ void MSWindowsComputer::enable()
+ 
+ void MSWindowsComputer::disable()
+ {
++  deskflow::ManagedSession::instance().fact("windows_enabled", false);
+   LOG_DEBUG("disabling %s computer", m_isPrimary ? "primary" : "secondary");
+   m_isEnabled = false;
+ 
+@@ -320,6 +328,7 @@ void MSWindowsComputer::leave()
+ 
+ bool MSWindowsComputer::setClipboard(ClipboardID, const IClipboard *src)
+ {
++  if (deskflow::ManagedSession::instance().active() && !deskflow::ManagedSession::instance().clipboardRequested()) return false;
+   MSWindowsClipboard dst(m_window);
+   if (src != nullptr) {
+     // save clipboard data
+@@ -337,6 +346,7 @@ bool MSWindowsComputer::setClipboard(ClipboardID, const IClipboard *src)
+ 
+ void MSWindowsComputer::checkClipboards()
+ {
++  if (deskflow::ManagedSession::instance().active() && !deskflow::ManagedSession::instance().clipboardRequested()) return;
+   // if we think we own the clipboard but we don't then somebody
+   // grabbed the clipboard on this computer without us knowing.
+   // tell the server that this computer grabbed the clipboard.
+@@ -420,6 +430,7 @@ void *MSWindowsComputer::getEventTarget() const
+ 
+ bool MSWindowsComputer::getClipboard(ClipboardID, IClipboard *dst) const
+ {
++  if (deskflow::ManagedSession::instance().active() && !deskflow::ManagedSession::instance().clipboardRequested()) return false;
+   MSWindowsClipboard src(m_window);
+   Clipboard::copy(dst, &src);
+   return true;
+@@ -937,6 +948,7 @@ bool MSWindowsComputer::onEvent(HWND, UINT msg, WPARAM wParam, LPARAM lParam, LR
+   switch (msg) {
+ 
+   case WM_CLIPBOARDUPDATE: {
++    if (deskflow::ManagedSession::instance().active() && !deskflow::ManagedSession::instance().clipboardRequested()) return 0;
+     DWORD clipboardSequenceNumber = GetClipboardSequenceNumber();
+     LOG_DEBUG("clipboard update: sequence number %d, current %d", clipboardSequenceNumber, m_clipboardSequenceNumber);
+ 
+diff --git a/src/lib/platform/MSWindowsDesks.cpp b/src/lib/platform/MSWindowsDesks.cpp
+index dad2c38b..038b86d9 100644
+--- a/src/lib/platform/MSWindowsDesks.cpp
++++ b/src/lib/platform/MSWindowsDesks.cpp
+@@ -7,6 +7,7 @@
+  */
+ 
+ #include "platform/MSWindowsDesks.h"
++#include "common/ManagedSession.h"
+ 
+ #include "arch/Arch.h"
+ #include "base/IEventQueue.h"
+@@ -839,6 +840,7 @@ void MSWindowsDesks::checkDesk()
+     closeDesktop(hdesk);
+     desk = index->second;
+   }
++  deskflow::ManagedSession::instance().fact("windows_desktop", name == L"Default" && isDeskAccessible(desk));
+ 
+   // if active desktop changed then tell the old and new desk threads
+   // about the change.  don't switch desktops when the screensaver is
+diff --git a/src/lib/platform/MSWindowsHook.cpp b/src/lib/platform/MSWindowsHook.cpp
+index 444b3a58..e3e53c10 100644
+--- a/src/lib/platform/MSWindowsHook.cpp
++++ b/src/lib/platform/MSWindowsHook.cpp
+@@ -6,6 +6,7 @@
+  */
+ 
+ #include "platform/MSWindowsHook.h"
++#include "common/ManagedSession.h"
+ #include "base/DirectionTypes.h"
+ #include "base/Log.h"
+ #include "deskflow/DisplayException.h"
+@@ -662,6 +663,7 @@ EHookResult MSWindowsHook::install()
+   // clang-format on
+   if (g_keyboardLL != nullptr || g_mouseLL != nullptr) {
+     g_hookThread = GetCurrentThreadId();
++    deskflow::ManagedSession::instance().fact("windows_hook", g_keyboardLL != nullptr && g_mouseLL != nullptr);
+     return kHOOK_OKAY_LL;
+   }
+ 
+@@ -670,6 +672,7 @@ EHookResult MSWindowsHook::install()
+ 
+ int MSWindowsHook::uninstall()
+ {
++  deskflow::ManagedSession::instance().fact("windows_hook", false);
+   // discard old dead keys
+   g_deadVirtKey = 0;
+   g_deadLParam = 0;
+diff --git a/src/lib/platform/PortalRemoteDesktop.cpp b/src/lib/platform/PortalRemoteDesktop.cpp
+index 3411e9fd..f2471c36 100644
+--- a/src/lib/platform/PortalRemoteDesktop.cpp
++++ b/src/lib/platform/PortalRemoteDesktop.cpp
+@@ -11,6 +11,7 @@
+ #include "base/Log.h"
+ #include "base/TMethodJob.h"
+ #include "common/Settings.h"
++#include "common/ManagedSession.h"
+ 
+ #ifdef HAVE_LIBPORTAL_CLIPBOARD
+ #include "platform/PortalClipboard.h"
+@@ -18,8 +19,9 @@
+ 
+ namespace deskflow {
+ 
+-PortalRemoteDesktop::PortalRemoteDesktop(EiComputer *computer, IEventQueue *events)
+-    : m_computer{computer},
++PortalRemoteDesktop::PortalRemoteDesktop(EiComputer *computer, IEventQueue *events, bool clipboardOnly)
++    : m_clipboardOnly{clipboardOnly},
++      m_computer{computer},
+       m_events{events},
+       m_portal{xdp_portal_new()}
+ {
+@@ -76,14 +78,30 @@ void PortalRemoteDesktop::reconnect(unsigned int timeout)
+ 
+ void PortalRemoteDesktop::handleSessionClosed(XdpSession *session)
+ {
+-  LOG_ERR("portal remote desktop session was closed, reconnecting");
++  auto &managed = ManagedSession::instance();
++  if (managed.active()) {
++    managed.fact("portal_started", false);
++    managed.revoke("portal_session_closed");
++    return;
++  }
+   g_signal_handler_disconnect(session, m_sessionSignalId);
+   m_sessionSignalId = 0;
+-  m_events->addEvent(Event(EventTypes::EISessionClosed, m_computer->getEventTarget()));
+-
+-  // gcc warning "Suspicious usage of 'sizeof(A*)'" can be ignored
++  if (m_selectionTransferSignalId) {
++    g_signal_handler_disconnect(session, m_selectionTransferSignalId);
++    m_selectionTransferSignalId = 0;
++  }
++  if (m_selectionOwnerChangedSignalId) {
++    g_signal_handler_disconnect(session, m_selectionOwnerChangedSignalId);
++    m_selectionOwnerChangedSignalId = 0;
++  }
+   g_clear_object(&m_session);
+ 
++  if (m_clipboardOnly) {
++    LOG_INFO("remote desktop clipboard permission was withdrawn");
++    return;
++  }
++  LOG_ERR("portal remote desktop session was closed, reconnecting");
++  m_events->addEvent(Event(EventTypes::EISessionClosed, m_computer->getEventTarget()));
+   reconnect(1000);
+ }
+ 
+@@ -92,14 +110,32 @@ void PortalRemoteDesktop::handleSessionStarted(GObject *object, GAsyncResult *re
+   g_autoptr(GError) error = nullptr;
+   auto session = XDP_SESSION(object);
+   if (!xdp_session_start_finish(session, res, &error)) {
+-    LOG_ERR("failed to start portal remote desktop session, quitting: %s", error->message);
++    LOG_ERR("failed to start portal remote desktop session: %s", error->message);
++    if (m_clipboardOnly)
++      return;
+     g_main_loop_quit(m_glibMainLoop);
+     m_events->addEvent(Event(EventTypes::Quit));
+     return;
+   }
+ 
++  auto &managed = ManagedSession::instance();
++  if (managed.active()) {
++    const auto devices = xdp_session_get_devices(session);
++    managed.fact("portal_started", true);
++    managed.fact("portal_keyboard", (devices & XDP_DEVICE_KEYBOARD) != 0);
++    managed.fact("portal_pointer", (devices & XDP_DEVICE_POINTER) != 0);
+ #ifdef HAVE_LIBPORTAL_CLIPBOARD
+-  if (!xdp_session_is_clipboard_enabled(session)) {
++    managed.fact("portal_clipboard", managed.clipboardRequested() && xdp_session_is_clipboard_enabled(session));
++#endif
++    if (!(devices & XDP_DEVICE_KEYBOARD) || !(devices & XDP_DEVICE_POINTER)
++#ifdef HAVE_LIBPORTAL_CLIPBOARD
++        || (managed.clipboardRequested() && !xdp_session_is_clipboard_enabled(session))
++#endif
++    ) { managed.revoke("portal_grant_incomplete"); return; }
++  }
++
++#ifdef HAVE_LIBPORTAL_CLIPBOARD
++  if ((!managed.active() || managed.clipboardRequested()) && !xdp_session_is_clipboard_enabled(session)) {
+     if (Settings::value(Settings::Client::XdpClipboardRetried).toBool()) {
+       // some backends never report clipboard enabled even when granted; don't loop forever
+       LOG_DEBUG("clipboard still not enabled on remote desktop session after one retry, continuing without it");
+@@ -134,6 +170,16 @@ void PortalRemoteDesktop::handleSessionStarted(GObject *object, GAsyncResult *re
+     Settings::setValue(Settings::Client::XdpRestoreToken, QString(m_sessionRestoreToken));
+   }
+ 
++  if (m_clipboardOnly) {
++#ifdef HAVE_LIBPORTAL_CLIPBOARD
++    LOG_INFO(
++        "remote desktop clipboard permission: %s",
++        xdp_session_is_clipboard_enabled(session) ? "granted" : "unavailable"
++    );
++#endif
++    return;
++  }
++
+   // ConnectToEIS requires version 2 of the xdg-desktop-portal (and the same
+   // version in the impl.portal), i.e. you'll need an updated compositor on
+   // top of everything...
+@@ -158,6 +204,8 @@ void PortalRemoteDesktop::handleInitSession(GObject *object, GAsyncResult *res)
+   auto session = xdp_portal_create_remote_desktop_session_finish(XDP_PORTAL(object), res, &error);
+   if (!session) {
+     LOG_ERR("failed to initialize remote desktop session: %s", error->message);
++    if (m_clipboardOnly)
++      return;
+     // This was the first attempt to connect to the RD portal - quit if that
+     // fails.
+     if (m_sessionIteration == 0) {
+@@ -177,11 +225,13 @@ void PortalRemoteDesktop::handleInitSession(GObject *object, GAsyncResult *res)
+   m_sessionSignalId = g_signal_connect(G_OBJECT(session), "closed", G_CALLBACK(handleSessionClosedCallback), this);
+ 
+ #ifdef HAVE_LIBPORTAL_CLIPBOARD
++  if (!ManagedSession::instance().active() || ManagedSession::instance().clipboardRequested()) {
+   xdp_session_request_clipboard(session);
+   m_selectionTransferSignalId =
+       g_signal_connect(G_OBJECT(session), "selection-transfer", G_CALLBACK(selectionTransferCallback), this);
+   m_selectionOwnerChangedSignalId =
+       g_signal_connect(G_OBJECT(session), "selection-owner-changed", G_CALLBACK(selectionOwnerChangedCallback), this);
++  }
+ #endif
+ 
+   LOG_DEBUG("portal remote desktop session starting");
+@@ -205,7 +255,8 @@ gboolean PortalRemoteDesktop::initSession()
+ 
+   LOG_DEBUG("setting up remote desktop session with restore token %s", m_sessionRestoreToken);
+   xdp_portal_create_remote_desktop_session_full(
+-      m_portal, static_cast<XdpDeviceType>(XDP_DEVICE_POINTER | XDP_DEVICE_KEYBOARD), XDP_OUTPUT_NONE,
++      m_portal, m_clipboardOnly ? XDP_DEVICE_NONE : static_cast<XdpDeviceType>(XDP_DEVICE_POINTER | XDP_DEVICE_KEYBOARD),
++      XDP_OUTPUT_NONE,
+       XDP_REMOTE_DESKTOP_FLAG_NONE, XDP_CURSOR_MODE_HIDDEN, XDP_PERSIST_MODE_PERSISTENT, m_sessionRestoreToken,
+       nullptr, // cancellable
+       [](GObject *obj, GAsyncResult *res, gpointer data) {
+diff --git a/src/lib/platform/PortalRemoteDesktop.h b/src/lib/platform/PortalRemoteDesktop.h
+index b2294387..bf22eb2a 100644
+--- a/src/lib/platform/PortalRemoteDesktop.h
++++ b/src/lib/platform/PortalRemoteDesktop.h
+@@ -20,7 +20,7 @@ namespace deskflow {
+ class PortalRemoteDesktop
+ {
+ public:
+-  PortalRemoteDesktop(EiComputer *computer, IEventQueue *events);
++  PortalRemoteDesktop(EiComputer *computer, IEventQueue *events, bool clipboardOnly = false);
+   ~PortalRemoteDesktop();
+ 
+   void claimClipboard() const;
+@@ -52,6 +52,7 @@ private:
+   }
+ 
+ private:
++  const bool m_clipboardOnly;
+   EiComputer *m_computer;
+   IEventQueue *m_events;
+ 
+diff --git a/src/lib/platform/XWindowsComputer.cpp b/src/lib/platform/XWindowsComputer.cpp
+index 0a95fc1e..24b0aa10 100644
+--- a/src/lib/platform/XWindowsComputer.cpp
++++ b/src/lib/platform/XWindowsComputer.cpp
+@@ -7,6 +7,7 @@
+  */
+ 
+ #include "common/Settings.h" // must include first
++#include "common/ManagedSession.h"
+ 
+ #include "platform/XWindowsComputer.h"
+ 
+@@ -89,6 +90,9 @@ XWindowsComputer::XWindowsComputer(const char *displayName, bool isPrimary, IEve
+       m_events(events)
+ {
+   assert(s_computer == nullptr);
++  deskflow::ManagedSession::instance().graphics("x11");
++  if (deskflow::ManagedSession::instance().active() && m_isPrimary)
++    throw std::runtime_error("managed X11 primary has not been certified");
+   s_computer = this;
+ 
+   if (XInitThreads() == 0) {
+@@ -100,6 +104,9 @@ XWindowsComputer::XWindowsComputer(const char *displayName, bool isPrimary, IEve
+ 
+   try {
+     m_display = openDisplay(displayName);
++    deskflow::ManagedSession::instance().fact("x11_display", true);
++    // openDisplay verifies XTest for a secondary before returning.
++    deskflow::ManagedSession::instance().fact("x11_xtest", !m_isPrimary);
+     m_root = DefaultRootWindow(m_display);
+     saveShape();
+     m_window = openWindow();
+@@ -141,8 +148,12 @@ XWindowsComputer::XWindowsComputer(const char *displayName, bool isPrimary, IEve
+ 
+   // initialize the clipboards
+   for (ClipboardID id = 0; id < kClipboardEnd; ++id) {
+-    m_clipboard[id] = new XWindowsClipboard(m_display, m_window, id);
++    m_clipboard[id] = nullptr;
++    if (!deskflow::ManagedSession::instance().active() || deskflow::ManagedSession::instance().clipboardRequested())
++      m_clipboard[id] = new XWindowsClipboard(m_display, m_window, id);
+   }
++  if (deskflow::ManagedSession::instance().clipboardRequested())
++    deskflow::ManagedSession::instance().fact("clipboard_provider", true);
+ 
+   // install event handlers
+   m_events->addHandler(EventTypes::System, m_events->getSystemTarget(), [this](const auto &e) {
+@@ -151,6 +162,7 @@ XWindowsComputer::XWindowsComputer(const char *displayName, bool isPrimary, IEve
+ 
+   // install the platform event queue
+   m_events->adoptBuffer(new XWindowsEventQueueBuffer(m_display, m_window, m_events));
++  deskflow::ManagedSession::instance().fact("x11_events", true);
+ }
+ 
+ XWindowsComputer::~XWindowsComputer()
+@@ -185,6 +197,7 @@ XWindowsComputer::~XWindowsComputer()
+ 
+ void XWindowsComputer::enable()
+ {
++  deskflow::ManagedSession::instance().fact("x11_enabled", true);
+   if (!m_isPrimary) {
+     // get the keyboard control state
+     XKeyboardState keyControl;
+@@ -206,6 +219,7 @@ void XWindowsComputer::enable()
+ 
+ void XWindowsComputer::disable()
+ {
++  deskflow::ManagedSession::instance().fact("x11_enabled", false);
+   // release input context focus
+   if (m_ic != nullptr) {
+     XUnsetICFocus(m_ic);
+@@ -1605,6 +1619,7 @@ void XWindowsComputer::destroyClipboardRequest(Window requestor) const
+ 
+ void XWindowsComputer::onError()
+ {
++  deskflow::ManagedSession::instance().fact("x11_display", false);
+   // prevent further access to the X display
+   m_events->adoptBuffer(nullptr);
+   m_screensaver->destroy();
+diff --git a/src/lib/server/ClientProxyUnknown.cpp b/src/lib/server/ClientProxyUnknown.cpp
+index 4b69b34b..30c52ddb 100644
+--- a/src/lib/server/ClientProxyUnknown.cpp
++++ b/src/lib/server/ClientProxyUnknown.cpp
+@@ -14,6 +14,8 @@
+ #include "deskflow/ProtocolTypes.h"
+ #include "deskflow/ProtocolUtil.h"
+ #include "io/IStream.h"
++#include "common/ManagedSession.h"
++#include "net/SecureSocket.h"
+ #include "server/ClientProxy1_0.h"
+ #include "server/ClientProxy1_1.h"
+ #include "server/ClientProxy1_2.h"
+@@ -212,6 +214,10 @@ void ClientProxyUnknown::handleData()
+     if (major <= 0 || minor < 0) {
+       throw IncompatibleClientException(major, minor);
+     }
++    // Bind this exact hello-back name to this exact authenticated TLS stream.
++    if (deskflow::ManagedSession::instance().active()
++        && !deskflow::ManagedSession::instance().allowsPeer(QString::fromStdString(name), SecureSocket::verifiedFingerprintOf(m_stream)))
++      throw BadClientException();
+ 
+     // remove stream event handlers.  the proxy we're about to create
+     // may install its own handlers and we don't want to accidentally
+diff --git a/src/lib/server/Server.cpp b/src/lib/server/Server.cpp
+index 4d5465c5..68678a95 100644
+--- a/src/lib/server/Server.cpp
++++ b/src/lib/server/Server.cpp
+@@ -7,6 +7,8 @@
+  */
+ 
+ #include "server/Server.h"
++#include "common/ManagedSession.h"
++#include "net/SecureSocket.h"
+ 
+ #include "base/IEventQueue.h"
+ #include "base/Log.h"
+@@ -272,6 +274,11 @@ void Server::adoptClient(BaseClientProxy *client)
+ 
+   // send configuration options to client
+   sendOptions(client);
++  if (deskflow::ManagedSession::instance().active()
++      && !deskflow::ManagedSession::instance().peerReady(QString::fromStdString(client->getName()), SecureSocket::verifiedFingerprintOf(client->getStream()))) {
++    deskflow::ManagedSession::instance().revoke("client_identity_mismatch");
++    return;
++  }
+ 
+   // activate computer saver on new client if active on the primary computer
+   if (m_activeSaver != nullptr) {
+@@ -1207,8 +1214,10 @@ void Server::handleClipboardGrabbed(const Event &event, BaseClientProxy *grabber
+     }
+   }
+ 
+-  if (grabber == m_primaryClient && m_active != m_primaryClient) {
+-    LOG_DEBUG("clipboard grabbed while active computer was changed, resending clipboard data");
++  const auto &managed = deskflow::ManagedSession::instance();
++  const bool directClipboard = (managed.active() && managed.clipboardRequested())
++      || qEnvironmentVariableIntValue("VINCULA_REMOTE_DESKTOP_CLIPBOARD") == 1;
++  if (grabber == m_primaryClient && (directClipboard || m_active != m_primaryClient)) {
+     onClipboardChanged(m_primaryClient, info->m_id, clipboard.m_clipboardSeqNum);
+   }
+ }
+@@ -1288,6 +1297,9 @@ void Server::handleSwitchWaitTimeout()
+ 
+ void Server::handleClientDisconnected(BaseClientProxy *client)
+ {
++  const auto found = m_clients.find(getName(client));
++  if (found != m_clients.end() && found->second == client)
++    deskflow::ManagedSession::instance().peerDisconnected(QString::fromStdString(client->getName()));
+   // client has disconnected.  it might be an old client or an
+   // active client.  we don't care so just handle it both ways.
+   removeActiveClient(client);
+@@ -1475,8 +1487,17 @@ void Server::onClipboardChanged(const BaseClientProxy *sender, ClipboardID id, u
+     client->setClipboardDirty(id, client != sender);
+   }
+ 
+-  // send the new clipboard to the active computer
+-  m_active->setClipboard(id, &clipboard.m_clipboard);
++  // The RemoteDesktop portal sees owner changes independently of the InputCapture focus.
++  // Deliver that selection to each peer without recapturing the sender's own clipboard.
++  const auto &managed = deskflow::ManagedSession::instance();
++  if ((managed.active() && managed.clipboardRequested()) || qEnvironmentVariableIntValue("VINCULA_REMOTE_DESKTOP_CLIPBOARD") == 1) {
++    for (const auto &[name, client] : m_clients) {
++      if (client != sender)
++        client->setClipboard(id, &clipboard.m_clipboard);
++    }
++  } else {
++    m_active->setClipboard(id, &clipboard.m_clipboard);
++  }
+ }
+ 
+ void Server::onScreensaver(bool activated)
+diff --git a/src/unittests/CMakeLists.txt b/src/unittests/CMakeLists.txt
+index 9354e8be..16586333 100644
+--- a/src/unittests/CMakeLists.txt
++++ b/src/unittests/CMakeLists.txt
+@@ -61,7 +61,9 @@ add_subdirectory(base)
+ add_subdirectory(client)
+ add_subdirectory(common)
+ add_subdirectory(deskflow)
+-add_subdirectory(gui)
++if(BUILD_GUI)
++  add_subdirectory(gui)
++endif()
+ add_subdirectory(net)
+ add_subdirectory(platform)
+ add_subdirectory(server)
+@@ -74,7 +76,9 @@ endif()
+ #Store all test that should be run post build in the property
+ get_property(PROJECT_TESTS GLOBAL PROPERTY ${CMAKE_PROJECT_NAME}_tests)
+ 
+-if(APPLE)
++if(NOT BUILD_GUI)
++  set(guiApp deskflow-core)
++elseif(APPLE)
+   set(guiApp Deskflow)
+ else()
+   set(guiApp deskflow)
+diff --git a/src/unittests/common/CMakeLists.txt b/src/unittests/common/CMakeLists.txt
+index 7a2fd3f2..745de797 100644
+--- a/src/unittests/common/CMakeLists.txt
++++ b/src/unittests/common/CMakeLists.txt
+@@ -2,26 +2,35 @@
+ # SPDX-License-Identifier: MIT
+ 
+ create_test(
+-  NAME SettingsTests
++  NAME ManagedSessionTests
+   DEPENDS common
+-  SOURCE SettingsTests.cpp
++  SOURCE ManagedSessionTests.cpp
+   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/src/lib/common"
+ )
+ 
+ create_test(
+-  NAME LogLevelTests
++  NAME SettingsTests
+   DEPENDS common
+-  SOURCE LogLevelTests.cpp
++  SOURCE SettingsTests.cpp
+   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/src/lib/common"
+ )
+ 
+ create_test(
+-  NAME I18NTests
++  NAME LogLevelTests
+   DEPENDS common
+-  SOURCE I18NTests.cpp
++  SOURCE LogLevelTests.cpp
+   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/src/lib/common"
+ )
+ 
++if(BUILD_GUI)
++  create_test(
++    NAME I18NTests
++    DEPENDS common
++    SOURCE I18NTests.cpp
++    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/src/lib/common"
++  )
++endif()
++
+ create_test(
+   NAME KeySequenceTests
+   DEPENDS common
+diff --git a/src/unittests/common/ManagedSessionTests.cpp b/src/unittests/common/ManagedSessionTests.cpp
+new file mode 100644
+index 00000000..679e5a5e
+--- /dev/null
++++ b/src/unittests/common/ManagedSessionTests.cpp
+@@ -0,0 +1,404 @@
++/*
++ * SPDX-FileCopyrightText: (C) 2026 Daniele Cangi
++ * SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-OpenSSL-Exception
++ */
++#include "common/ManagedSession.h"
++#include <QDir>
++#include <QFile>
++#include <QElapsedTimer>
++#include <QJsonArray>
++#include <QJsonDocument>
++#include <QTemporaryDir>
++#include <QTest>
++#include <stdexcept>
++#include <algorithm>
++#ifdef Q_OS_WIN
++#include <windows.h>
++#include <aclapi.h>
++#include <sddl.h>
++#else
++#include <poll.h>
++#include <unistd.h>
++#endif
++
++using deskflow::ManagedSession;
++namespace {
++const QString a = "11111111-1111-4111-8111-111111111111";
++const QString b = "22222222-2222-4222-8222-222222222222";
++const QString c = "33333333-3333-4333-8333-333333333333";
++const QString pinA(64, 'a'), pinB(64, 'b'), pinC(64, 'c');
++QJsonObject bootstrap(bool clipboard = true, bool primary = true)
++{
++  const auto root = QDir::tempPath() + "/managed-fixture";
++  return {{"type", "bootstrap"}, {"protocol", 1}, {"session_id", "99999999-9999-4999-8999-999999999999"},
++          {"node_id", primary ? a : b}, {"primary", a}, {"engine_nonce", QString(64, 'd')},
++          {"manifest_sha256", QString(64, 'e')}, {"settings_file", root + "/Deskflow.conf"},
++          {"state_file", root + "/Deskflow.state"}, {"clipboard", clipboard},
++          {"members", QJsonArray{a, b, c}}, {"tls_pins", QJsonObject{{a, pinA}, {b, pinB}, {c, pinC}}},
++          {"owner_consent", true}};
++}
++QJsonObject state(ManagedSession &s) { return s.snapshot(QString(64, 'f')); }
++void protectFixture(const QString &path)
++{
++#ifdef Q_OS_WIN
++  HANDLE token = nullptr;
++  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) throw std::runtime_error("fixture token failed");
++  DWORD length = 0; GetTokenInformation(token, TokenUser, nullptr, 0, &length);
++  QByteArray user(int(length), '\0');
++  const auto ok = GetTokenInformation(token, TokenUser, user.data(), length, &length); CloseHandle(token);
++  if (!ok) throw std::runtime_error("fixture owner failed");
++  wchar_t *sid = nullptr;
++  if (!ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER *>(user.data())->User.Sid, &sid)) throw std::runtime_error("fixture SID failed");
++  const auto sddl = QString("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;%1)").arg(QString::fromWCharArray(sid)).toStdWString();
++  LocalFree(sid);
++  PSECURITY_DESCRIPTOR descriptor = nullptr;
++  if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr)) throw std::runtime_error("fixture ACL failed");
++  PACL acl = nullptr; BOOL present = false, defaulted = false;
++  const auto pathW = path.toStdWString();
++  const auto valid = GetSecurityDescriptorDacl(descriptor, &present, &acl, &defaulted);
++  const auto result = valid && present && acl
++      ? SetNamedSecurityInfoW(const_cast<wchar_t *>(pathW.c_str()), SE_FILE_OBJECT,
++          DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, acl, nullptr)
++      : ERROR_INVALID_ACL;
++  LocalFree(descriptor);
++  if (result != ERROR_SUCCESS) throw std::runtime_error("fixture ACL protection failed");
++#else
++  if (!QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner))
++    throw std::runtime_error("fixture permissions failed");
++#endif
++}
++void windowsReady(ManagedSession &s)
++{
++  s.graphics("windows"); s.fact("windows_enabled", true); s.fact("windows_hook", true); s.fact("windows_desktop", true);
++}
++}
++
++class ManagedSessionTests : public QObject
++{
++  Q_OBJECT
++private Q_SLOTS:
++  void canonicalPythonInterop();
++  void rejectsAmbiguousJson();
++  void validatesExactBootstrap();
++  void bindsCertificateToExactUuid();
++  void preservesStarTopology();
++  void latchesBackendRevocation();
++  void ignoresStrangerDisconnection();
++  void neverClaimsDisabledClipboardReady();
++  void requiresActualWaylandFacts();
++  void provisionIsExclusiveAndSessionSpecific();
++  void exclusiveFileCreationKeepsPrivateAcl();
++  void privateControlBindsChallengeAndStops();
++  void privateControlRejectsAmbiguousRequest();
++  void privateBootstrapRejectsAnotherSessionCertificate();
++  void privateControlRequiresLiveBackendLoop();
++};
++
++void ManagedSessionTests::canonicalPythonInterop()
++{
++  // Produced with Python sort_keys=True, ensure_ascii=False, compact separators.
++  const auto raw = QByteArray::fromHex("7b2261223a22433a5c5c55736572735c5c41646d696e5c5c56696e63756c615c5cc3a820f09f9880205c22715c222f78222c2262223a312c227a223a22e99baa227d");
++  const auto object = ManagedSession::parseCanonical(raw);
++  QCOMPARE(object.value("a").toString(), QString::fromUtf8("C:\\Users\\Admin\\Vincula\\è 😀 \"q\"/x"));
++  QCOMPARE(object.value("z").toString(), QString::fromUtf8("雪"));
++  QCOMPARE(QJsonDocument(object).toJson(QJsonDocument::Compact), raw);
++}
++void ManagedSessionTests::rejectsAmbiguousJson()
++{
++  for (const auto raw : {QByteArray("{\"type\":\"stop\",\"type\":\"stop\"}"), QByteArray("{ \"type\": \"stop\" }"),
++                         QByteArray("[]"), QByteArray("{\"protocol\":NaN}"), QByteArray("{\"protocol\":1.0}")})
++    QVERIFY_EXCEPTION_THROWN(ManagedSession::parseCanonical(raw), std::runtime_error);
++}
++void ManagedSessionTests::validatesExactBootstrap()
++{
++  auto value = bootstrap(); ManagedSession::validateBootstrap(value);
++  value.insert("owner_consent", false);
++  QVERIFY_EXCEPTION_THROWN(ManagedSession::validateBootstrap(value), std::runtime_error);
++  value = bootstrap(); value.insert("extra", true);
++  QVERIFY_EXCEPTION_THROWN(ManagedSession::validateBootstrap(value), std::runtime_error);
++  value = bootstrap(); value.insert("protocol", true);
++  QVERIFY_EXCEPTION_THROWN(ManagedSession::validateBootstrap(value), std::runtime_error);
++  value = bootstrap(); auto pins = value.value("tls_pins").toObject(); pins[b] = pinA; value["tls_pins"] = pins;
++  QVERIFY_EXCEPTION_THROWN(ManagedSession::validateBootstrap(value), std::runtime_error);
++  value = bootstrap(); value["members"] = QJsonArray{a, b, b};
++  QVERIFY_EXCEPTION_THROWN(ManagedSession::validateBootstrap(value), std::runtime_error);
++}
++void ManagedSessionTests::bindsCertificateToExactUuid()
++{
++  ManagedSession s; s.load(bootstrap());
++  QVERIFY(s.allowsPeer("vincula-" + b, pinB));
++  QVERIFY(!s.allowsPeer("vincula-" + b, pinC));
++  QVERIFY(!s.allowsPeer(b, pinB));
++  QVERIFY(!s.allowsPeer("vincula-" + a, pinA));
++  QVERIFY(s.peerReady("vincula-" + b, pinB));
++  QVERIFY(!s.peerReady("vincula-" + b, pinB));
++  QCOMPARE(state(s)["peers"].toArray().size(), 1);
++  QVERIFY(!state(s)["revoked"].toBool());
++}
++void ManagedSessionTests::preservesStarTopology()
++{
++  ManagedSession s; s.load(bootstrap(true, false));
++  QVERIFY(s.peerReady("vincula-" + a, pinA));
++  QVERIFY(!s.peerReady("vincula-" + c, pinC));
++  QCOMPARE(state(s)["peers"].toArray().size(), 1);
++  const auto first = state(s), second = state(s);
++  QVERIFY(second["sequence"].toInteger() > first["sequence"].toInteger());
++  QCOMPARE(first["manifest_sha256"], QJsonValue(QString(64, 'e')));
++}
++void ManagedSessionTests::latchesBackendRevocation()
++{
++  ManagedSession s; s.load(bootstrap()); windowsReady(s); s.fact("clipboard_provider", true);
++  QVERIFY(state(s)["input_ready"].toBool()); QVERIFY(state(s)["clipboard_ready"].toBool());
++  s.fact("windows_hook", false); s.fact("windows_hook", true);
++  QVERIFY(state(s)["revoked"].toBool()); QVERIFY(!state(s)["input_ready"].toBool());
++  QVERIFY(!s.peerReady("vincula-" + b, pinB));
++}
++void ManagedSessionTests::ignoresStrangerDisconnection()
++{
++  ManagedSession s; s.load(bootstrap());
++  QVERIFY(s.peerReady("vincula-" + b, pinB));
++  s.peerDisconnected("vincula-" + c); QVERIFY(!state(s)["revoked"].toBool());
++  s.peerDisconnected("vincula-" + b); QVERIFY(state(s)["revoked"].toBool());
++}
++void ManagedSessionTests::neverClaimsDisabledClipboardReady()
++{
++  ManagedSession s; s.load(bootstrap(false)); windowsReady(s);
++  s.fact("clipboard_provider", true); QVERIFY(!state(s)["clipboard_ready"].toBool());
++  s.fact("clipboard_provider", false); QVERIFY(!state(s)["revoked"].toBool());
++  QVERIFY(state(s)["input_ready"].toBool());
++}
++void ManagedSessionTests::requiresActualWaylandFacts()
++{
++  // Exercise the same device-fact entry point as EiComputer: in particular,
++  // keyboard + absolute pointer alone cannot implement buttons or wheel.
++  for (int resumed = 0; resumed < 8; ++resumed) {
++    ManagedSession devices; devices.load(bootstrap(false, false)); devices.graphics("wayland");
++    for (const auto key : {"portal_started", "portal_keyboard", "portal_pointer", "eis_setup", "eis_connected", "eis_enabled"})
++      devices.fact(key, true);
++    devices.eisDevices(resumed & 1, resumed & 2, resumed & 4);
++    QCOMPARE(state(devices)["input_ready"].toBool(), resumed == 7);
++    QVERIFY(!state(devices)["revoked"].toBool());
++  }
++  // Once adopted as ready, pausing any one of the three devices is terminal.
++  for (const auto paused : {1, 2, 4}) {
++    ManagedSession devices; devices.load(bootstrap(false, false)); devices.graphics("wayland");
++    for (const auto key : {"portal_started", "portal_keyboard", "portal_pointer", "eis_setup", "eis_connected", "eis_enabled"})
++      devices.fact(key, true);
++    devices.eisDevices(true, true, true);
++    QVERIFY(state(devices)["input_ready"].toBool());
++    devices.eisDevices(paused != 1, paused != 2, paused != 4);
++    devices.eisDevices(true, true, true);
++    QVERIFY(state(devices)["revoked"].toBool());
++    QVERIFY(!state(devices)["input_ready"].toBool());
++    QCOMPARE(state(devices)["reason"].toString(), QString("graphical_backend_revoked"));
++  }
++  ManagedSession s; s.load(bootstrap(true, false)); s.graphics("wayland");
++  for (const auto key : {"portal_started", "portal_keyboard", "portal_pointer", "eis_setup", "eis_connected", "eis_enabled"})
++    s.fact(key, true);
++  s.eisDevices(true, true, true);
++  QVERIFY(state(s)["input_ready"].toBool()); QVERIFY(!state(s)["clipboard_ready"].toBool());
++  s.fact("clipboard_provider", true); s.fact("portal_clipboard", true); QVERIFY(state(s)["clipboard_ready"].toBool());
++  s.eisDevices(true, false, true); s.eisDevices(true, true, true); QVERIFY(state(s)["revoked"].toBool());
++}
++void ManagedSessionTests::provisionIsExclusiveAndSessionSpecific()
++{
++  QTemporaryDir first, second;
++  QVERIFY(first.isValid() && second.isValid());
++  protectFixture(first.path()); protectFixture(second.path());
++  const auto session = "99999999-9999-4999-8999-999999999999";
++  QCOMPARE(ManagedSession::provision(first.path(), session, a), 0);
++  QCOMPARE(ManagedSession::provision(second.path(), session, a), 0);
++  QVERIFY(ManagedSession::certificateFingerprint(first.path() + "/tls/identity.pem")
++          != ManagedSession::certificateFingerprint(second.path() + "/tls/identity.pem"));
++  QVERIFY_EXCEPTION_THROWN(ManagedSession::provision(first.path(), session, a), std::runtime_error);
++#ifndef Q_OS_WIN
++  const auto path = first.path() + "/tls/identity.pem";
++  QCOMPARE(QFileInfo(path).permissions() & (QFileDevice::ReadGroup | QFileDevice::ReadOther | QFileDevice::WriteGroup | QFileDevice::WriteOther), QFileDevice::Permissions{});
++#endif
++}
++
++void ManagedSessionTests::exclusiveFileCreationKeepsPrivateAcl()
++{
++  QTemporaryDir root;
++  QVERIFY(root.isValid()); protectFixture(root.path());
++  QCOMPARE(ManagedSession::provision(root.path(), bootstrap()["session_id"].toString(), a), 0);
++  const auto pem = root.path() + "/tls/identity.pem";
++  QVERIFY(ManagedSession::hexDigest(ManagedSession::certificateFingerprint(pem)));
++#ifdef Q_OS_WIN
++  QFile original(pem);
++  QVERIFY(original.open(QIODevice::ReadOnly));
++  const auto bytes = original.readAll(); original.close();
++  QFile qtPermissions(root.path() + "/qt-posix-permissions.pem");
++  QVERIFY(qtPermissions.open(QIODevice::WriteOnly | QIODevice::NewOnly, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
++  QCOMPARE(qtPermissions.write(bytes), bytes.size()); qtPermissions.close();
++  try {
++    ManagedSession::certificateFingerprint(qtPermissions.fileName());
++    QFAIL("Qt's POSIX permission ACL must not pass the strict Windows trustee check");
++  } catch (const std::runtime_error &error) {
++    QCOMPARE(QString::fromUtf8(error.what()), "managed profile ACL grants another account access");
++  }
++#endif
++}
++
++namespace {
++struct PrivateChannelFixture
++{
++  QTemporaryDir root;
++  qintptr incoming[2]{-1, -1}, outgoing[2]{-1, -1};
++  PrivateChannelFixture()
++  {
++    if (!root.isValid()) throw std::runtime_error("fixture directory failed");
++    protectFixture(root.path());
++#ifdef Q_OS_WIN
++    HANDLE inRead, inWrite, outRead, outWrite;
++    if (!CreatePipe(&inRead, &inWrite, nullptr, 65536)) throw std::runtime_error("fixture incoming pipe failed");
++    incoming[0] = reinterpret_cast<qintptr>(inRead); incoming[1] = reinterpret_cast<qintptr>(inWrite);
++    if (!CreatePipe(&outRead, &outWrite, nullptr, 65536)) {
++      CloseHandle(inRead); CloseHandle(inWrite); throw std::runtime_error("fixture outgoing pipe failed");
++    }
++    outgoing[0] = reinterpret_cast<qintptr>(outRead); outgoing[1] = reinterpret_cast<qintptr>(outWrite);
++#else
++    int input[2], output[2];
++    if (pipe(input)) throw std::runtime_error("fixture incoming pipe failed");
++    if (pipe(output)) { close(input[0]); close(input[1]); throw std::runtime_error("fixture outgoing pipe failed"); }
++    for (int i = 0; i < 2; ++i) { incoming[i] = input[i]; outgoing[i] = output[i]; }
++#endif
++    ManagedSession::provision(root.path(), bootstrap()["session_id"].toString(), a);
++    QFile file(root.path() + "/Deskflow.conf");
++#ifdef Q_OS_WIN
++    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly)) throw std::runtime_error("fixture settings failed");
++#else
++    if (!file.open(QIODevice::WriteOnly, QFileDevice::ReadOwner | QFileDevice::WriteOwner)) throw std::runtime_error("fixture settings failed");
++#endif
++  }
++  ~PrivateChannelFixture()
++  {
++    for (const auto fd : {incoming[0], incoming[1], outgoing[0], outgoing[1]}) if (fd >= 0) {
++#ifdef Q_OS_WIN
++      CloseHandle(reinterpret_cast<HANDLE>(fd));
++#else
++      close(int(fd));
++#endif
++    }
++  }
++  QJsonObject enrollment() const
++  {
++    auto value = bootstrap();
++    value["settings_file"] = root.path() + "/Deskflow.conf";
++    value["state_file"] = root.path() + "/Deskflow.state";
++    auto pins = value["tls_pins"].toObject();
++    pins[a] = ManagedSession::certificateFingerprint(root.path() + "/tls/identity.pem");
++    value["tls_pins"] = pins;
++    return value;
++  }
++  QStringList arguments() const
++  {
++    return {"fixture", "--vincula-managed-in", QString::number(incoming[0]), "--vincula-managed-out", QString::number(outgoing[1])};
++  }
++  void send(const QByteArray &raw) const
++  {
++    QByteArray frame;
++    for (int shift : {24, 16, 8, 0}) frame.append(char((quint32(raw.size()) >> shift) & 255));
++    frame += raw;
++#ifdef Q_OS_WIN
++    DWORD count = 0;
++    if (!WriteFile(reinterpret_cast<HANDLE>(incoming[1]), frame.constData(), DWORD(frame.size()), &count, nullptr)
++        || count != DWORD(frame.size())) throw std::runtime_error("fixture write failed");
++#else
++    if (write(int(incoming[1]), frame.constData(), size_t(frame.size())) != frame.size()) throw std::runtime_error("fixture write failed");
++#endif
++  }
++  void send(const QJsonObject &value) const { send(QJsonDocument(value).toJson(QJsonDocument::Compact)); }
++  QByteArray receiveBytes(int size) const
++  {
++    QByteArray value(size, '\0'); int offset = 0;
++    QElapsedTimer elapsed; elapsed.start();
++    while (offset < size) {
++#ifdef Q_OS_WIN
++      DWORD available = 0, count = 0;
++      if (!PeekNamedPipe(reinterpret_cast<HANDLE>(outgoing[0]), nullptr, 0, nullptr, &available, nullptr)) throw std::runtime_error("fixture response closed");
++      if (elapsed.elapsed() > 2000) throw std::runtime_error("fixture response timeout");
++      if (!available) { QTest::qSleep(1); continue; }
++      const auto wanted = std::min<DWORD>(available, DWORD(size - offset));
++      if (!ReadFile(reinterpret_cast<HANDLE>(outgoing[0]), value.data() + offset, wanted, &count, nullptr) || !count) throw std::runtime_error("fixture response closed");
++#else
++      pollfd ready{int(outgoing[0]), POLLIN, 0};
++      if (poll(&ready, 1, 2000) != 1) throw std::runtime_error("fixture response timeout");
++      const auto count = read(int(outgoing[0]), value.data() + offset, size_t(size - offset));
++      if (count <= 0) throw std::runtime_error("fixture response closed");
++#endif
++      offset += int(count);
++    }
++    return value;
++  }
++  QJsonObject receive() const
++  {
++    const auto header = receiveBytes(4); quint32 length = 0;
++    for (const auto byte : header) length = (length << 8) | static_cast<unsigned char>(byte);
++    if (!length || length > 65536) throw std::runtime_error("fixture response oversized");
++    return ManagedSession::parseCanonical(receiveBytes(int(length)));
++  }
++};
++}
++
++void ManagedSessionTests::privateControlBindsChallengeAndStops()
++{
++  PrivateChannelFixture channel; ManagedSession s;
++  channel.send(channel.enrollment()); QVERIFY(s.initialize(channel.arguments()));
++  bool stopped = false; s.startControl([&stopped] { stopped = true; });
++  const QString challenge(64, '5');
++  channel.send(QJsonObject{{"type", "snapshot"}, {"challenge", challenge}});
++  const auto response = channel.receive();
++  QCOMPARE(response["challenge"].toString(), challenge);
++  QCOMPARE(response["engine_nonce"].toString(), QString(64, 'd'));
++  QCOMPARE(response["sequence"].toInteger(), 1);
++  QVERIFY(!response["input_ready"].toBool()); QVERIFY(!response["clipboard_ready"].toBool());
++  channel.send(QJsonObject{{"type", "stop"}});
++  QTRY_VERIFY_WITH_TIMEOUT(stopped, 2000);
++  QCOMPARE(state(s)["reason"].toString(), "owner_stop"); s.shutdown();
++  channel.send(channel.enrollment()); ManagedSession repeated;
++  QVERIFY_EXCEPTION_THROWN(repeated.initialize(channel.arguments()), std::runtime_error);
++}
++
++void ManagedSessionTests::privateControlRejectsAmbiguousRequest()
++{
++  PrivateChannelFixture channel; ManagedSession s;
++  channel.send(channel.enrollment()); QVERIFY(s.initialize(channel.arguments()));
++  bool stopped = false; s.startControl([&stopped] { stopped = true; });
++  channel.send(QByteArray("{\"type\":\"stop\",\"type\":\"stop\"}"));
++  QTRY_VERIFY_WITH_TIMEOUT(stopped, 2000);
++  QCOMPARE(state(s)["reason"].toString(), "control_channel_lost"); s.shutdown();
++}
++
++void ManagedSessionTests::privateBootstrapRejectsAnotherSessionCertificate()
++{
++  PrivateChannelFixture channel; ManagedSession s;
++  auto value = channel.enrollment(); value["session_id"] = "88888888-8888-4888-8888-888888888888";
++  channel.send(value);
++  QVERIFY_EXCEPTION_THROWN(s.initialize(channel.arguments()), std::runtime_error);
++}
++
++void ManagedSessionTests::privateControlRequiresLiveBackendLoop()
++{
++  PrivateChannelFixture channel; ManagedSession s;
++  channel.send(channel.enrollment()); QVERIFY(s.initialize(channel.arguments()));
++  std::atomic<bool> acknowledge{false}; bool stopped = false;
++  s.startControl([&stopped] { stopped = true; }, [&s, &acknowledge](quint64 sequence) {
++    if (acknowledge) s.confirmProbe(sequence);
++  });
++  windowsReady(s); s.fact("clipboard_provider", true);
++  const QJsonObject request{{"type", "snapshot"}, {"challenge", QString(64, '7')}};
++  channel.send(request); const auto pending = channel.receive();
++  QVERIFY(!pending["input_ready"].toBool()); QVERIFY(!pending["revoked"].toBool());
++  acknowledge = true;
++  channel.send(request); const auto ready = channel.receive();
++  QVERIFY(ready["input_ready"].toBool()); QVERIFY(ready["clipboard_ready"].toBool());
++  acknowledge = false;
++  channel.send(request); const auto lost = channel.receive();
++  QVERIFY(lost["revoked"].toBool()); QVERIFY(!lost["input_ready"].toBool());
++  QCOMPARE(lost["reason"].toString(), "event_loop_unresponsive");
++  QTRY_VERIFY_WITH_TIMEOUT(stopped, 2000); s.shutdown();
++}
++
++QTEST_GUILESS_MAIN(ManagedSessionTests)
++#include "ManagedSessionTests.moc"

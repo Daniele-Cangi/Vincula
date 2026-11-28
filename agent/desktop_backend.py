@@ -298,7 +298,7 @@ class PreflightReport:
 
     @property
     def launchable(self):
-        # No managed engine/guardian plumbing exists in this source-only increment.
+        # This assessment stays pure; live authorization/launch belongs to the guardian.
         return False
 
     @property

@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-28",
+  "pull_request": 26,
+  "source_commit": "986a665a165c936155b0149415eb34db546ad4e0",
+  "support_bundle_sha256": "0fffcdf05ff451e4b446c52c8822bd42b03bb09e3148371fdfde0eb2e1c28a49",
+  "gui_manifest_sha256": "756ab1239e3be455abbe645d7d566cf62d27ba4af737df8b6e40f0f3d646d374",
+  "primary": "windows",
+  "clients": {
+    "ubuntu": "Wayland",
+    "kali": "X11"
+  },
+  "desktop_tcp_disconnect": {
+    "group_session_id": "aa702cad-30b0-4caa-89ce-d246d1492aef",
+    "three_nodes_fresh_ready_before_fault": true,
+    "three_supervisors_terminal_after_fault": true,
+    "terminal_states": {
+      "ubuntu": "stopped",
+      "windows": "stopped",
+      "kali": "failed"
+    },
+    "continuously_observed_terminal_seconds": 30.403,
+    "all_original_engines_and_guardians_not_running": true,
+    "ownership_note": "Terminal supervisor state requires its original guardian handles/readers. The separate audit queries only baseline PID liveness; no PID is adopted or killed. Windows may retain an already exited process object.",
+    "new_core_mcp_jobs": {
+      "method": "execute_process then read_process",
+      "states": {
+        "ubuntu": "completed",
+        "windows": "completed",
+        "kali": "completed"
+      },
+      "program_exit_codes": {
+        "ubuntu": 0,
+        "windows": 0,
+        "kali": 0
+      }
+    },
+    "physical_click_latency_measured": false,
+    "trigger": "One Windows SetTcpEntry DELETE_TCB on the established managed desktop connection to Kali",
+    "native_inspection_before_mutation_passed": true,
+    "operation_count": 1,
+    "native_api_return_code": 0,
+    "original_windows_engine_handle_exit_observed_within_2s": true,
+    "selector": "Exact IPv4 endpoints and peer ephemeral port; approved image hash, original process handle/creation time, owner, session argv and fresh authenticated status rechecked",
+    "atomic_socket_ownership": false,
+    "selector_limit": "The Windows API selects a four-tuple, not a socket handle; a residual check-to-use tuple reuse race remains.",
+    "persistent_network_policy_changed": false,
+    "silent_packet_blackhole_tested": false
+  },
+  "wayland_os_grant_revocation": {
+    "group_session_id": "b61b0ba0-fc01-4f92-9ed1-83100ebf7331",
+    "three_nodes_fresh_ready_before_fault": true,
+    "three_supervisors_terminal_after_fault": true,
+    "terminal_states": {
+      "ubuntu": "failed",
+      "windows": "failed",
+      "kali": "failed"
+    },
+    "continuously_observed_terminal_seconds": 30.422,
+    "all_original_engines_and_guardians_not_running": true,
+    "ownership_note": "Terminal supervisor state requires its original guardian handles/readers. The separate audit queries only baseline PID liveness; no PID is adopted or killed. Windows may retain an already exited process object.",
+    "new_core_mcp_jobs": {
+      "method": "execute_process then read_process",
+      "states": {
+        "ubuntu": "completed",
+        "windows": "completed",
+        "kali": "completed"
+      },
+      "program_exit_codes": {
+        "ubuntu": 0,
+        "windows": 0,
+        "kali": 0
+      }
+    },
+    "physical_click_latency_measured": false,
+    "trigger": "Operator confirmed clicking GNOME Stop Screen Sharing on Ubuntu",
+    "gnome_shell_version": "50.1",
+    "operator_confirmation": true,
+    "source_of_action_evidence": "Human confirmation of the real GNOME command; termination and no-restart samples independently authenticated",
+    "revocation_injected_by_test_software": false,
+    "observation_note": "First 150-second observation ended while awaiting the operator. Preserved separately; the longer continuation also captured all three nodes ready before the click and then terminal for at least 30 seconds."
+  },
+  "limitations": [
+    "TCP close handling does not measure silent idle packet loss.",
+    "The GNOME click is operator-confirmed, not browser or UI automation.",
+    "No latency from the physical click is measured."
+  ],
+  "end_of_tests": {
+    "sharing_running": false,
+    "windows_gui_left_open": true,
+    "ubuntu_kali_gui_required": false,
+    "core_mcp_three_nodes_used_successfully": true
+  },
+  "related_receipts": [
+    "2026-11-28-desktop-controller-update.json",
+    "2026-11-27-desktop-transfer-stop.json",
+    "2026-11-28-desktop-security-triage.md"
+  ]
+}

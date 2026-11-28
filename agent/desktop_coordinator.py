@@ -13,6 +13,7 @@ from time import monotonic
 from uuid import UUID, uuid4
 
 import desktop_layout
+import desktop_managed
 
 ACTIVE = {"prepared", "starting", "running"}
 TERMINAL = {"stopped", "expired", "failed"}
@@ -38,7 +39,7 @@ def command_list(commands):
         raise ValueError("Each node needs between one and eight authorized components.")
     names = set()
     for item in commands:
-        if not isinstance(item, dict) or not {"name", "argv"} <= item.keys() <= {"name", "argv", "cwd"}:
+        if not isinstance(item, dict) or not {"name", "argv"} <= item.keys() <= {"name", "argv", "cwd", "managed"}:
             raise ValueError("Invalid desktop component fields.")
         name, argv = item["name"], item["argv"]
         if not isinstance(name, str) or not NAME.fullmatch(name) or name in names:
@@ -48,6 +49,9 @@ def command_list(commands):
                 or not all(isinstance(arg, str) and "\0" not in arg and len(arg) <= 8192 for arg in argv)
                 or not absolute(argv[0]) or "cwd" in item and not absolute(item["cwd"])):
             raise ValueError("Invalid authorized desktop component argv or working directory.")
+        if "managed" in item:
+            desktop_managed.validate_configuration(item["managed"])
+            desktop_managed.validate_argv(item["managed"], argv)
 
 
 def build_plan(registry, revisions, commands, session_id=None):
@@ -59,6 +63,7 @@ def build_plan(registry, revisions, commands, session_id=None):
     if not isinstance(revisions, dict) or not isinstance(commands, dict) or set(revisions) != set(members) or set(commands) != set(members):
         raise ValueError("Supply revisions and authorized commands for exactly the desktop members.")
     plans = {}
+    managed_groups = []
     for node in members:
         if registry.get(node).node_id != node:
             raise ValueError("Desktop members must be canonical registered node identities.")
@@ -68,8 +73,20 @@ def build_plan(registry, revisions, commands, session_id=None):
         command_list(commands[node])
         plans[node] = {"session_id": session_id, "revision": revision, "local_id": node,
                        "primary": primary, "members": members, "commands": commands[node]}
+        managed = [item for item in commands[node] if "managed" in item]
+        if managed:
+            if len(managed) != 1:
+                raise ValueError("One managed desktop engine is required per node.")
+            group = desktop_managed.bind_to_plan(managed[0]["managed"], plans[node])
+            if (group.clipboard != registry.desktop.clipboard
+                    or {(s.node_id, s.x, s.y) for s in group.screens}
+                    != {(s.node_id, s.x, s.y) for s in registry.desktop.members}):
+                raise ValueError("Managed group differs from the selected desktop layout.")
+            managed_groups.append(group.digest)
         if len(json.dumps({"action": "prepare", "plan": plans[node]}, ensure_ascii=True).encode()) > 65536 - 512:
             raise ValueError("A desktop plan exceeds the bounded control protocol.")
+    if managed_groups and (len(managed_groups) != len(members) or len(set(managed_groups)) != 1):
+        raise ValueError("Every desktop node must use the same managed session manifest.")
     return deepcopy({"session_id": session_id, "primary": primary, "members": members,
                      "layout": compiled["layout"], "nodes": plans})
 
@@ -88,7 +105,7 @@ class DesktopCoordinator:
         self._node_locks = {node: asyncio.Lock() for node in self._plan["members"]}
         self._records = {node: {"prepared": False, "committed": False, "instance": None,
                          "status": None, "error": None, "stop_error": None, "terminal": False,
-                         "lease_deadline": None} for node in self._plan["members"]}
+                         "lease_deadline": None, "ready_deadline": None} for node in self._plan["members"]}
 
     @property
     def session_id(self):
@@ -103,10 +120,11 @@ class DesktopCoordinator:
                    and record["status"] is not None and record["status"]["state"] == "running"
                    and record["status"]["desktop_ready"] is True
                    and record["lease_deadline"] is not None and record["lease_deadline"] > now
+                   and record["ready_deadline"] is not None and record["ready_deadline"] > now
                    for record in self._records.values())
 
     def report(self):
-        nodes = {node: {key: deepcopy(value) for key, value in record.items() if key != "lease_deadline"}
+        nodes = {node: {key: deepcopy(value) for key, value in record.items() if key not in {"lease_deadline", "ready_deadline"}}
                  for node, record in self._records.items()}
         complete = all(record["terminal"] for record in self._records.values())
         if self._failed:
@@ -150,7 +168,17 @@ class DesktopCoordinator:
             deadline = started + remaining
             if deadline <= self.clock():
                 raise ValueError("The control reply arrived too late to confirm a live lease.")
-        return deepcopy(status), instance, deadline
+        ready_deadline = deadline
+        managed = any("managed" in command for command in plan["commands"])
+        if ready:
+            remaining = status.get("desktop_ready_remaining")
+            if managed or remaining is not None:
+                if type(remaining) not in (int, float) or not math.isfinite(remaining) or not 0 < remaining <= desktop_managed.SNAPSHOT_TIMEOUT:
+                    raise ValueError("The destination did not attest fresh managed desktop facts.")
+                ready_deadline = min(deadline, started + remaining) if deadline is not None else None
+                if ready_deadline is None or ready_deadline <= self.clock():
+                    raise ValueError("Managed desktop facts expired before their control reply arrived.")
+        return deepcopy(status), instance, deadline, ready_deadline
 
     async def _call(self, node, action, timeout):
         request = {"action": action}
@@ -181,8 +209,8 @@ class DesktopCoordinator:
             if error:
                 record["stop_error" if action == "stop_session" else "error"] = {"phase": action, "message": error}
                 return False
-            status, instance, deadline = result
-            record.update(status=status, instance=instance, lease_deadline=deadline)
+            status, instance, deadline, ready_deadline = result
+            record.update(status=status, instance=instance, lease_deadline=deadline, ready_deadline=ready_deadline)
             record["terminal"] |= status["state"] in TERMINAL
             if action == "prepare":
                 record["prepared"] = True

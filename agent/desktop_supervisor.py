@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Daniele Cangi
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Local session lifecycle skeleton. This module does not provision or start Deskflow."""
+"""Owner-local desktop lifecycle for explicitly authorized foreground components."""
 
 import argparse
 from contextlib import contextmanager
 import hmac
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -22,6 +23,7 @@ from uuid import UUID, uuid4
 
 import desktop_security
 import desktop_process
+import desktop_managed
 
 
 ACTIVE = {"prepared", "starting", "running", "stopping"}
@@ -88,7 +90,7 @@ def validate_plan(plan):
         raise ValueError("Prepare between one and eight foreground components.")
     names = set()
     for command in commands:
-        if not isinstance(command, dict) or not {"name", "argv"} <= command.keys() <= {"name", "argv", "cwd"}:
+        if not isinstance(command, dict) or not {"name", "argv"} <= command.keys() <= {"name", "argv", "cwd", "managed"}:
             raise ValueError("Each component needs name and argv, with optional cwd.")
         name, argv = command["name"], command["argv"]
         if (not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", name) or name in names):
@@ -101,6 +103,11 @@ def validate_plan(plan):
         if "cwd" in command and (not isinstance(command["cwd"], str) or not Path(command["cwd"]).is_absolute()
                                  or not Path(command["cwd"]).is_dir()):
             raise ValueError("Component cwd must be an existing absolute directory.")
+        if "managed" in command:
+            desktop_managed.bind_to_plan(command["managed"], plan)
+            desktop_managed.validate_argv(command["managed"], argv)
+    if sum("managed" in command for command in commands) > 1:
+        raise ValueError("A node has only one managed desktop engine per session.")
     return json.loads(json.dumps(plan))
 
 
@@ -183,6 +190,11 @@ class Supervisor:
 
     def status(self):
         with self.lock:
+            engine_jobs = [job for job in self.jobs if "managed" in job]
+            ready = (self.state == "running" and not self.stop_event.is_set() and len(engine_jobs) == 1
+                     and self.managed_ready(engine_jobs[0]))
+            remaining = (max(0.0, desktop_managed.SNAPSHOT_TIMEOUT - (monotonic() - engine_jobs[0]["engine_report"]["observed_monotonic"]))
+                         if ready else 0.0)
             return {"instance": self.instance, "state": self.state, "reason": self.reason,
                     "session_id": self.plan["session_id"] if self.plan else None,
                     "revision": self.plan["revision"] if self.plan else None,
@@ -190,11 +202,20 @@ class Supervisor:
                     "primary": self.plan["primary"] if self.plan else None,
                     "members": list(self.plan["members"]) if self.plan else [],
                     "role": None if not self.plan else "primary" if self.plan["local_id"] == self.plan["primary"] else "client",
-                    "previous_session": self.previous_session, "desktop_ready": False,
+                    "previous_session": self.previous_session, "desktop_ready": ready, "desktop_ready_remaining": remaining,
                     "lease_remaining": max(0, self.deadline - monotonic()) if self.deadline is not None else None,
                     "components": [{"name": job["name"], "guardian_pid": job["process"].pid,
                                     "pid": job.get("pid"), "exit_code": job.get("exit_code"),
-                                    "log": str(job["log"])} for job in self.jobs]}
+                                    "log": str(job["log"]), "desktop_ready": self.managed_ready(job)} for job in self.jobs]}
+
+    def managed_ready(self, job):
+        report = job.get("engine_report")
+        if report is None or job.get("error") or job.get("finished") or self.stop_event.is_set():
+            return False
+        observed = report.get("observed_monotonic")
+        now = monotonic()
+        return (report.get("ready") is True and type(observed) in (int, float) and math.isfinite(observed)
+                and 0 <= now - observed < desktop_managed.SNAPSHOT_TIMEOUT)
 
     def persist(self):
         status = self.status()
@@ -282,7 +303,26 @@ class Supervisor:
                     if event.get("event") == "started":
                         job["pid"] = event["pid"]
                         job["heartbeat_port"] = event["heartbeat_port"]
+                        if "managed" in job:
+                            job["engine_expected"] = desktop_managed.bootstrap(job["managed"], event["engine_nonce"])
                         job["ready"].set()
+                    elif event.get("event") == "engine_snapshot":
+                        if self.stop_event.is_set() or self.state not in {"starting", "running"}:
+                            continue
+                        if "engine_expected" not in job:
+                            raise ValueError("Unexpected managed engine facts before startup.")
+                        snapshot = event["snapshot"]
+                        sequence = job.get("engine_sequence", 0)
+                        ready = desktop_managed.validate_snapshot(snapshot, job["engine_expected"], snapshot["challenge"], sequence)
+                        observed = event["observed_monotonic"]
+                        if (type(event["ready"]) is not bool or event["ready"] != ready or event.get("failure") is not None
+                                or type(observed) not in (int, float) or not math.isfinite(observed)
+                                or not 0 <= monotonic() - observed < desktop_managed.SNAPSHOT_TIMEOUT):
+                            raise ValueError("Managed engine facts are stale or inconsistent.")
+                        if job.get("engine_was_ready") and not ready or snapshot["revoked"]:
+                            raise ValueError("Managed engine availability was revoked.")
+                        job["engine_report"], job["engine_sequence"] = event, snapshot["sequence"]
+                        job["engine_was_ready"] = job.get("engine_was_ready", False) or ready
                     elif event.get("event") == "finished":
                         job["exit_code"] = event.get("exit_code")
                         job["finished"] = True
@@ -290,7 +330,7 @@ class Supervisor:
                     elif event.get("event") == "error":
                         job["error"] = event.get("message", "Guardian failed.")
                         job["ready"].set()
-        except (OSError, ValueError, KeyError) as error:
+        except (OSError, ValueError, KeyError, TypeError) as error:
             with self.lock:
                 job["error"] = str(error)
                 job["ready"].set()
@@ -311,8 +351,11 @@ class Supervisor:
                 desktop_security.private_directory(component_dir)
                 log_path = component_dir / "stdout.log"
                 token = secrets.token_hex(32)
-                frame = desktop_process.spec_frame({"argv": command["argv"], "cwd": command.get("cwd", str(Path.cwd())),
-                                                   "lease_seconds": self.guardian_lease, "heartbeat_token": token})
+                specification = {"argv": command["argv"], "cwd": command.get("cwd", str(Path.cwd())),
+                                 "lease_seconds": self.guardian_lease, "heartbeat_token": token}
+                if "managed" in command:
+                    specification["managed"] = command["managed"]
+                frame = desktop_process.spec_frame(specification)
                 with self.lock:
                     if self.stop_event.is_set():
                         return
@@ -323,6 +366,8 @@ class Supervisor:
                     job = {"name": command["name"], "process": process, "ready": Event(), "log": log_path,
                            "reader_done": Event(), "input_closed": False, "finished": False,
                            "heartbeat_token": token.encode("ascii")}
+                    if "managed" in command:
+                        job["managed"] = command["managed"]
                     with self.lock:
                         self.jobs.append(job)
                         if self.stop_event.is_set():
@@ -355,6 +400,9 @@ class Supervisor:
                     self.stop(reason="expired")
                 if self.state in {"starting", "running"}:
                     for job in self.jobs:
+                        if job.get("error") or job.get("engine_was_ready") and not self.managed_ready(job):
+                            self.stop(reason="failed: managed component lost readiness")
+                            break
                         if job["process"].poll() is not None or job["finished"]:
                             self.stop(reason="failed: component " + job["name"] + " exited")
                             break

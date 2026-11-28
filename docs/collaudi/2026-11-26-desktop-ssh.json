@@ -1,0 +1,114 @@
+{
+  "all_original_handles_exited": true,
+  "archive_sha256": "8bc1a9820ad3cb3f185d203ff8afe1ebcfbf6509b158d2f370c49285c8f279a1",
+  "audit_passed": true,
+  "cleanup_passed": true,
+  "driver_qa_common_sha256": "24771dae733fde2a68c29310eaaf74118bce3341562681525022cfcc6bfdedc8",
+  "helper_sha256": "a0bed83c7bf71ea73c0be5b85ba5425a7d87eef8d97627d33afc0779a9f9536b",
+  "manifest_sha256": "ed41f2e4689b6b2c90db2c7ddaf04df212df0691c0fa12b0ef29d691d2604b26",
+  "original_keeper_handle_exit_code": 0,
+  "origins": {
+    "kali": {
+      "cleanup_complete": true,
+      "copy": null,
+      "desktop_ready": false,
+      "original_handle_exited": true,
+      "passed": true,
+      "production_unchanged": true,
+      "session_id": "7797bd90-2d88-4a6e-990b-90e42fb3b9e7",
+      "stop_seconds": 0.8194488609997279,
+      "terminal_states": [
+        "stopped",
+        "stopped",
+        "stopped",
+        "stopped",
+        "stopped",
+        "stopped"
+      ],
+      "unexpected_qa_processes": 0
+    },
+    "ubuntu": {
+      "cleanup_complete": true,
+      "copy": null,
+      "desktop_ready": false,
+      "original_handle_exited": true,
+      "passed": true,
+      "production_unchanged": true,
+      "session_id": "dc3d1f35-8a7f-433f-8125-d4c14bb3648a",
+      "stop_seconds": 0.6831196070006627,
+      "terminal_states": [
+        "stopped",
+        "stopped",
+        "stopped",
+        "stopped",
+        "stopped",
+        "stopped"
+      ],
+      "unexpected_qa_processes": 0
+    },
+    "windows": {
+      "cleanup_complete": true,
+      "copy": {
+        "copy_alive_after_stop": true,
+        "copy_alive_before_stop": true,
+        "final": {
+          "exists": true,
+          "sha256": "edb7e6ba344fb9feb4265005fd24683ea40000ac130df76a80c4756ee14f6a7f",
+          "size": 16777216
+        },
+        "group_healthy": true,
+        "heartbeat_pending": true,
+        "minimum_lease_after_query_delay": 17.482293869992645,
+        "no_prior_stop_requests": true,
+        "partial_after_stop": {
+          "exists": true,
+          "size": 2150400
+        },
+        "partial_before_stop": {
+          "exists": true,
+          "size": 1228800
+        },
+        "seconds_since_heartbeat_start": 1.8562094999942929,
+        "source_sha256": "edb7e6ba344fb9feb4265005fd24683ea40000ac130df76a80c4756ee14f6a7f"
+      },
+      "desktop_ready": false,
+      "original_handle_exited": true,
+      "passed": true,
+      "production_unchanged": true,
+      "session_id": "24ca6701-7a44-428f-a106-ecaf17529a19",
+      "stop_seconds": 0.5976057000079891,
+      "terminal_states": [
+        "stopped",
+        "stopped",
+        "stopped",
+        "stopped",
+        "stopped",
+        "stopped"
+      ],
+      "unexpected_qa_processes": 0
+    }
+  },
+  "previous_failure_cause": "classifier rejected original local Ubuntu foreground supervisor bare argv; not concurrent unittest",
+  "previous_failure_preserved": "a52308d2-985d-4b14-9b35-938a86a13f62",
+  "receipt_sha256": {
+    "GO_SELF_REVIEW.json": "c87df39cb090eacb7255942fc06153d9a0c2dd63606cea2a21498e558c16c290",
+    "audit-complete.json": "9b1b68ea2edb301b0a20591a1b9d56480abb1ab38dcb97ac428a7f34aad6e82b",
+    "closed.json": "6eb7ffd8d736e6a2d8767f2bbfbb699ba0d36dade00394f5441b1f2957076017",
+    "context.json": "58619c7b885298641def3988e24e45236f6ed18d378db3a8ed523663df8e197b",
+    "manifest.json": "ed41f2e4689b6b2c90db2c7ddaf04df212df0691c0fa12b0ef29d691d2604b26",
+    "origin-kali.json": "1f5adc610870a2ba482587e9d785095272b947b41ce6af784a1c9f4b40f46e5b",
+    "origin-ubuntu.json": "3a69d78442c91b19e341ae12d9a8cc24fab4862d2502552bebc9618a61b0aede",
+    "origin-windows.json": "1713120a05468559a46f660a99f0f35b8d7ee6ade6bc4ad5e897e2fb31673b24",
+    "run-complete.json": "cba6a269a6226b58df1111627bf19fc5501b2f3534514aa77e6d839b02dcdfb3"
+  },
+  "remote_namespaces_retained_for_review": true,
+  "scope": "PR17 frozen synthetic SSH bridge only; does not attest managed Deskflow, hardware input, clipboard or latest uncommitted Python",
+  "source_commit": "6c3455f57b6cf00abec86922a08d2b103ca1dcfb",
+  "transaction": "68d14bec-0afd-4ee0-83be-4240895b1438",
+  "windows_task": {
+    "last_task_result": 0,
+    "logon": "Interactive",
+    "run_level": "Limited",
+    "synchronous_keeper": true
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "upstream_repository": "https://github.com/deskflow/deskflow",
+  "upstream_commit": "081f6478e654a112168879e67a41ce7d7e4ae3af",
+  "version": "1.27.0",
+  "patch_file": "third_party/deskflow/vincula-managed-v1.patch",
+  "patch_sha256": "654f8ed741cb5042bc02e0c68d1de5d4924bfaac06c01a1d2c395dfe075dc37c",
+  "python_version": "3.12.10",
+  "msvc_toolset": "14.44.35207",
+  "windows_sdk": "10.0.22621.0",
+  "qt_version": "6.10.2",
+  "openssl_version": "3.5.9",
+  "downloads": {
+    "cmake": {
+      "filename": "cmake-4.2.3-windows-x86_64.zip",
+      "url": "https://github.com/Kitware/CMake/releases/download/v4.2.3/cmake-4.2.3-windows-x86_64.zip",
+      "sha256": "eb4ebf5155dbb05436d675706b2a08189430df58904257ae5e91bcba4c86933c"
+    },
+    "sevenzip": {
+      "filename": "7zr.exe",
+      "url": "https://github.com/ip7z/7zip/releases/download/26.04/7zr.exe",
+      "sha256": "256feca8e274e5da655e2a284fabafd9f554365eb164862089dacd4e8276d282"
+    },
+    "perl": {
+      "filename": "strawberry-perl-5.42.3.1-64bit-portable.zip",
+      "url": "https://github.com/StrawberryPerl/Perl-Dist-Strawberry/releases/download/SP_54231_64bit/strawberry-perl-5.42.3.1-64bit-portable.zip",
+      "sha256": "6a081a811781c30aca51dbc036afd93092af91e3297901f02c17043795a10690"
+    },
+    "qtbase": {
+      "filename": "qtbase-6.10.2-msvc2022-x64.7z",
+      "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6102/qt6_6102/qt.qt6.6102.win64_msvc2022_64/6.10.2-0-202601261212qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+      "sha256": "c4cedcc54d2036ab20b193db113cf324d90f390647f831a522952cc9b158f38b"
+    },
+    "qtbase_source": {
+      "filename": "qtbase-everywhere-src-6.10.2.tar.xz",
+      "url": "https://download.qt.io/archive/qt/6.10/6.10.2/submodules/qtbase-everywhere-src-6.10.2.tar.xz",
+      "sha256": "aeb78d29291a2b5fd53cb55950f8f5065b4978c25fb1d77f627d695ab9adf21e"
+    },
+    "openssl_source": {
+      "filename": "openssl-3.5.9.tar.gz",
+      "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz",
+      "sha256": "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a"
+    }
+  },
+  "upstream_tag": "v1.27.0",
+  "upstream_tag_object": "90376dfaba2c28dd61c5d4453ae5641c6edec5a3"
+}

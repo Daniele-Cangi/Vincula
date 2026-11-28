@@ -249,6 +249,8 @@ Most detailed setup and validation guides are currently written in Italian; this
 
 Deskflow, Barrier, TigerVNC, TightVNC, x11vnc, OpenSSH and x2vnc are installed separately. The [x2vnc patch](outputs/Windows%20Dock/x2vnc-no-clipboard.patch) applies to x2vnc 1.7.2. The [included GPL text](outputs/Windows%20Dock/x2vnc-COPYING.txt) comes from the x2vnc distribution. The [GNOME 50 clipboard patch](outputs/Windows%20Dock/deskflow-gnome50-clipboard.patch) applies to Deskflow 1.27.0 under Deskflow's license.
 
+The [managed multi-node desktop engine](third_party/deskflow/README.md) is under development; see its [implementation status and remaining validation](docs/desktop-multinode-implementation.md). The managed patch already includes the GNOME 50 clipboard changes and must not be applied twice. Existing installations have not yet been switched to this engine.
+
 <a id="licenza"></a>
 
 ## License

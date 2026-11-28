@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-28",
+  "pull_request": 26,
+  "source_commit": "986a665a165c936155b0149415eb34db546ad4e0",
+  "scope": "Approved desktop controller update, guarded owner-local publication, GUI cutover and Windows-only GUI loading",
+  "evidence_boundary": "Historical checkpoint after GUI loading and before the subsequent user Start Group; not a report of the current runtime or later live fault tests.",
+  "versions": {
+    "previous_support_bundle_sha256": "b8fd2705c0db961d52be13b9e457afcf79e857351c5c6037ec1fdfdb5e1f9213",
+    "support_bundle_sha256": "0fffcdf05ff451e4b446c52c8822bd42b03bb09e3148371fdfde0eb2e1c28a49",
+    "support_file_count": 16,
+    "changed_support_modules": [
+      "desktop_app.py"
+    ],
+    "desktop_app_sha256": "19fa766bae98ac2eca36681a601fd35b5410a7f24b78a95f488aa6e31e4fcc3e",
+    "other_support_modules_unchanged": 15,
+    "gui_manifest_sha256": "756ab1239e3be455abbe645d7d566cf62d27ba4af737df8b6e40f0f3d646d374",
+    "gui_payload_sha256": "627decc8d31cf499265ed99b0f1d18b346f60d7454af819fdab3038a29885e78",
+    "gui_payload_file_count": 31,
+    "windows_cs_sha256": "6e3031f05f666d2f7acbd832966575fb1356ee9f1b5c82e57ec96675a33fe554",
+    "windows_exe_sha256": "a10537e94642680c265cb1f116db6a3ec6ab2ae6b9467935494228ecae88ab16",
+    "gtk_sha256": "6af7ce0706f08cad6fa1e7104ca47058011271db5ff8009d2b184ae9a5b3492d",
+    "native_gui_recompiled": false,
+    "windows_transfer_progress_preserved": true
+  },
+  "unchanged_installed_engines": {
+    "linux": {
+      "nodes": [
+        "ubuntu",
+        "kali"
+      ],
+      "artifact_manifest_sha256": "da6596758585aa286b67d9ce63a8b55e540341886bb1478b7892135f201a5dcc",
+      "engine_sha256": "5c70b4f3d85f4f55a88ad420b2e8115ae4e1fdef1475a65ea7efb75b4b39103e",
+      "patch_sha256": "654f8ed741cb5042bc02e0c68d1de5d4924bfaac06c01a1d2c395dfe075dc37c"
+    },
+    "windows": {
+      "artifact_manifest_sha256": "ada23f4a0fbd3f2f6542c143f0072a95b3dfd7bae941015713fff3f1c546aba6",
+      "engine_sha256": "649a6c29f9fef54af3896972b5469b1671f52c240ba5247b134c87ab3edb4499",
+      "patch_sha256": "70afdffdba804e5bc95644f7ac27b24f8815857426d6737577d3d3e47d18ea5a"
+    },
+    "artifact_replaced": false
+  },
+  "publication": {
+    "preflight": "Fresh status and component absence on all three nodes; original session discovered from those replies, not hardcoded.",
+    "coordinator_guards": "Existing nonblocking owner locks; read-only plan creates no locks or directories.",
+    "per_node_transaction": true,
+    "distributed_atomicity_claimed": false,
+    "authenticated_supervisor_shutdown_and_endpoint_removal_verified": true,
+    "initial_windows_refusal": {
+      "cause": "Generic new Medium storage would have changed the original source file owner and security descriptor.",
+      "stage": "Before Windows runtime publication",
+      "windows_runtime_files_published": 0,
+      "automatic_retry": false,
+      "ubuntu_already_updated": true,
+      "kali_not_yet_updated": true
+    },
+    "reviewed_resume": {
+      "native_private_fixture_targets": 2,
+      "native_descriptor_clone_fixture_passed": true,
+      "candidate_creation": "Original Windows security descriptor supplied at file creation; private Medium storage verified before CAS publication.",
+      "owner_group_dacl_sacl_and_mandatory_label_preserved": true,
+      "security_comparison": "Existing publisher comparison ignores only DACL AUTO_INHERITED bookkeeping; owner, group, ACEs and entire SACL remain exact.",
+      "existing_permissions_repaired": false,
+      "ubuntu_reverified_without_reapplying": true,
+      "windows_and_kali_resume_succeeded": true
+    },
+    "posix_guards": "Original fstat identity, owner, mode, link count and bytes checked; new files mode0600 and private backups; post-rename identity check excludes ctime-only rename bookkeeping.",
+    "local_operator_fixtures_passed": 8,
+    "local_operator_fixture_scope": "Synthetic terminal/global gates and temporary filesystem fixtures; no SSH, installed runtime, GUI or clipboard access.",
+    "private_before_images_and_receipts_retained": true,
+    "private_backup_locations_published": false
+  },
+  "verified_installation": {
+    "ubuntu": {
+      "full_16_support_hashes_verified": true,
+      "unchanged_15_support_modules_verified": true,
+      "gui_release_and_files_verified": true
+    },
+    "windows": {
+      "full_16_support_hashes_verified": true,
+      "unchanged_15_support_modules_verified": true,
+      "gui_release_and_native_image_verified": true
+    },
+    "kali": {
+      "full_16_support_hashes_verified": true,
+      "unchanged_15_support_modules_verified": true,
+      "gui_release_and_files_verified": true
+    },
+    "catalog_and_selection_hashes_unchanged": true,
+    "desktop_python_and_deployment_hashes_unchanged": true,
+    "approved_engine_and_dependency_verification_unchanged": true,
+    "profile_material_modified": false,
+    "profile_metadata_unchanged_at_runtime_start": true,
+    "core_public_runtime_hash_and_mcp_config_metadata_unchanged": true,
+    "mcp_config_contents_read_for_this_check": false,
+    "windows_preferences_unchanged": {
+      "AutoConnectInput": 0,
+      "ScreenSide": 0,
+      "ShareClipboard": 1
+    },
+    "ssh_or_certificate_configuration_changed": false,
+    "private_key_contents_read": false
+  },
+  "future_launch_pointers": {
+    "ubuntu": {
+      "menu_entry_verified": true,
+      "desktop_entry_verified": true
+    },
+    "windows": {
+      "desktop_shortcut_verified": true,
+      "unrelated_shortcut_properties_preserved": true
+    },
+    "kali": {
+      "menu_entry_verified": true,
+      "desktop_entry_verified": true
+    },
+    "target_gui_manifest_sha256": "756ab1239e3be455abbe645d7d566cf62d27ba4af737df8b6e40f0f3d646d374",
+    "cas_publication_and_private_backups_verified": true
+  },
+  "pre_user_start_checkpoint": {
+    "three_supervisors_idle": true,
+    "components_per_node": 0,
+    "desktop_ready": false,
+    "session_id": null,
+    "windows_gui": {
+      "pid_snapshot": 16252,
+      "interactive_session_snapshot": 13,
+      "exact_release_image_verified": true,
+      "visible_owned_window_verified_from_same_session": true,
+      "on_demand_task_principal": "Interactive, Limited",
+      "task_actions": 1,
+      "task_triggers": 0
+    },
+    "ubuntu_gui_running": false,
+    "kali_gui_running": false,
+    "only_exact_completed_metadata_probe_removed": true,
+    "probe_exit_result": 0,
+    "probe_task_xml_backed_up_privately": true,
+    "running_windows_gui_task_preserved": true,
+    "group_started_by_rollout": false,
+    "clipboard_or_input_accessed_by_rollout": false,
+    "reboot_performed": false
+  },
+  "later_live_fault_results_included": false,
+  "related_receipts": [
+    "2026-11-27-desktop-install.json",
+    "2026-11-28-windows-transfer-progress.json"
+  ]
+}

@@ -13,17 +13,20 @@ import socket
 import stat
 import subprocess
 import sys
+from queue import Full, Queue
 from threading import Event, Thread
 from time import monotonic, sleep
 
 import desktop_security
+import desktop_managed
 
 MAX_SPEC_BYTES = 65536
 
 
 def validate_spec(specification):
     """Internal launch data only: no file selectors or output paths are accepted."""
-    if not isinstance(specification, dict) or set(specification) != {"argv", "cwd", "lease_seconds", "heartbeat_token"}:
+    required = {"argv", "cwd", "lease_seconds", "heartbeat_token"}
+    if not isinstance(specification, dict) or not required <= specification.keys() <= required | {"managed"}:
         raise ValueError("Invalid private guardian specification fields.")
     argv, cwd = specification["argv"], specification["cwd"]
     lease, token = specification["lease_seconds"], specification["heartbeat_token"]
@@ -36,7 +39,11 @@ def validate_spec(specification):
         raise ValueError("Invalid private guardian specification.")
     # Existence/access validation belongs to the authorized supervisor prepare step.
     # This parser deliberately does not query paths supplied over the wire.
-    return {"argv": list(argv), "cwd": cwd, "lease_seconds": lease, "heartbeat_token": token}
+    value = {"argv": list(argv), "cwd": cwd, "lease_seconds": lease, "heartbeat_token": token}
+    if "managed" in specification:
+        value["managed"] = desktop_managed.validate_configuration(specification["managed"])
+        desktop_managed.validate_argv(value["managed"], value["argv"])
+    return value
 
 
 def spec_frame(specification):
@@ -165,7 +172,47 @@ class WindowsJob:
 
 
 def emit(value):
-    print(json.dumps(value, ensure_ascii=True), flush=True)
+    raw = (json.dumps(value, ensure_ascii=True, separators=(",", ":")) + "\n").encode("ascii")
+    view = memoryview(raw)
+    while view:
+        count = os.write(sys.stdout.fileno(), view)
+        if not count:
+            raise OSError("The guardian event channel closed.")
+        view = view[count:]
+
+
+class ManagedEvents:
+    """Backpressure must stop the child, never block the guardian's stop loop."""
+
+    def __init__(self):
+        self.queue = Queue(maxsize=4)
+        self.failed = Event()
+        Thread(target=self.write, name="managed-guardian-events", daemon=True).start()
+
+    def write(self):
+        while True:
+            value = self.queue.get()
+            try:
+                if value is None:
+                    return
+                emit(value)
+            except OSError:
+                self.failed.set()
+                return
+            finally:
+                self.queue.task_done()
+
+    def send(self, value):
+        try:
+            self.queue.put_nowait(value)
+        except Full:
+            self.failed.set()
+
+    def finish(self):
+        deadline = monotonic() + 0.5
+        while self.queue.unfinished_tasks and monotonic() < deadline and not self.failed.is_set():
+            sleep(0.01)
+        self.send(None)
 
 
 def child_exited(child):
@@ -223,12 +270,26 @@ def run():
         desktop_security.protect_new_file("stdout.log")
         if stopped.is_set():
             raise ValueError("The guardian was stopped before program startup.")
-        child = subprocess.Popen(argv, cwd=specification.get("cwd"), stdin=subprocess.DEVNULL,
-                                 stdout=log, stderr=subprocess.STDOUT, close_fds=True,
-                                 start_new_session=sys.platform != "win32")
+        managed = None
+        events = None
+        if "managed" in specification:
+            # Thread allocation must succeed before any owned engine exists.
+            events = ManagedEvents()
+            managed = desktop_managed.ManagedEngine(specification["managed"], argv, cwd=specification.get("cwd"),
+                                                    log=log, stop_event=stopped)
+            child = managed.start()
+        else:
+            child = subprocess.Popen(argv, cwd=specification.get("cwd"), stdin=subprocess.DEVNULL,
+                                     stdout=log, stderr=subprocess.STDOUT, close_fds=True,
+                                     start_new_session=sys.platform != "win32")
+        publish = events.send if events is not None else emit
         reason = "exited"
         try:
-            emit({"event": "started", "pid": child.pid, "heartbeat_port": heartbeat.getsockname()[1]})
+            started = {"event": "started", "pid": child.pid, "heartbeat_port": heartbeat.getsockname()[1]}
+            if managed is not None:
+                started["engine_nonce"] = managed.expected["engine_nonce"]
+            publish(started)
+            sequence = 0
             while not child_exited(child):
                 for _ in range(32):
                     try:
@@ -237,6 +298,15 @@ def run():
                         break
                     if value == token:
                         last_heartbeat = monotonic()
+                if managed is not None:
+                    report = managed.report()
+                    if report["failure"] is not None or events.failed.is_set():
+                        reason = "managed_engine_failed"
+                        break
+                    snapshot = report["snapshot"]
+                    if snapshot is not None and snapshot["sequence"] != sequence:
+                        publish(dict(report, event="engine_snapshot"))
+                        sequence = snapshot["sequence"]
                 if stopped.wait(0.03):
                     reason = "control_closed"
                     break
@@ -244,9 +314,13 @@ def run():
                     reason = "guardian_lease_expired"
                     break
         finally:
+            if managed is not None:
+                managed.close()
             code = child.poll() if job is not None else stop_group(child)
             try:
-                emit({"event": "finished", "reason": reason, "exit_code": code})
+                publish({"event": "finished", "reason": reason, "exit_code": code})
+                if events is not None:
+                    events.finish()
             except OSError:
                 pass
             if job is not None:
@@ -256,7 +330,7 @@ def run():
 def main():
     try:
         run()
-    except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
+    except (OSError, ValueError, KeyError, TypeError, IndexError, RuntimeError) as error:
         emit({"event": "error", "message": str(error)})
         return 1
     return 0

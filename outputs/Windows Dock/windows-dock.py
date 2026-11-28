@@ -6,9 +6,11 @@
 
 from datetime import datetime
 import json
+import os
 from pathlib import Path, PureWindowsPath
+import subprocess
 import sys
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from uuid import uuid4
 
 import gi
@@ -100,10 +102,13 @@ window.dock, .dock viewport, .dock scrolledwindow { background-color: #0a111a; c
     border: 1px solid #2b4051;
 }
 .dock .card-title { color: #c0d3e4; font-weight: bold; }
+.dock .screen-primary { border-color: #56e0df; }
+.dock .screen-primary .card-title { color: #56e0df; }
 .dock .metric { font-size: 21px; font-weight: bold; }
 .dock .muted { color: #a2b7c9; }
 .dock .session-online { color: #82edb4; }
 .dock .session-waiting { color: #f6d295; }
+.dock .session-failed { color: #ffc3c8; }
 .dock .footer {
     background-color: #0e1926; color: #a2b7c9; padding: 9px 24px;
     border-top: 1px solid #26394a;
@@ -647,21 +652,29 @@ class InvitationEditor(Gtk.Window):
 
 class DesktopEditor(Gtk.Window):
     def __init__(self, owner):
-        super().__init__(title="Layout desktop — anteprima")
+        super().__init__(title="Configura gruppo di schermi")
         self.owner = owner
         registry = owner.nodes_snapshot["registry"]
         self.revision = owner.nodes_snapshot["revision"]
         self.saving = False
         self.members = []
+        self.adjusting = False
+        self.names = {node["id"]: node["label"] for node in registry["nodes"]}
         self.get_style_context().add_class("dock")
         self.set_transient_for(owner)
         self.set_destroy_with_parent(True)
-        self.set_default_size(760, 680)
+        self.set_default_size(820, 740)
+        self.set_size_request(640, 510)
         self.connect("delete-event", lambda *_args: self.saving)
         self.connect("destroy", lambda *_args: setattr(owner, "desktop_editor", None))
-        body = vertical(10)
-        body.set_border_width(18)
-        self.add(body)
+        outer = vertical(10)
+        outer.set_border_width(18)
+        self.add(outer)
+        viewport = Gtk.ScrolledWindow()
+        viewport.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.form = body = vertical(12)
+        viewport.add(body)
+        add(outer, viewport, True)
         guide = label("Scegli il PC con mouse e tastiera. Celle adiacenti: X verso destra, Y verso il basso.\n"
                       "Ogni PC rappresenta il suo desktop logico. Il salvataggio non avvia la condivisione.", "muted")
         guide.set_line_wrap(True)
@@ -672,20 +685,34 @@ class DesktopEditor(Gtk.Window):
         self.primary = Gtk.ComboBoxText()
         for node in registry["nodes"]:
             self.primary.append(node["id"], node["label"] + " · " + node["id"][:8])
+        for cell in self.primary.get_cells():
+            cell.set_property("ellipsize", Pango.EllipsizeMode.END)
+            cell.set_property("max-width-chars", 28)
         self.primary.set_active_id(profile["primary"])
+        self.current_primary = profile["primary"]
         add(body, label("Principale (mouse e tastiera collegati qui)"))
         add(body, self.primary)
         self.clipboard = Gtk.CheckButton(label="Condividi gli appunti tra i membri")
         self.clipboard.set_active(profile["clipboard"])
         add(body, self.clipboard)
+        add(body, label("Computer inclusi nel gruppo", "card-title"))
+        member_list = vertical(4)
+        add(body, member_list)
         grid = Gtk.Grid(column_spacing=10, row_spacing=8)
-        for column, caption in enumerate(("Membro", "X", "Y")):
+        grid.set_hexpand(True)
+        for column, caption in enumerate(("Computer", "X", "Y")):
             grid.attach(label(caption, "muted"), column, 0, 1, 1)
         for row, node in enumerate(registry["nodes"], 1):
             position = positions.get(node["id"])
             selected = Gtk.CheckButton(label=node["label"] + " · " + node["id"][:8])
             selected.set_active(position is not None)
-            grid.attach(selected, 0, row, 1, 1)
+            selected.set_tooltip_text(node["label"] + "\n" + node["id"])
+            selected.get_child().set_ellipsize(Pango.EllipsizeMode.END)
+            add(member_list, selected)
+            name = label(node["label"])
+            name.set_ellipsize(Pango.EllipsizeMode.END)
+            name.set_hexpand(True)
+            grid.attach(name, 0, row, 1, 1)
             coordinates = []
             for column, axis in enumerate(("x", "y"), 1):
                 entry = Gtk.Entry(text=str(position[axis] if position else 0), width_chars=6)
@@ -693,27 +720,190 @@ class DesktopEditor(Gtk.Window):
                 grid.attach(entry, column, row, 1, 1)
                 coordinates.append(entry)
             self.members.append((node["id"], selected, *coordinates))
-        scroll = Gtk.ScrolledWindow()
-        scroll.set_min_content_height(130)
-        scroll.add(grid)
-        add(body, scroll, True)
+        add(body, label("Disposizione degli schermi · anteprima", "card-title"))
+        move_row = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=False,
+                               min_children_per_line=1, max_children_per_line=6)
+        move_row.set_column_spacing(6)
+        move_row.set_row_spacing(6)
+        self.screen_choice = Gtk.ComboBoxText()
+        for node in registry["nodes"]:
+            self.screen_choice.append(node["id"], node["label"])
+        for cell in self.screen_choice.get_cells():
+            cell.set_property("ellipsize", Pango.EllipsizeMode.END)
+            cell.set_property("max-width-chars", 24)
+        self.screen_choice.set_active_id(profile["primary"])
+        move_row.add(self.screen_choice)
+        self.move_buttons = []
+        for caption, dx, dy in (("←", -1, 0), ("→", 1, 0), ("↑", 0, -1), ("↓", 0, 1)):
+            button = action_button(caption, lambda *_args, x=dx, y=dy: self.move_screen(x, y))
+            button.set_tooltip_text("Sposta lo schermo selezionato. Una cella occupata scambia i due schermi.")
+            self.move_buttons.append(button)
+            move_row.add(button)
+        add(body, move_row)
+        self.map_grid = Gtk.Grid(column_spacing=10, row_spacing=10, halign=Gtk.Align.START,
+                                 valign=Gtk.Align.START)
+        map_scroll = Gtk.ScrolledWindow()
+        map_scroll.set_min_content_height(170)
+        map_scroll.add(self.map_grid)
+        add(body, map_scroll)
+        self.map_status = label("", "muted")
+        self.map_status.set_line_wrap(True)
+        add(body, self.map_status)
+        advanced = Gtk.Expander(label="Coordinate avanzate")
+        advanced.add(grid)
+        add(body, advanced)
         self.preview = Gtk.TextView(editable=False, cursor_visible=False, monospace=True)
         self.preview.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
         result_scroll = Gtk.ScrolledWindow()
-        result_scroll.set_min_content_height(180)
+        result_scroll.set_min_content_height(150)
         result_scroll.add(self.preview)
-        add(body, result_scroll, True)
+        details = Gtk.Expander(label="Dettagli della verifica")
+        details.add(result_scroll)
+        add(body, details)
         self.message = label("Anteprima e controlli locali; accesso remoto e TLS restano da verificare.", "muted")
         self.message.set_line_wrap(True)
-        add(body, self.message)
-        actions = Gtk.Box(spacing=8)
+        add(outer, self.message)
+        actions = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=False,
+                             min_children_per_line=1, max_children_per_line=4)
+        actions.set_column_spacing(6)
+        actions.set_row_spacing(6)
         self.buttons = [action_button("Anteprima", lambda *_: self.submit("desktop_preview"), True),
                         action_button("Salva layout", lambda *_: self.submit("desktop")),
                         action_button("Rimuovi layout", lambda *_: self.submit("desktop", clear=True)),
                         action_button("Chiudi", lambda *_: self.destroy())]
         for button in self.buttons:
-            add(actions, button)
-        add(body, actions)
+            actions.add(button)
+        add(outer, actions)
+        for node_id, selected, x, y in self.members:
+            selected.connect("toggled", lambda widget, identity=node_id: self.select_member(identity))
+            x.connect("changed", lambda *_: self.update_map())
+            y.connect("changed", lambda *_: self.update_map())
+        self.primary.connect("changed", self.change_primary)
+        self.screen_choice.connect("changed", lambda *_: self.update_map())
+        self.update_map()
+
+    def free_position(self, excluded):
+        occupied = set()
+        for node_id, selected, x, y in self.members:
+            if node_id != excluded and selected.get_active():
+                occupied.add((int(x.get_text()), int(y.get_text())))
+        if not occupied:
+            return 0, 0
+        for x, y in sorted(occupied, key=lambda point: (point[1], point[0])):
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                if (x + dx, y + dy) not in occupied:
+                    return x + dx, y + dy
+
+    def select_member(self, identity):
+        if self.adjusting:
+            return
+        member = next(row for row in self.members if row[0] == identity)
+        if member[1].get_active():
+            try:
+                x, y = self.free_position(identity)
+            except ValueError:
+                member[1].set_active(False)
+                self.message.set_text("Correggi le coordinate prima di aggiungere uno schermo.")
+                return
+            self.adjusting = True
+            member[2].set_text(str(x))
+            member[3].set_text(str(y))
+            self.adjusting = False
+            self.screen_choice.set_active_id(identity)
+        self.update_map()
+
+    def change_primary(self, *_args):
+        identity = self.primary.get_active_id()
+        for node_id, selected, _x, _y in self.members:
+            if node_id == identity and not selected.get_active():
+                selected.set_active(True)
+                if not selected.get_active():
+                    self.primary.set_active_id(self.current_primary)
+                    return
+        self.current_primary = identity
+        self.update_map()
+
+    def move_screen(self, dx, dy):
+        try:
+            profile = self.profile()
+        except ValueError as error:
+            self.message.set_text(str(error))
+            return
+        identity = self.screen_choice.get_active_id()
+        position = next((entry for entry in profile["members"] if entry["node_id"] == identity), None)
+        if position is None:
+            return
+        target = position["x"] + dx, position["y"] + dy
+        other = next((entry["node_id"] for entry in profile["members"]
+                      if (entry["x"], entry["y"]) == target), None)
+        self.adjusting = True
+        for node_id, _selected, x, y in self.members:
+            if node_id == identity:
+                x.set_text(str(target[0]))
+                y.set_text(str(target[1]))
+            elif node_id == other:
+                x.set_text(str(position["x"]))
+                y.set_text(str(position["y"]))
+        self.adjusting = False
+        self.update_map()
+
+    def update_map(self):
+        if self.adjusting:
+            return
+        for child in self.map_grid.get_children():
+            child.destroy()
+        primary = self.primary.get_active_id()
+        self.primary.set_tooltip_text(self.names.get(primary, ""))
+        self.screen_choice.set_tooltip_text(self.names.get(self.screen_choice.get_active_id(), ""))
+        for node_id, selected, x, y in self.members:
+            selected.set_sensitive(node_id != primary)
+            x.set_sensitive(selected.get_active())
+            y.set_sensitive(selected.get_active())
+        try:
+            profile = self.profile()
+        except ValueError as error:
+            self.map_status.set_text(str(error))
+            return
+        members = profile["members"]
+        chosen = any(item["node_id"] == self.screen_choice.get_active_id() for item in members)
+        for button in self.move_buttons:
+            button.set_sensitive(chosen)
+        if not members:
+            self.map_status.set_text("Seleziona almeno un computer per comporre il gruppo.")
+            return
+        positions = {(item["x"], item["y"]) for item in members}
+        left, top = min(x for x, _ in positions), min(y for _, y in positions)
+        duplicate = len(positions) != len(members)
+        distant = max(x for x, _ in positions) - left > 64 or max(y for _, y in positions) - top > 64
+        reached, pending = set(), [next(iter(positions))]
+        while pending:
+            point = pending.pop()
+            if point not in reached:
+                reached.add(point)
+                pending.extend(neighbor for neighbor in ((point[0] - 1, point[1]), (point[0] + 1, point[1]),
+                                                        (point[0], point[1] - 1), (point[0], point[1] + 1))
+                               if neighbor in positions)
+        for index, item in enumerate(members):
+            panel = card(self.names[item["node_id"]])
+            panel.set_size_request(175, 90)
+            title = panel.get_children()[0]
+            title.set_max_width_chars(23)
+            title.set_ellipsize(Pango.EllipsizeMode.END)
+            title.set_tooltip_text(self.names[item["node_id"]])
+            if item["node_id"] == primary:
+                panel.get_style_context().add_class("screen-primary")
+            add(panel, label("PC principale" if item["node_id"] == primary else "Schermo secondario", "hero-meta"))
+            add(panel, label(f'X {item["x"]} · Y {item["y"]}', "muted"))
+            column, row = (0, index) if duplicate or distant else (item["x"] - left, item["y"] - top)
+            self.map_grid.attach(panel, column, row, 1, 1)
+        if duplicate:
+            note = "Due schermi occupano la stessa cella. Correggi la posizione prima di salvare."
+        elif distant or len(reached) != len(positions):
+            note = "Il gruppo ha un vuoto: avvicina gli schermi lungo un lato prima di salvare."
+        else:
+            note = "Anteprima della disposizione. Le frecce spostano il PC selezionato o scambiano una cella occupata."
+        self.map_status.set_text(note)
+        self.map_grid.show_all()
 
     def profile(self):
         members = []
@@ -727,6 +917,7 @@ class DesktopEditor(Gtk.Window):
 
     def finished(self, reply=None, error=None):
         self.saving = False
+        self.form.set_sensitive(True)
         for button in self.buttons:
             button.set_sensitive(True)
         if error:
@@ -753,6 +944,7 @@ class DesktopEditor(Gtk.Window):
             self.message.set_text(str(error))
             return
         self.saving = True
+        self.form.set_sensitive(False)
         for button in self.buttons:
             button.set_sensitive(False)
         self.owner.catalog_request({"action": action, "desktop": profile, "expected_revision": self.revision},
@@ -770,6 +962,8 @@ class DockWindow(Gtk.ApplicationWindow):
         self.close_pending = False
         self.remote_stop = None
         self.remote_mode = None
+        self.group_session = None
+        self.group_uncertain = False
         self.nodes_busy = False
         self.nodes_loaded = False
         self.nodes_snapshot = None
@@ -875,11 +1069,14 @@ class DockWindow(Gtk.ApplicationWindow):
                                        and selected["id"] != registry["local"])
         self.node_refresh.set_sensitive(not self.nodes_busy)
         self.node_list.set_sensitive(not self.nodes_busy)
-        self.node_desktop.set_sensitive(available and registry is not None)
+        self.node_desktop.set_sensitive(available and registry is not None and self.group_session is None
+                                        and not self.group_uncertain)
         self.node_import.set_sensitive(available and registry is not None)
         self.node_export.set_sensitive(available and registry is not None)
         self.node_check.set_sensitive(available and registry is not None and selected is not None)
         self.node_add.set_label("Registra questo PC" if available and registry is None else "Aggiungi")
+        self.input_group_button.set_sensitive(not self.nodes_busy and self.group_session is None
+                                              and not self.group_uncertain)
 
     def show_catalog(self, reply):
         previous = self.selected_node()
@@ -995,6 +1192,9 @@ class DockWindow(Gtk.ApplicationWindow):
         self.node_check_editor.submit()
 
     def edit_desktop(self):
+        if self.group_session is not None or self.group_uncertain:
+            self.set_group_message("Ferma il gruppo prima di modificarne la disposizione.", "stopping")
+            return
         if self.nodes_busy or self.nodes_snapshot is None or self.nodes_snapshot["registry"] is None:
             return
         if self.desktop_editor is not None:
@@ -1002,6 +1202,217 @@ class DockWindow(Gtk.ApplicationWindow):
             return
         self.desktop_editor = DesktopEditor(self)
         self.desktop_editor.show_all()
+
+    def configure_desktop_group(self, *_args):
+        if self.group_session is not None or self.group_uncertain:
+            self.set_group_message("Ferma il gruppo prima di modificarne la disposizione.", "stopping")
+            return
+        if self.nodes_busy:
+            return
+        if self.desktop_editor is not None:
+            self.desktop_editor.present()
+            return
+
+        def loaded(reply):
+            if self.close_pending:
+                return
+            if reply["registry"] is None:
+                self.content.set_visible_child_name("nodes")
+                self.nodes_status.set_text("Registra questo PC nel catalogo prima di configurare il gruppo di schermi.")
+            else:
+                self.edit_desktop()
+
+        self.catalog_request({"action": "list"}, success=loaded)
+
+    def set_group_message(self, message, state):
+        self.group_status.set_text(message)
+        style = self.group_status.get_style_context()
+        for name in ("session-online", "session-waiting", "session-failed"):
+            style.remove_class(name)
+        if state == "ready":
+            style.add_class("session-online")
+        elif state == "failed":
+            style.add_class("session-failed")
+        elif state != "stopped":
+            style.add_class("session-waiting")
+
+    def group_controls(self):
+        active = self.group_session is not None
+        blocked = active or self.group_uncertain
+        self.group_button.set_label("Ferma gruppo" if active else "Arresto non confermato" if blocked else "Avvia gruppo")
+        self.group_button.set_sensitive(not self.group_uncertain)
+        style = self.group_button.get_style_context()
+        if blocked:
+            style.add_class("stop-action")
+        else:
+            style.remove_class("stop-action")
+        self.group_header_button.set_visible(blocked)
+        self.group_header_button.set_sensitive(active)
+        self.group_header_button.set_label("Ferma gruppo" if active else "Arresto non confermato")
+        self.input_group_button.set_sensitive(not blocked and not self.nodes_busy)
+        if blocked:
+            self.input_button.set_sensitive(False)
+            self.input_edge.set_sensitive(False)
+            self.desktop_button.set_sensitive(False)
+        elif self.remote_stop is None:
+            self.input_button.set_sensitive(True)
+            self.input_edge.set_sensitive(True)
+            self.desktop_button.set_sensitive(True)
+        self.catalog_buttons()
+
+    def toggle_group(self, *_args):
+        if self.group_session is not None:
+            self.stop_group()
+            return
+        if self.group_uncertain:
+            self.set_group_message("Arresto del gruppo non confermato. Verifica i nodi prima di avviare altre condivisioni.", "failed")
+            return
+        if self.remote_stop is not None:
+            self.set_group_message("Ferma prima il collegamento attuale a due PC o il desktop remoto, usando il suo pulsante.", "failed")
+            return
+        if self.desktop_editor is not None:
+            self.set_group_message("Salva e chiudi la configurazione prima di avviare il gruppo.", "waiting_ready")
+            return
+        session = {"process": None, "stop": Event(), "close_input": Event(), "gate": Lock(),
+                   "writer": False, "stop_sent": False, "cleanup": False,
+                   "last_state": "starting", "last_message": "Avvio del gruppo…", "terminal": False,
+                   "protocol_fault": False}
+        self.group_session = session
+        self.set_group_message("Avvio del gruppo…", "starting")
+        self.group_controls()
+        Thread(target=self.run_group, args=(session,), daemon=True).start()
+
+    def request_group_stop(self, session, close_input=False):
+        session["stop"].set()
+        if close_input:
+            session["close_input"].set()
+        with session["gate"]:
+            process = session["process"]
+            if process is None or session["writer"]:
+                return
+            session["writer"] = True
+
+        def write():
+            try:
+                if not session["stop_sent"]:
+                    process.stdin.write(b'{"action":"stop"}\n')
+                    process.stdin.flush()
+                    session["stop_sent"] = True
+                if session["close_input"].is_set():
+                    process.stdin.close()
+            except (OSError, ValueError):
+                pass  # Exit and the last cleanup receipt decide the final state.
+            finally:
+                with session["gate"]:
+                    session["writer"] = False
+                # Closing can race a previous stop write, but never waits for it on GTK.
+                if session["close_input"].is_set() and process.stdin is not None and not process.stdin.closed:
+                    try:
+                        process.stdin.close()
+                    except OSError:
+                        pass
+
+        Thread(target=write, daemon=True).start()
+
+    def stop_group(self, *_args):
+        session = self.group_session
+        if session is None:
+            return
+        self.set_group_message("Arresto del gruppo in corso…", "stopping")
+        self.request_group_stop(session, close_input=self.close_pending)
+
+    def run_group(self, session):
+        process = None
+        try:
+            script = node_catalog.runtime_script().with_name("desktop_app.py")
+            if not script.is_file():
+                raise OSError("Aggiorna il runtime Vincula: manca il controller del gruppo desktop.")
+            interpreter = os.environ.get("VINCULA_PYTHON") or sys.executable
+            process = subprocess.Popen([interpreter, "-IB", str(script), "run"], stdin=subprocess.PIPE,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
+            with session["gate"]:
+                session["process"] = process
+            if session["stop"].is_set():
+                self.request_group_stop(session)
+
+            def drain():
+                try:
+                    while process.stderr.read(4096):
+                        pass
+                except (OSError, ValueError):
+                    pass
+
+            Thread(target=drain, daemon=True).start()
+            while True:
+                line = process.stdout.readline(16385)
+                if not line:
+                    break
+                try:
+                    if len(line) > 16384 or not line.endswith(b"\n"):
+                        raise ValueError("Invalid desktop status frame")
+                    event = json.loads(line.decode("utf-8"))
+                    state, message, cleanup = event.get("state"), event.get("message"), event.get("cleanup_complete")
+                    if (event.get("type") != "status" or state not in
+                            {"starting", "waiting_ready", "ready", "stopping", "stopped", "failed"}
+                            or not isinstance(message, str) or type(cleanup) is not bool):
+                        raise ValueError("Invalid desktop status fields")
+                    if (session["terminal"] or session["stop"].is_set()) and state in {"starting", "waiting_ready", "ready"}:
+                        continue
+                    session["terminal"] |= state in {"stopped", "failed"}
+                    session["last_state"] = "failed" if session["protocol_fault"] else state
+                    if not session["protocol_fault"]:
+                        session["last_message"] = message[:2000]
+                    session["cleanup"] = cleanup and state in {"stopped", "failed"}
+                    GLib.idle_add(self.group_event, session, session["last_state"], session["last_message"], cleanup)
+                except (ValueError, UnicodeError, AttributeError):
+                    session["terminal"] = True
+                    session["protocol_fault"] = True
+                    session["last_state"], session["last_message"] = "failed", "Risposta del controller non valida. Arresto richiesto."
+                    self.request_group_stop(session)
+                    GLib.idle_add(self.group_event, session, "failed", session["last_message"], False)
+                    while line and not line.endswith(b"\n"):
+                        line = process.stdout.readline(16385)
+            process.wait()  # Owned handle; never terminate a process selected by PID.
+        except Exception as error:
+            session["last_state"] = "failed"
+            session["last_message"] = str(error) if process is None else "Il controller del gruppo si è interrotto senza confermare l’arresto."
+            if process is None:
+                session["cleanup"] = True  # No process or engine was started.
+            else:
+                self.request_group_stop(session, close_input=True)
+                process.wait()
+        finally:
+            if process is not None:
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    try:
+                        stream.close()
+                    except (OSError, ValueError):
+                        pass
+            GLib.idle_add(self.group_finished, session)
+
+    def group_event(self, session, state, message, cleanup):
+        if self.group_session is not session:
+            return False
+        if session["stop"].is_set() and state in {"starting", "waiting_ready", "ready"}:
+            return False
+        self.set_group_message(message, state)
+        if state == "failed" and not cleanup:
+            with session["gate"]:
+                session["stop_sent"] = False
+        return False
+
+    def group_finished(self, session):
+        if self.group_session is not session:
+            return False
+        self.group_session = None
+        self.group_uncertain = not session["cleanup"]
+        if self.group_uncertain:
+            self.set_group_message("Arresto del gruppo non confermato. Verifica i nodi prima di avviare altre condivisioni.", "failed")
+        else:
+            self.set_group_message(session["last_message"], session["last_state"])
+        self.group_controls()
+        self.finish_close()
+        return False
 
     def remove_node(self, *_args):
         node = self.selected_node()
@@ -1032,6 +1443,11 @@ class DockWindow(Gtk.ApplicationWindow):
         self.desktop_button = action_button("Desktop remoto", self.toggle_desktop)
         self.desktop_button.set_valign(Gtk.Align.CENTER)
         add(header, self.desktop_button)
+        self.group_header_button = action_button("Ferma gruppo", self.stop_group)
+        self.group_header_button.get_style_context().add_class("stop-action")
+        self.group_header_button.set_no_show_all(True)
+        self.group_header_button.hide()
+        add(header, self.group_header_button)
         return header
 
     def page(self, title, button=None):
@@ -1287,7 +1703,31 @@ class DockWindow(Gtk.ApplicationWindow):
 
     def input_page(self):
         page = self.page("Condividi mouse e tastiera")
-        panel = card("Posizione dello schermo Windows")
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        content = vertical(14)
+        scroll.add(content)
+        add(page, scroll, True)
+        group = card("Più PC · un gruppo di schermi")
+        note = label("Scegli il PC principale, disponi gli schermi e prepara gli appunti condivisi. "
+                     "Salva layout conserva la disposizione; Avvia gruppo controlla i prerequisiti e richiede i consensi necessari.", "muted")
+        note.set_line_wrap(True)
+        add(group, note)
+        actions = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=False,
+                              min_children_per_line=1, max_children_per_line=2)
+        actions.set_column_spacing(6)
+        actions.set_row_spacing(6)
+        self.input_group_button = action_button("Configura gruppo di schermi", self.configure_desktop_group)
+        self.input_group_button.set_halign(Gtk.Align.START)
+        actions.add(self.input_group_button)
+        self.group_button = action_button("Avvia gruppo", self.toggle_group, True)
+        actions.add(self.group_button)
+        add(group, actions)
+        self.group_status = label("Gruppo non attivo. Il motore e i consensi desktop devono essere disponibili sui membri.", "muted")
+        self.group_status.set_line_wrap(True)
+        add(group, self.group_status)
+        add(content, group)
+        panel = card("Collegamento attuale a due PC · schermo Windows")
         self.input_edge = Gtk.ComboBoxText()
         for direction, title in (("east", "A destra di Linux"), ("west", "A sinistra di Linux"),
                                  ("north", "Sopra Linux"), ("south", "Sotto Linux")):
@@ -1307,16 +1747,22 @@ class DockWindow(Gtk.ApplicationWindow):
         self.input_button = action_button("Attiva condivisione", self.toggle_input, True)
         add(row, self.input_button)
         add(panel, row)
-        add(page, panel)
+        add(content, panel)
         return page
 
     def toggle_desktop(self, _button):
+        if self.group_session is not None or self.group_uncertain:
+            self.set_group_message("Ferma il gruppo prima di usare il collegamento desktop remoto.", "stopping")
+            return
         if self.remote_stop is not None:
             self.stop_remote()
         else:
             self.toggle_remote("desktop", show_windows)
 
     def toggle_input(self, _button):
+        if self.group_session is not None or self.group_uncertain:
+            self.set_group_message("Ferma il gruppo prima di usare il collegamento attuale a due PC.", "stopping")
+            return
         edge = self.input_edge.get_active_id()
 
         def run(stop):
@@ -1397,20 +1843,26 @@ class DockWindow(Gtk.ApplicationWindow):
             dialog.format_secondary_text(error)
             dialog.run()
             dialog.destroy()
+        self.group_controls()
         self.finish_close()
         return False
 
     def on_close(self, *_args):
+        if self.group_session is not None:
+            self.close_pending = True
+            self.request_group_stop(self.group_session, close_input=True)
+            self.set_group_message("Arresto del gruppo prima della chiusura…", "stopping")
         if self.remote_stop is not None:
             self.stop_remote()
-        if self.busy or self.nodes_busy or self.remote_stop is not None:
+        if self.busy or self.nodes_busy or self.remote_stop is not None or self.group_session is not None:
             self.close_pending = True
         if self.busy:
             self.message("Attendi il termine dell’operazione prima di chiudere.")
         return self.close_pending
 
     def finish_close(self):
-        if self.close_pending and not self.busy and not self.nodes_busy and self.remote_stop is None:
+        if (self.close_pending and not self.busy and not self.nodes_busy and self.remote_stop is None
+                and self.group_session is None):
             self.close_pending = False
             self.close()
 

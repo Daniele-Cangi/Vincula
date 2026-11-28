@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "group_session_id": "127b0448-9313-4432-b9e2-1cf012da4402",
+  "trigger": "Windows GUI transfer and group stop operated by user",
+  "size_bytes": 1073741824,
+  "sha256": "8497aa7ddbf6be09e9c4b8fa1d583a06ca913532c4802f376ff93bc2b66648fc",
+  "integrity_passed": true,
+  "partial_file_observed": true,
+  "all_three_supervisors_stopped_while_file_partial": true,
+  "bytes_at_first_all_stopped_sample": 726118400,
+  "bytes_at_last_all_stopped_partial_sample": 1063731200,
+  "transfer_continued_after_stop": true,
+  "all_original_guardian_and_engine_pids_absent_in_post_stop_audit": true,
+  "windows_program_exit_code": null,
+  "windows_exit_code_note": "Guardian terminates its entire owned Windows Job, including itself; a voluntary engine exit code is not available. Terminal guardian handles plus read-only PID absence were checked, without adopting or killing PIDs.",
+  "latency_from_physical_click_measured": false,
+  "other_nodes_exit_codes": [
+    0,
+    0
+  ],
+  "core_changed": false,
+  "gui_transfer_progress_bar": "missing; operator feedback triggers scoped Windows UI correction"
+}
