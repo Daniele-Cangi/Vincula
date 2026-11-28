@@ -19,7 +19,7 @@ La base di questo incremento Core è `main` `be3989356c23`.
 | Stop del desktop | Nella PR #26 stop durante SFTP, perdita del collegamento desktop Kali e revoca reale del consenso GNOME; il Core continua a eseguire lavori | Mantenere distinzione fra test manuali, osservazioni automatiche e revisioni installate |
 | Crash worker e recupero piani | Prove isolate Linux con discendenti; recupero batch/capability da altre origini; CI Windows/Linux | Contenimento forte se viene ucciso anche il guardian; i test isolati non equivalgono a SIGKILL del servizio produttivo |
 | Benchmark | Dodici casi, diciotto lavori exit 0, digest uguali; totale mediano distribuito 24,637 s contro locale 20,491 s | Ripetere le misure quando cambiano scheduling e protocollo dei trasferimenti |
-| Scheduler e concorrenza | Nuovo [incremento di piani nativi e ammissione risorse](resource-scheduling.md), in sviluppo e collaudo isolato | CI Windows, test sui tre PC e rollout; le quote sono cooperative, senza limiti OS CPU/RAM/GPU |
+| Scheduler e concorrenza | [PR #27](https://github.com/Daniele-Cangi/Vincula/pull/27) in bozza; [suite native e piano su tre receiver reali temporanei](collaudo-scheduler-risorse.md) qualificati | CI/review dell’head finale, rollout e benchmark aggiornato; quote cooperative, senza limiti OS CPU/RAM/GPU; un timeout intermittente osservato resta dichiarato |
 | Dataset grandi | [Disegno del protocollo](large-file-transfers.md) | Implementare budget, blocchi verificati, avanzamento, cancellazione e ripresa; il Core ha ancora limite 64 MiB |
 
 Il test GUI con file da 1 GiB non modifica il protocollo MCP dei file. Il recupero

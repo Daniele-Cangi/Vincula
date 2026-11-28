@@ -218,3 +218,7 @@ della triade installata. Nessuna prova sintetica qualifica da sola un guardian
 Windows o il servizio in produzione. L’incremento non sostituisce il protocollo
 file Core, che conserva il limite di 64 MiB, né completa enrollment o controller
 Windows headless. Il [piano dataset](large-file-transfers.md) rimane separato.
+
+Il [collaudo del 28 novembre](collaudo-scheduler-risorse.md) documenta le suite
+native sui tre PC e il piano con tre receiver temporanei reali, conservando
+le distinzioni fra RPC, MCP stdio, origine emulata e servizi installati.
