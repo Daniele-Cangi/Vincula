@@ -307,7 +307,7 @@ def guard(db, key, epoch, grant=None, source_identity=None, now=None, *, require
 def decide(db, key, allowed, expected_sha256=None, now=None):
     row = _row(db, key)
     if type(allowed) is not bool:raise ValueError("Approval decision must be a boolean.")
-    if row["phase"] in TERMINAL | {"stopping", "stopped"}:raise ValueError("Endpoint is not awaiting approval.")
+    if row["phase"] in TERMINAL | {"stopping"}:raise ValueError("Endpoint is not awaiting approval.")
     stage, expected = _approval(row, _access(db))
     if stage is None:raise ValueError("Endpoint is not awaiting approval.")
     if not allowed:
@@ -315,6 +315,7 @@ def decide(db, key, allowed, expected_sha256=None, now=None):
     else:
         if expected_sha256 != expected:raise ValueError("Approve the exact current request/content digest.")
         if _now(now) >= row["spec"]["expires_at"] or not policy(db)["enabled"]:raise ValueError("Transfer disabled or expired.")
+        if row["spec"]["expected_state_id"] != resource_policy.state_id(db):raise ValueError("Transfer state history changed.")
         if stage == "intent":db.execute("UPDATE large_file_endpoints SET intent_sha256=?,intent_auto=0 WHERE id=?", (expected, key))
         else:db.execute("UPDATE large_file_endpoints SET content_approved=?,content_auto=0 WHERE id=?", (expected, key))
     return status(db, key, now)

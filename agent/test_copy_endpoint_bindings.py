@@ -464,5 +464,69 @@ class CopyEndpointBindingTests(unittest.TestCase):
                 first.close();second.close()
 
 
+    def test_managed_stopped_full_to_ask_reapproval_does_not_bypass_resume_binding_fence(self):
+        for role in ("export", "import"):
+            with self.subTest(role=role):
+                self.db.execute("SAVEPOINT role")
+                try:
+                    self.enable()
+                    side = "source" if role == "export" else "destination"
+                    manifest, endpoint = self.manifest, self.endpoint
+                    if role == "import":
+                        manifest = plans.make_manifest(str(uuid4()), self.authority, self.manifest["request"],
+                                                       str(uuid4()), self.state_id, self.now)
+                        endpoint = self.create(manifest=manifest, role="import")
+                        files.reserve(self.db, endpoint["id"], 1, [
+                            {"role": "spool", "id": "spool-volume", "free_bytes": 1000000},
+                            {"role": "target", "id": "target-volume", "free_bytes": 1000000}], self.now)
+                        header = {"version": 2, "export_id": manifest["plan"]["source_id"], "request_sha256": "a" * 64,
+                                  "size": 9, "sha256": "b" * 64, "block_size": files.BLOCK_SIZE,
+                                  "block_count": 1, "blocks_sha256": "c" * 64}
+                        files.bind_manifest(self.db, endpoint["id"], header, "full", self.now)
+                    else:
+                        self.reserve()
+                    claims = [tuple(row) for row in self.db.execute("SELECT * FROM large_file_claims")]
+                    key = endpoint["id"]
+                    proposal = self.proposal(manifest=manifest, side=side)
+                    value = binding.prepare(self.db, manifest, proposal, local_node_id=manifest["request"][side]["node_id"],
+                                            expected_binding_revision=0, now=self.now)
+                    self.bind(value)
+                    active = binding.status(self.db, key, now=self.now)
+                    stopped = binding.emergency_stop(self.db, key, self.now)
+                    self.db.execute("UPDATE policy SET mode='ask'")
+                    binding.decide(self.db, key, True, expected_intent_sha256=active["intent_sha256"],
+                                   expected_binding_revision=2, now=self.now)
+                    for stage in (("intent",) if role == "export" else ("intent", "content")):
+                        with self.assertRaises(ValueError):
+                            binding.guard_control(self.db, key, stopped["endpoint_epoch"], active["token"],
+                                                  expected_binding_revision=2, now=self.now)
+                        current = files.status(self.db, key, self.now)
+                        self.assertEqual(current["approval_stage"], stage)
+                        approved = files.decide(self.db, key, True, current["approval_sha256"], self.now)
+                        self.assertEqual((approved["state"], approved["epoch"]), ("stopped", stopped["endpoint_epoch"]))
+                    binding.guard_control(self.db, key, stopped["endpoint_epoch"], active["token"],
+                                          expected_binding_revision=2, now=self.now)
+                    resumed = files.resume(self.db, key, stopped["endpoint_epoch"], "ask", self.now)
+                    with self.assertRaises(ValueError):
+                        binding.guard_data(self.db, key, resumed["epoch"], active["token"], expected_binding_revision=2, now=self.now)
+                    proposal = self.proposal(manifest=manifest, side=side, controller_epoch=2)
+                    proposal["expected_endpoint_epoch"] = resumed["epoch"]
+                    proposal["proposal_sha256"] = binding.digest({k: v for k, v in proposal.items() if k != "proposal_sha256"})
+                    new = binding.prepare(self.db, manifest, proposal, local_node_id=manifest["request"][side]["node_id"],
+                                          expected_binding_revision=2, now=self.now)
+                    with self.assertRaises(ValueError):
+                        self.bind(new)
+                    binding.decide(self.db, key, True, expected_intent_sha256=new["intent_sha256"],
+                                   expected_binding_revision=2, now=self.now)
+                    self.bind(new)
+                    current = binding.status(self.db, key, now=self.now)
+                    binding.guard_data(self.db, key, resumed["epoch"], current["token"], expected_binding_revision=3, now=self.now)
+                    with self.assertRaises(ValueError):
+                        binding.guard_data(self.db, key, resumed["epoch"], active["token"], expected_binding_revision=3, now=self.now)
+                    self.assertEqual([tuple(row) for row in self.db.execute("SELECT * FROM large_file_claims")], claims)
+                finally:
+                    self.db.execute("ROLLBACK TO role");self.db.execute("RELEASE role")
+
+
 if __name__ == "__main__":
     unittest.main()

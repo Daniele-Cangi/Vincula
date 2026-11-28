@@ -1,6 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Daniele Cangi
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Receiver binding facade and real bounded I/O in owned local TEMP only."""
+from argparse import Namespace
+from contextlib import redirect_stdout
+import io
 import json
 import sys
 import unittest
@@ -142,6 +145,59 @@ class CopyEndpointRuntimeTests(unittest.TestCase):
                 self.rpc(operation, "source", **fields)
         self.bind("source", controller_epoch=2)
         self.assertEqual(len(self.rpc("block-read", "source", index=0)[1]), self.size)
+
+    def test_stopped_full_to_ask_owner_reapproval_keeps_io_fenced_until_new_binding(self):
+        for side in ("source", "destination"):
+            self.bind(side)
+            self.rpc("stop", side)
+            stopped = self.call("status", endpoint_id=(self.export if side == "source" else self.target)["id"])
+            self.binding[side]["binding_revision"] = stopped["binding_revision"]
+        previous = {side: dict(value) for side, value in self.binding.items()}
+        with jobs.transaction() as db:
+            jobs.set_mode(db, "ask")
+
+        def owner(command, **fields):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                jobs.operator(Namespace(command=command, **fields))
+            return json.loads(output.getvalue())
+
+        for side, endpoint in (("source", self.export), ("destination", self.target)):
+            status = self.call("status", endpoint_id=endpoint["id"])
+            owner("copy-binding-approve", id=endpoint["id"], sha256=status["active_intent_sha256"],
+                  binding_revision=status["binding_revision"])
+            with self.assertRaises(ValueError):
+                self.rpc("resume", side)
+            stopped = self.f.status(endpoint)
+            stages = []
+            while stopped["approval_stage"] is not None:
+                stages.append(stopped["approval_stage"])
+                self.assertLessEqual(len(stages), 2)
+                approved = owner("large-files-approve", id=endpoint["id"], sha256=stopped["approval_sha256"])
+                self.assertEqual((approved["state"], approved["epoch"], approved["reserved_bytes"]),
+                                 ("stopped", stopped["epoch"], stopped["reserved_bytes"]))
+                stopped = approved
+            self.assertEqual(stages, ["intent"] if side == "source" else ["intent", "content"])
+            self.rpc("resume", side)
+            with self.assertRaises(ValueError):
+                self.rpc("queue", side)
+            intent = self.prepare(side, controller_epoch=2)
+            self.assertTrue(intent["approval_required"])
+            owner("copy-binding-approve", id=endpoint["id"], sha256=intent["intent_sha256"],
+                  binding_revision=intent["binding_revision"])
+            self.call("bind", endpoint_id=endpoint["id"], expected_state_id=self.f.state_id,
+                      expected_intent_sha256=intent["intent_sha256"],
+                      expected_binding_revision=intent["binding_revision"])
+            status = self.call("status", endpoint_id=endpoint["id"])
+            self.binding[side] = dict(binding_token=status["token"], binding_revision=status["binding_revision"])
+
+        with self.assertRaises(ValueError):
+            self.f.rpc("block-read", self.f.status(self.export), index=0, **previous["source"])
+        reply, data = self.rpc("block-read", "source", index=0)
+        self.assertEqual(len(data), self.size)
+        self.rpc("block-write", "destination", index=0, expected=reply["block"], payload=data)
+        self.assertEqual(self.f.status(self.target)["verified_bytes"], self.size)
+        self.assertFalse((self.f.target / "received.bin").exists())
 
     def test_owner_stop_with_foreign_history_does_not_release_disk(self):
         self.bind("source")

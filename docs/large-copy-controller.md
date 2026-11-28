@@ -115,6 +115,16 @@ di cancellare solo lo staging posseduto, poi ricontrolla il fence prima di
 liberare la prenotazione. Una pubblicazione già autorizzata conserva la sua
 ricevuta valida anche se lo Stop arriva dopo il permit.
 
+Se l'operatore passa da `full` ad `ask` dopo uno Stop, può rinnovare il consenso
+owner-local mentre l'endpoint resta `stopped`: `large-files-pending` mostra il
+digest da approvare con `large-files-approve`. L'export richiede il consenso
+esatto sull'intento; l'import richiede anche quello sul contenuto già osservato.
+L'approvazione non cambia fase, epoch o spazio prenotato e non riattiva I/O.
+Anche il binding prima automatico deve essere approvato esplicitamente. Dopo
+resume serve comunque una nuova proposta di binding approvata e associata con
+CAS; il vecchio token resta inutilizzabile per I/O. Policy disabilitata, scadenza o
+storia SQLite diversa impediscono una nuova approvazione.
+
 Il worker aggiornato attesta separatamente questo adapter. L'installazione
 distribuisce 19 helper; i file nuovi sul disco non attestano il vecchio worker.
 `get_large_file_info.copy_binding` distingue enforcement implementato e copia
