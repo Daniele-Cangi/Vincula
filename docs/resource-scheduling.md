@@ -18,6 +18,8 @@ quando disponibili, quote dell’operatore, prenotazioni, coda, generazione del
 worker e identità del database (`state_id`). Una capacità ignota rimane `null`;
 non viene inventata una GPU o una quantità di memoria. Una GPU usa il suo UUID
 stabile `GPU-…` o `MIG-…`, non l’indice di enumerazione.
+La dichiarazione non seleziona il device nel programma: l’argv o l’ambiente del
+candidato devono usare il device corrispondente, quando il software lo richiede.
 
 La versione dell’helper non certifica un worker avviato: solo il worker pubblica
 la propria generazione e heartbeat. Le osservazioni scadono dopo cinque secondi.

@@ -831,6 +831,8 @@ def write_launch_status(value, *, completed=False):
 def windows_launch(payload):
     # The enclosing JobObject owns cleanup even if an acknowledgment is lost.
     with launch_context(payload) as (argv, options):
+        if isinstance(payload, list):
+            options["cwd"] = ROOT  # The private acknowledgment cwd belongs only to the helper.
         try:
             proc = subprocess.Popen(argv, **options)
         except Exception as error:

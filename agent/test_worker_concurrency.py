@@ -123,17 +123,24 @@ class WorkerConcurrencyTests(unittest.TestCase):
             startup.lpAttributeList = {"handle_list": [int(self.parent_handle)]}
             options.update(startupinfo=startup, close_fds=True)
             code += (
-                "import json,threading,win32api,win32con\n"
+                "import json,threading,traceback,win32api,win32con\n"
                 "original_popen=g['subprocess'].Popen\nhandover_lock=threading.Lock()\n"
                 "def observed_popen(*args,**kwargs):\n"
                 " p=original_popen(*args,**kwargs)\n"
                 " command=args[0] if args else kwargs.get('args')\n"
                 " if isinstance(command,(list,tuple)) and len(command)>3 and command[3]=='_windows_supervise':\n"
-                "  duplicate=win32api.DuplicateHandle(win32api.GetCurrentProcess(),int(p._handle),"
+                "  try:\n"
+                "   duplicate=win32api.DuplicateHandle(win32api.GetCurrentProcess(),int(p._handle),"
                 + str(int(self.parent_handle)) + ",win32con.SYNCHRONIZE,False,0)\n"
-                "  number=duplicate.Detach()\n"
-                "  with handover_lock:\n"
-                "   with open(" + repr(str(handover)) + ",'a') as stream:stream.write(json.dumps(number)+'\\n')\n"
+                "   number=duplicate.Detach()\n"
+                "   with handover_lock:\n"
+                "    with open(" + repr(str(handover)) + ",'a') as stream:stream.write(json.dumps(number)+'\\n')\n"
+                "  except BaseException:\n"
+                "   traceback.print_exc()\n"
+                "   # No payload has been sent: closing stdin aborts this exact guardian.\n"
+                "   try:p.stdin.close()\n"
+                "   finally:p.wait(timeout=15)\n"
+                "   raise\n"
                 " return p\ng['subprocess'].Popen=observed_popen\n")
         if slow_marker is not None:
             self.launch_gates.append(slow_gate)
@@ -158,10 +165,31 @@ class WorkerConcurrencyTests(unittest.TestCase):
             if result:
                 return result
             time.sleep(.025)
-        for stream in self.streams:
-            stream.flush()
-        diagnostics = "\n".join(path.read_text(errors="replace") for path in self.home.glob("worker-*.log"))
-        self.fail("Isolated worker did not reach expected state.\n" + diagnostics[-12000:])
+        self.fail("Isolated worker did not reach expected state.\n" + self.diagnostics())
+
+    def diagnostics(self):
+        """Only synthetic, owner-local fixture state; never read external data."""
+        report = {"workers": [{"pid": worker.pid, "exit_code": worker.poll()} for worker in self.workers]}
+        try:
+            with jobs.transaction() as db:
+                report["resources"] = jobs.resource_policy.status(db)
+                report["jobs"] = []
+                for row in db.execute("SELECT " + jobs.SUMMARY + " FROM jobs ORDER BY created LIMIT 100").fetchall():
+                    value = dict(row)
+                    value["stdout"] = jobs.tail(row["id"], "out")
+                    value["stderr"] = jobs.tail(row["id"], "err")
+                    report["jobs"].append(value)
+        except Exception as error:
+            report["database_error"] = repr(error)
+        report["files"] = {}
+        paths = [*self.home.glob("worker-*.log"), *self.guardian_handovers,
+                 *self.root.glob("native-launch-*/*.json")]
+        for path in paths:
+            try:
+                report["files"][str(path.relative_to(self.home))] = path.read_text(errors="replace")[-8192:]
+            except OSError as error:
+                report["files"][str(path.relative_to(self.home))] = repr(error)
+        return json.dumps(report, indent=2, ensure_ascii=True)
 
     def worker_ready(self):
         with jobs.transaction() as db:

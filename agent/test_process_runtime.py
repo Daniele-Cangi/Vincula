@@ -183,6 +183,37 @@ class ProcessRuntimeTests(unittest.TestCase):
         with jobs.transaction() as db:
             self.assertEqual(db.execute("SELECT count(*) FROM programs").fetchone()[0], 0)
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows registered/shell working directory")
+    def test_registered_and_shell_relative_files_use_worker_root_after_ack_cleanup(self):
+        self.full()
+        script, source = self.root / "relative-program.py", self.root / "relative-input.txt"
+        source.write_text("relative input é🙂", encoding="utf-8")
+        script.write_text(
+            "import json,sys\nfrom pathlib import Path\n"
+            "value={'cwd':str(Path.cwd()),'input':Path(sys.argv[1]).read_text(encoding='utf-8')}\n"
+            "Path(sys.argv[2]).write_text(json.dumps(value),encoding='utf-8')\n"
+            "sys.exit(int(sys.argv[3]))\n", encoding="utf-8")
+        session = str(uuid4())
+        jobs.shell_rpc("open", session)
+        for name, code in (("relative_registered", 7), ("relative_shell", 17)):
+            with self.subTest(route=name):
+                output = self.root / (name + ".json")
+                jobs.operator(Namespace(command="register", name=name, argv=[
+                    sys.executable, script.name, source.name, output.name, str(code)]))
+                key = str(uuid4())
+                if name == "relative_shell":
+                    jobs.shell_rpc("send", session, job_id=key, program=name)
+                else:
+                    jobs.rpc("start", key, name)
+                self.wait(lambda: jobs.rpc("read", key)["state"] == "completed")
+                self.assertEqual(jobs.rpc("read", key)["exit_code"], code)
+                value = json.loads(output.read_text(encoding="utf-8"))
+                self.assertEqual(Path(value["cwd"]), self.root)
+                self.assertEqual(value["input"], "relative input é🙂")
+                self.assertEqual(list(self.root.glob("native-launch-*")), [])
+                self.assertTrue(output.is_file(), "Relative output must survive private acknowledgment cleanup")
+        jobs.shell_rpc("close", session)
+
     def test_ask_requires_exact_preview_digest_and_legacy_approve_is_insufficient(self):
         marker = self.home / "effect"
         code = f"from pathlib import Path; Path({str(marker)!r}).write_text('done')"
@@ -476,6 +507,24 @@ class ProcessRuntimeTests(unittest.TestCase):
         self.assertEqual(retry["state"], "unconfirmed")
         with jobs.transaction() as db:
             self.assertEqual(db.execute("SELECT count(*) FROM direct_process_jobs").fetchone()[0], 1)
+
+
+class WindowsLauncherDirectoryTests(unittest.TestCase):
+    def test_legacy_cwd_is_worker_root_and_native_cwd_remains_approved(self):
+        with TemporaryDirectory(prefix="vincula-launch-cwd-") as name:
+            root = Path(name)
+            approved = root / "approved-native-cwd"
+            approved.mkdir()
+            native = {"protocol_version": 1, "request": {
+                "argv": [sys.executable, "-c", "pass"], "cwd": str(approved),
+                "env": {}, "stdin_text": None, "timeout_seconds": 5}}
+            with patch.object(jobs, "ROOT", root), patch.object(jobs, "write_launch_status"), \
+                    patch.object(jobs.subprocess, "Popen") as create:
+                create.return_value.wait.return_value = 7
+                jobs.windows_launch([sys.executable, "relative-program.py"])
+                self.assertEqual(create.call_args.kwargs["cwd"], root)
+                jobs.windows_launch(native)
+                self.assertEqual(create.call_args.kwargs["cwd"], str(approved))
 
 
 class LaunchAcknowledgmentEncodingTests(unittest.TestCase):
