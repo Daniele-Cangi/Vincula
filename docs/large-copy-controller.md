@@ -127,14 +127,24 @@ Le nuove CLI locali sono `copy-binding-policy FILE [--expected-revision DIGEST]`
 `copy-binding-emergency-stop UUID`. Lo Stop owner-local richiede l'arresto dei
 soli job associati all'endpoint. Nessun aggiornamento produttivo è implicito.
 
-La suite locale di questo incremento esegue 728 test, con 20 esclusioni di
-piattaforma e nessun errore. Il [collaudo nativo del binding](collaudi/2026-11-28-copy-endpoint-bindings.json)
-esegue 75 metodi su ciascun PC, senza errori o fallimenti: Ubuntu e Kali senza
+La suite locale di questo incremento esegue 731 test, con 20 esclusioni di
+piattaforma e nessun errore. Il [collaudo dopo le correzioni di review](collaudi/2026-11-28-copy-endpoint-review-fixes.json),
+successivo alla [prima qualificazione](collaudi/2026-11-28-copy-endpoint-bindings.json),
+esegue 77 metodi su ciascun PC, senza errori o fallimenti: Ubuntu e Kali senza
 esclusioni, Windows con il solo caso agent Linux escluso. I nuovi casi includono
 I/O limitato in TEMP con worker reali, snapshot del token del job, checkpoint
 dopo Stop, resume senza riattivazione implicita, export già preparato,
 pubblicazione e cleanup. I worker originali sono drenati e le nuove fixture
 rimosse. Il fixture MCP verifica i 19 helper installati.
+
+La review ha corretto il limite delle proposte pendenti: gli intenti scaduti
+restano nella cronologia e non consumano capacità per nuovi intenti. Scadenza e
+conteggio non modificano binding, eventi o prenotazioni dei file. Due regressioni
+verificano limite 1, sostituzione di una proposta scaduta e digest della scadenza.
+Sono corretti anche i sei rilievi di leggibilità Sonar. Un fallimento CI Windows
+è stato riprodotto come invecchiamento del worker simulato durante il setup:
+il fixture ora controlla il proprio orologio e il RTT. La prova esplicita di
+RTT 6 secondi resta; la finestra di freshness del prodotto non cambia.
 
 Ogni client e worker MCP di questa prova vive sullo stesso host fisico:
 non è una migrazione tra client Windows e Ubuntu, né un trasferimento SSH di
