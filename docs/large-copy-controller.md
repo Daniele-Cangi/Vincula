@@ -62,14 +62,16 @@ Le CLI owner-local aggiunte sono:
 - `large-copy-metadata FILE`, per una richiesta JSON della facade.
 
 La suite locale passa 698 test con 20 esclusioni di piattaforma. Il
-[collaudo nativo](collaudi/2026-11-28-copy-controller-metadata.json) esegue
+[collaudo della preview leggibile](collaudi/2026-11-28-copy-controller-preview.json)
+del sorgente `2cc989b`, successivo alla
+[prima qualificazione](collaudi/2026-11-28-copy-controller-metadata.json), esegue
 45 metodi su ciascuno dei tre PC:
 
 | Nodo | Python | Esito | Durata |
 | --- | --- | --- | ---: |
-| Ubuntu | 3.14.4 | 45 metodi, nessuna esclusione | 5,160 s |
-| Windows | 3.14.7 | 45 metodi, un caso agent Linux escluso | 10,789 s |
-| Kali | 3.14.10 | 45 metodi, nessuna esclusione | 9,147 s |
+| Ubuntu | 3.14.4 | 45 metodi, nessuna esclusione | 5,411 s |
+| Windows | 3.14.7 | 45 metodi, un caso agent Linux escluso | 9,425 s |
+| Kali | 3.14.10 | 45 metodi, nessuna esclusione | 8,987 s |
 
 Nessun errore o fallimento, exit code 0 del test e del trasporto, worker
 originali chiusi, nessun job/claim residuo e 17 helper verificati prima di
