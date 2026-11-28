@@ -1,6 +1,6 @@
 # Piano dei trasferimenti per dataset grandi
 
-Questo è il progetto completo della fase 9. Il [primo incremento protocollo 2](large-file-protocol.md), separatamente disabilitato per impostazione predefinita, introduce prenotazioni agli endpoint, export immutabile, blocchi verificati e avanzamento MCP limitato. Controller durevole, relay con quota persistente e collaudo della triade restano da realizzare; i requisiti sotto rimangono validi. Il protocollo legacy conserva il limite di 64 MiB, le copie complete e il relay temporaneo sull’origine quando entrambi gli endpoint sono remoti. Il trasporto SFTP legacy ha un timeout di 90 secondi.
+Questo è il progetto completo della fase 9. Il [primo incremento protocollo 2](large-file-protocol.md), separatamente disabilitato per impostazione predefinita, introduce prenotazioni agli endpoint, export immutabile, blocchi verificati e avanzamento MCP limitato. Il [collaudo nelle sei direzioni](collaudo-file-grandi.md) verifica la consegna SSH fra receiver temporanei reali. Controller durevole, relay con quota persistente e ripresa dopo un vero crash del coordinatore da un'altra origine fisica restano da realizzare; i requisiti sotto rimangono validi. Il protocollo legacy conserva il limite di 64 MiB, le copie complete e il relay temporaneo sull’origine quando entrambi gli endpoint sono remoti. Il trasporto SFTP legacy ha un timeout di 90 secondi.
 
 ## Contratto del trasferimento
 
