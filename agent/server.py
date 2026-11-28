@@ -1505,8 +1505,27 @@ async def start_large_transfer(transfer_id: UUID, authority_node_id: NodeId, sou
 
 
 async def _advance_large(manifest, maximum):
+    progress = {"copied": 0, "checked": 0, "cursor_key": None}
+    try:
+        return await _advance_large_impl(manifest, maximum, progress)
+    except ToolError as error:
+        # An owned publication can finish between our snapshot and a guarded
+        # operation. Reconcile only this exact terminal refusal and only from
+        # an authenticated, cross-bound publication receipt; never retry effects.
+        if str(error) != "Endpoint I/O is stopped or terminal.":
+            raise
+        report = await large_report(manifest, progress["copied"])
+        if report.state != "completed":
+            raise
+        report.blocks_checked_this_call = progress["checked"]
+        if progress["cursor_key"] is not None:
+            report.coordinator_next_block = _large_cursors.get(progress["cursor_key"], 0)
+        return report
+
+
+async def _advance_large_impl(manifest, maximum, progress_state):
     report = await large_report(manifest)
-    if report.state in {"completed", "unavailable", "stopping", "stopped", "awaiting_approval"}:
+    if report.state in {"completed", "publishing", "unavailable", "stopping", "stopped", "awaiting_approval"}:
         return report
     source, destination = report.source, report.destination
     for side, current in (("source", source), ("destination", destination)):
@@ -1517,13 +1536,15 @@ async def _advance_large(manifest, maximum):
         await large_endpoint(manifest, "source", "queue", current=source)
         return await large_report(manifest)
     destination, _ = await large_endpoint(manifest, "destination", "bind", current=destination, header=source["header"])
-    if destination["approval_stage"] is not None or maximum == 0:
+    if (destination["approval_stage"] is not None or maximum == 0
+            or destination["state"] in {"publishing", "published"}):
         return await large_report(manifest)
     copied = 0
     # A bounded call is resumable from any origin. The source snapshot and
     # destination blocks remain durable; this first increment has no daemon
     # that continues copying after the coordinating MCP process is gone.
     cursor_key = _large_cursor_key(manifest, destination)
+    progress_state["cursor_key"] = cursor_key
     page_offset, examined = _large_cursors.get(cursor_key, 0), 0
     async def progress():
         value = await large_report(manifest, copied)
@@ -1534,6 +1555,7 @@ async def _advance_large(manifest, maximum):
         page, _ = await large_endpoint(manifest, "source", "blocks", offset=page_offset, limit=128)
         for block in page["blocks"]:
             examined += 1
+            progress_state["checked"] = examined
             valid, _ = await large_endpoint(manifest, "destination", "verify-block", current=destination,
                                            index=block["index"], expected=block)
             if valid["valid"]:
@@ -1551,6 +1573,7 @@ async def _advance_large(manifest, maximum):
             if written.get("block") != block:
                 raise ToolError("The destination did not confirm the expected block.")
             copied += len(data)
+            progress_state["copied"] = copied
             _large_cursor_save(cursor_key, block["index"] + 1)
             if examined >= maximum:
                 if block["index"] + 1 == source["header"]["block_count"]:
