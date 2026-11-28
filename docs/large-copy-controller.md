@@ -128,10 +128,17 @@ Le nuove CLI locali sono `copy-binding-policy FILE [--expected-revision DIGEST]`
 soli job associati all'endpoint. Nessun aggiornamento produttivo è implicito.
 
 La suite locale di questo incremento esegue 728 test, con 20 esclusioni di
-piattaforma e nessun errore. I nuovi casi includono I/O limitato in TEMP con
-worker reali, snapshot del token del job, checkpoint dopo Stop, resume senza
-riattivazione implicita, pubblicazione e cleanup. La qualificazione nativa dei
-tre PC resta separata dalla prova locale e da un rollout produttivo.
+piattaforma e nessun errore. Il [collaudo nativo del binding](collaudi/2026-11-28-copy-endpoint-bindings.json)
+esegue 75 metodi su ciascun PC, senza errori o fallimenti: Ubuntu e Kali senza
+esclusioni, Windows con il solo caso agent Linux escluso. I nuovi casi includono
+I/O limitato in TEMP con worker reali, snapshot del token del job, checkpoint
+dopo Stop, resume senza riattivazione implicita, export già preparato,
+pubblicazione e cleanup. I worker originali sono drenati e le nuove fixture
+rimosse. Il fixture MCP verifica i 19 helper installati.
+
+Ogni client e worker MCP di questa prova vive sullo stesso host fisico:
+non è una migrazione tra client Windows e Ubuntu, né un trasferimento SSH di
+payload tra nodi. Il controller autonomo e il rollout restano da qualificare.
 
 ## Autorità e processo
 

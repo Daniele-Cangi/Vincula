@@ -20,14 +20,16 @@ La base di questo incremento Core è `main` `be3989356c23`.
 | Crash worker e recupero piani | Prove isolate Linux con discendenti; recupero batch/capability da altre origini; CI Windows/Linux | Contenimento forte se viene ucciso anche il guardian; i test isolati non equivalgono a SIGKILL del servizio produttivo |
 | Benchmark | Dodici casi, diciotto lavori exit 0, digest uguali; totale mediano distribuito 24,637 s contro locale 20,491 s | Ripetere le misure quando cambiano scheduling e protocollo dei trasferimenti |
 | Scheduler e concorrenza | [PR #27](https://github.com/Daniele-Cangi/Vincula/pull/27) in bozza; [suite native e piano su tre receiver reali temporanei](collaudo-scheduler-risorse.md) qualificati, CI/review dell’head `85f559a` passate | Rollout e benchmark aggiornato; quote cooperative, senza limiti OS CPU/RAM/GPU; un timeout intermittente osservato resta dichiarato |
-| Dataset grandi | [Primo incremento protocollo 2](large-file-protocol.md), disabilitato per impostazione predefinita: 137 controlli nativi per PC e [sei direzioni SSH reali](collaudo-file-grandi.md) con file oltre 64 MiB, hash, exit code e cleanup corretti; CI/review `e52914e` passate | Review dell’head documentale finale, crash reale del coordinatore e ripresa da altra origine fisica; controller automatico e relay con quote persistenti restano nel [piano completo](large-file-transfers.md). Nessun rollout; i tool legacy conservano 64 MiB |
+| Dataset grandi | [Primo incremento protocollo 2](large-file-protocol.md), disabilitato per impostazione predefinita: 137 controlli nativi per PC e [sei direzioni SSH reali](collaudo-file-grandi.md) con file oltre 64 MiB, hash, exit code e cleanup corretti; CI/review dell’head `15e023d` passate | Crash reale del coordinatore e ripresa da altra origine fisica; controller automatico e relay con quote persistenti restano nel [piano completo](large-file-transfers.md). Nessun rollout; i tool legacy conservano 64 MiB |
+
+La PR #29 aggiunge i metadati del futuro controller, qualificati con 45 metodi su ogni PC. La PR #30 aggiunge il binding sul destinatario, con 728 test locali e [75 metodi nativi per PC](collaudi/2026-11-28-copy-endpoint-bindings.json). Restano bozze: non avviano ancora l’intera copia in autonomia e non modificano le installazioni produttive. La prova di migrazione fisica del client resta distinta.
 
 Il test GUI con file da 1 GiB non modifica il protocollo MCP dei file. Il recupero
 di un piano da un’altra origine non implica l’esecuzione automatica degli effetti
 ancora mancanti: i piani batch/capability esistenti restano di lettura. Il nuovo
 tipo nativo introduce separatamente un replay esplicito con autorità fissa,
-stessi UUID e controlli della cronologia sul destinatario. Nuovi riavvii di Kali
-richiedono accordo con l’operatore; nessun riavvio è necessario ai test isolati.
+stessi UUID e controlli della cronologia sul destinatario. Qualsiasi riavvio
+richiede accordo con l’operatore; nessun riavvio è necessario ai test isolati.
 
 ## Core e Desktop separati
 
