@@ -6,6 +6,39 @@ il completamento del [piano per dataset grandi](large-file-transfers.md).
 
 ## Risultati finali
 
+La prima qualificazione sotto si riferisce al commit `755a5f3`. Il controllo
+successivo della [PR #28](https://github.com/Daniele-Cangi/Vincula/pull/28) ha
+individuato un P1 nel recupero e un problema CI Windows 3.10, corretti nei sorgenti
+`3138c75c161647c912e94ccc1182f9b67115f694` e verificati nuovamente:
+
+| Prova dopo le correzioni | Risultato | Durata |
+| --- | --- | --- |
+| Suite completa locale | 646 test, 20 esclusioni, zero errori/fallimenti | 98,834 s |
+| Ubuntu nativo, Python 3.14.4 | 137 test, 2 casi Windows esclusi, zero errori/fallimenti | 22,097 s |
+| Windows nativo, Python 3.14.7 | 137 test, 1 caso POSIX escluso, zero errori/fallimenti | 35,622 s |
+| Kali nativo, Python 3.14.10 | 137 test, 2 casi Windows esclusi, zero errori/fallimenti | 41,270 s |
+
+Il bundle successivo è `4eb33121a9befc7ffacb98f4b5e91fb8154b81bcad9ede46448dfbda6b658c33`;
+le [nuove ricevute](collaudi/2026-11-28-large-files-review-fixes.json) verificano
+90 file. Tutti i nuovi TEMP sono rimossi dopo codice 0 e cleanup confermato;
+le due prove native Windows della nuova lettura degli ack sono eseguite, non
+saltate. La verifica hosted Windows 3.10 dell’head aggiornato resta distinta.
+
+Il P1 si verificava dopo la scrittura durabile di un blocco e prima del suo
+checkpoint SQL: il coordinatore poteva saltare quel blocco senza riparare il
+ledger. Ora una verifica positiva registra il checkpoint nella stessa transazione
+dei controlli aggiornati di cronologia, epoch e grant. Tre prove riproducono
+checkpoint perso, Stop fra verifica e checkpoint e sostituzione della cronologia;
+la ripresa completa la pubblicazione senza conteggi duplicati.
+
+La CI iniziale Windows 3.10 aveva rilevato un `PermissionError(errno=13)` durante
+la lettura dell’ack, dopo l’esecuzione del programma. La nuova lettura usa
+`CreateFileW` con condivisione read/write/delete e controllo reparse, conserva
+il codice Win32 e trasferisce la proprietà dell’handle una volta sola. Il
+contratto di retry resta limitato alla lettura per i codici 32/33; non accetta
+generici errori di accesso né rilancia programmi. Questa correzione non dimostra
+retroattivamente la causa dell’evento fisico precedente, la cui diagnosi era persa.
+
 Il commit dei sorgenti è `755a5f3a1a58e1ad87e23903cd91bea4357821e7`.
 Il bundle finale è `03601cf1bd80c8df8fff51e2e992c763c33fe61237146ea01dcb3af3258199b9`:
 88 file verificati prima dell’invio. Le [ricevute pubbliche](collaudi/2026-11-28-large-files.json)
@@ -31,6 +64,9 @@ Python provvisto delle dipendenze del runtime:
 ```text
 python -B -W error -m unittest test_transfer_state test_transfer_storage test_transfer_wire test_large_transfer_plans test_large_transfer_server test_large_files_runtime test_windows_launch_ack -v
 ```
+
+Per le correzioni di review aggiungere i moduli `test_large_file_checkpoint` e
+`test_launch_ack_io` allo stesso comando (137 metodi complessivi).
 
 La CI e la review della PR rimangono controlli separati sull’head pubblicato.
 
