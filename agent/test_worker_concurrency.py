@@ -283,14 +283,33 @@ class WorkerConcurrencyTests(unittest.TestCase):
         # Its argv contains the marker; the wrapper creates a distinct entered marker.
         code_marker = a
         self.start_worker(slow_marker=code_marker, slow_gate=release)
-        self.wait(lambda: code_marker.exists() and b.exists())
-        start = time.monotonic()
-        jobs.rpc("stop", second)
-        self.assertLess(time.monotonic() - start, .75)
-        self.wait(lambda: jobs.rpc("read", second)["state"] == "cancelled")
-        self.assertTrue(self.worker_ready())
-        release.touch()
-        gate_a.touch()
+
+        def stop_and_observe_heartbeat():
+            with jobs.transaction() as db:
+                before = jobs.resource_policy.status(db)["worker"]
+            jobs.rpc("stop", second)
+            self.wait(lambda: jobs.rpc("read", second)["state"] == "cancelled")
+
+            def heartbeat_advanced():
+                with jobs.transaction() as db:
+                    current = jobs.resource_policy.status(db)["worker"]
+                return (current["generation"] == before["generation"]
+                        and current["heartbeat_at"] > before["heartbeat_at"]
+                        and current["fresh"] and current["observation_fresh"])
+
+            self.wait(heartbeat_advanced)
+            self.assertFalse(release.exists(), "Control work completed only after launch I/O was released")
+
+        with ThreadPoolExecutor(max_workers=1) as control:
+            try:
+                self.wait(lambda: code_marker.exists() and b.exists())
+                # A separate caller prevents a regression holding SQLite across
+                # launch I/O from trapping this test before it can open the gate.
+                control.submit(stop_and_observe_heartbeat).result(timeout=15)
+                self.assertFalse(release.exists())
+            finally:
+                release.touch()
+                gate_a.touch()
         self.wait(lambda: jobs.rpc("read", first)["state"] == "completed")
 
     def test_crash_two_guardians_reconciles_only_scoped_receipts_and_never_relaunches(self):
