@@ -41,7 +41,8 @@ MAX_SOURCE_BYTES = 512 * 1024
 PROBE_TIMEOUT = 12
 HELPERS = ("jobs.py", "vincula_files.py", "vincula_capabilities.py", "plan_journal.py",
            "wire_framing.py", "direct_execution.py", "resource_policy.py", "worker_resources.py", "execution_plans.py",
-           "transfer_state.py", "transfer_storage.py", "transfer_wire.py", "large_transfer_plans.py", "large_files.py")
+           "transfer_state.py", "transfer_storage.py", "transfer_wire.py", "large_transfer_plans.py", "large_files.py",
+           "node_registry.py", "large_copy_state.py", "large_copy_runtime.py")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _INVALID_POLICY = "Invalid policy observation."
 
@@ -60,7 +61,8 @@ from uuid import UUID
 
 HELPERS = ("jobs.py", "vincula_files.py", "vincula_capabilities.py", "plan_journal.py",
            "wire_framing.py", "direct_execution.py", "resource_policy.py", "worker_resources.py", "execution_plans.py",
-           "transfer_state.py", "transfer_storage.py", "transfer_wire.py", "large_transfer_plans.py", "large_files.py")
+           "transfer_state.py", "transfer_storage.py", "transfer_wire.py", "large_transfer_plans.py", "large_files.py",
+           "node_registry.py", "large_copy_state.py", "large_copy_runtime.py")
 
 def unique_fields(pairs):
     result = {}

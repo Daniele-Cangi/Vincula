@@ -63,6 +63,9 @@ transfer_state = load_adapter("transfer_state")
 transfer_storage = load_adapter("transfer_storage")
 transfer_wire = load_adapter("transfer_wire")
 large_transfer_plans = load_adapter("large_transfer_plans")
+node_registry = load_adapter("node_registry")
+large_copy_state = load_adapter("large_copy_state")
+large_copy_runtime = load_adapter("large_copy_runtime")
 large_files = load_adapter("large_files")
 
 LAUNCH_PROTOCOL_VERSION = 1
@@ -139,13 +142,15 @@ def initialize():
         db.executescript(WORKER_SCHEMA)
         db.executescript(transfer_state.SCHEMA)
         db.executescript(large_files.SCHEMA)
+        db.executescript(large_copy_state.SCHEMA)
         # Older specialized jobs have no fixed argv or manifest the current worker can launch.
         with db:
             db.execute("UPDATE jobs SET state='cancelled',finished=? WHERE state IN ('pending','queued') "
                        "AND argv='[]' AND id NOT IN (SELECT id FROM capability_jobs)", (time.time(),))
     for name in ("vincula_files.py", "vincula_capabilities.py", "plan_journal.py", "wire_framing.py",
                  "direct_execution.py", "resource_policy.py", "worker_resources.py", "execution_plans.py", "jobs.py",
-                 "transfer_state.py", "transfer_storage.py", "transfer_wire.py", "large_transfer_plans.py", "large_files.py"):
+                 "transfer_state.py", "transfer_storage.py", "transfer_wire.py", "large_transfer_plans.py", "large_files.py",
+                 "node_registry.py", "large_copy_state.py", "large_copy_runtime.py"):
         source = Path(__file__).resolve().with_name(name)
         installed = ROOT / name
         if source == installed:
@@ -355,6 +360,8 @@ def dispatch_capability(operation, capability_id=None, job_id=None, revision=Non
 
 
 def dispatch(action, **payload):
+    if action == "copy-metadata":
+        return large_copy_runtime.dispatch(LOCAL_RUNTIME, **payload)
     if action == "large-files":
         if payload.get("operation") in {"block-read", "block-write", "verify-block"}:
             raise ValueError("Use the bounded binary large-file entrypoint.")
@@ -483,6 +490,16 @@ def operator(args):
         elif args.command == "large-files-pending":
             for row in transfer_state.pending(db):
                 print(json.dumps(row))
+        elif args.command == "large-copy-policy":
+            print(json.dumps(large_copy_state.set_policy(db, args.document, args.expected_revision)))
+        elif args.command == "large-copy-pending":
+            for row in large_copy_state.pending(db):
+                print(json.dumps(row))
+        elif args.command in {"large-copy-approve", "large-copy-deny"}:
+            print(json.dumps(large_copy_state.decide(db, args.id, args.command == "large-copy-approve", args.sha256,
+                expected_controller_epoch=args.epoch, expected_authority_state_id=args.state_id)))
+        elif args.command == "large-copy-emergency-stop":
+            print(json.dumps(large_copy_state.emergency_stop(db, args.id)))
         elif args.command in {"large-files-approve", "large-files-deny"}:
             print(json.dumps(transfer_state.decide(db, args.id, args.command == "large-files-approve", args.sha256)))
         elif args.command in {"register", "remove"}:
@@ -1279,6 +1296,8 @@ def work():
                 with transaction() as db:
                     resource_policy.heartbeat(db, generation, observation=latest_observation)
                     transfer_state.worker_seen(db, generation)
+                    large_copy_state.worker_seen(db, generation,
+                                                 expected_authority_state_id=resource_policy.state_id(db))
                 if not shutdown.exists() and len(active) < resource_policy.MAX_JOBS:
                     rows, failures = claim_jobs(generation, resource_policy.MAX_JOBS - len(active), scan=scan)
                     for job_id, diagnostic in failures:
@@ -1380,6 +1399,18 @@ def main():
     file_config = commands.add_parser("large-files-policy", help="Operator-only large-file policy JSON.")
     file_config.add_argument("file", type=Path)
     file_config.add_argument("--expected-revision")
+    copy_config = commands.add_parser("large-copy-policy", help="Operator-only copy metadata policy JSON.")
+    copy_config.add_argument("file", type=Path)
+    copy_config.add_argument("--expected-revision")
+    commands.add_parser("large-copy-pending")
+    for name in ("large-copy-approve", "large-copy-deny"):
+        approval = commands.add_parser(name)
+        approval.add_argument("id")
+        approval.add_argument("--sha256", required=True)
+        approval.add_argument("--epoch", required=True, type=int)
+        approval.add_argument("--state-id", required=True)
+    commands.add_parser("large-copy-emergency-stop").add_argument("id")
+    commands.add_parser("large-copy-metadata", help="Prepare/read/fence metadata only; no copy execution.").add_argument("file", type=Path)
     commands.add_parser("large-files-pending")
     for name in ("large-files-approve", "large-files-deny"):
         approval = commands.add_parser(name)
@@ -1411,11 +1442,11 @@ def main():
     commands.add_parser("process-stdin")
     commands.add_parser("large-files-stdin")
     args = parser.parse_args()
-    if args.command in {"resource-policy", "large-files-policy"}:
+    if args.command in {"resource-policy", "large-files-policy", "large-copy-policy", "large-copy-metadata"}:
         with args.file.open("rb") as stream:
             raw = stream.read(16385)
         if len(raw) > 16384:
-            parser.error("The resource policy exceeds 16 KiB.")
+            parser.error("The local JSON document exceeds 16 KiB.")
         args.document = json.loads(raw)
     if args.command == "init":
         initialize()
@@ -1423,6 +1454,10 @@ def main():
         work()
     elif args.command == "shutdown":
         (ROOT / "worker.stop").touch()
+    elif args.command == "large-copy-metadata":
+        if not isinstance(args.document, dict):
+            parser.error("Use a metadata operation JSON object.")
+        print(json.dumps(large_copy_runtime.dispatch(LOCAL_RUNTIME, **args.document)))
     elif args.command == "large-files-stdin":
         body = b""
         try:

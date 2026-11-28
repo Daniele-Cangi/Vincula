@@ -169,6 +169,12 @@ def _approved(row, mode):
     return row["approved_sha256"] == row["intent_sha256"] and not (mode == "ask" and row["automatic"])
 
 
+def worker_info(db, now=None):
+    """Read metadata-adapter attestation, not provider or process readiness."""
+    _transaction(db)
+    return _worker(db, _clock(now))
+
+
 def _intent(key, definition, epoch, endpoint_epochs):
     return {"version": VERSION, "controller_id": key, "controller_epoch": epoch,
             "manifest_sha256": definition["manifest_sha256"], "authority_state_id": definition["authority_state_id"],

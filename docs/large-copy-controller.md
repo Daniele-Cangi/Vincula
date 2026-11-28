@@ -12,6 +12,58 @@ Un agente su un altro computer deve ritrovare lo stesso trasferimento, leggerne
 progresso ed esito e poterlo fermare. Non deve mantenere un ciclo di avanzamento
 né gestire credenziali SSH.
 
+## Incremento implementato: preparazione dei metadati
+
+Questo branch introduce il ledger additivo di intenti, decisioni e outbox,
+il loader esplicito del catalogo Core e una facade locale. Non lancia controller,
+non invia binding e non prenota o pulisce spazio relay. La policy locale parte
+da `{"enabled": false, "max_pending_enrollments": 64}`. In `ask` la decisione
+vincola il digest esatto dell'intento; in `full` una nuova proposta è
+preautorizzata, mantenendo opt-in e pin della storia locale.
+
+L'inizializzazione distribuisce insieme i 17 helper. Il worker aggiornato
+attesta la presenza dell'adapter metadati: un helper nuovo sul disco non rende
+valida l'attestazione del vecchio worker. `get_large_file_info` aggiunge
+`copy_metadata`, con configurazione, policy e snapshot del worker; i tool MCP
+restano 34. `runtime_implemented`, `launchable` e `operational` rimangono sempre
+`false`, così come la verifica del provider e del trasporto.
+
+Il file locale `large-copy-controller.json`, nella cartella di stato del Core,
+contiene esattamente `version` (intero 1), `node_id` (UUID locale canonico) e
+`registry_path` (percorso assoluto del catalogo di quel servizio). Il catalogo
+deve confermare lo stesso UUID e la famiglia OS reale. Non vengono consultati
+cataloghi dell'agente o rotte legacy come fallback. Un peer ancora senza SSH
+può restare registrato: questo non lo rende utilizzabile dal futuro controller.
+Configurazione e catalogo vengono letti fuori dalle transazioni SQLite.
+
+La facade interna `copy-metadata` ammette soltanto `info`, `prepare`, `read` e
+`stop`, con protocollo 1 e campi chiusi. `prepare` usa il manifest già presente
+sull'autorità, il suo digest e il pin della storia, verificando gli UUID nel
+catalogo. `proposed_endpoint_epochs` indica una proposta di intento: non è
+un'attestazione dei peer o una barriera di cleanup. Le due righe di outbox
+restano pendenti. Nessuna operazione wire approva intenti, attesta worker,
+conferma binding/cleanup, riprende o avvia copie.
+
+Lo Stop della facade può concludere soltanto i metadati mai inviati: nessuna
+generazione/run assegnata, entrambe le righe correnti ancora pendenti e nessun
+invio storico. Se il ledger è incompleto o una richiesta è stata registrata,
+resta `stopping` senza inventare una prova di cleanup. Non è una prova di arresto
+di processi o rilascio di quote del futuro runtime.
+
+Le CLI owner-local aggiunte sono:
+
+- `large-copy-policy FILE [--expected-revision DIGEST]`;
+- `large-copy-pending`;
+- `large-copy-approve UUID --sha256 DIGEST --epoch N --state-id UUID`, oppure
+  `large-copy-deny` con gli stessi pin;
+- `large-copy-emergency-stop UUID`, che applica soltanto il fence metadati;
+- `large-copy-metadata FILE`, per una richiesta JSON della facade.
+
+La suite locale passa 698 test con 20 esclusioni di piattaforma. I nuovi test
+coprono ledger, catalogo, facade, CLI con helper installati e discovery MCP
+stdio in ambienti temporanei. Non qualificano ancora il controller autonomo,
+le credenziali dei servizi o un nuovo rollout sui tre PC.
+
 ## Autorità e processo
 
 Il Core sull'autorità immutabile del manifest possiede controller, ledger e cache

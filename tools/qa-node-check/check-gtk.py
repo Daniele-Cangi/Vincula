@@ -195,7 +195,8 @@ def run_real_local(output):
             helper_root.mkdir(parents=True)
             for name in ("jobs.py", "vincula_files.py", "vincula_capabilities.py", "plan_journal.py", "wire_framing.py", "direct_execution.py",
                          "resource_policy.py", "worker_resources.py", "execution_plans.py", "transfer_state.py", "transfer_storage.py",
-                         "transfer_wire.py", "large_transfer_plans.py", "large_files.py"):
+                         "transfer_wire.py", "large_transfer_plans.py", "large_files.py",
+                         "node_registry.py", "large_copy_state.py", "large_copy_runtime.py"):
                 (helper_root / name).write_bytes((ROOT / "agent" / name).read_bytes())
             with closing(sqlite3.connect(helper_root / "jobs.sqlite3")) as database:
                 database.executescript("CREATE TABLE policy(mode TEXT); INSERT INTO policy VALUES('full');"

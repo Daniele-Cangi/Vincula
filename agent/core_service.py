@@ -26,7 +26,8 @@ else:
 
 HELPERS = ("jobs.py", "direct_execution.py", "plan_journal.py", "vincula_capabilities.py", "vincula_files.py", "wire_framing.py",
            "resource_policy.py", "worker_resources.py", "execution_plans.py", "transfer_state.py", "transfer_storage.py",
-           "transfer_wire.py", "large_transfer_plans.py", "large_files.py")
+           "transfer_wire.py", "large_transfer_plans.py", "large_files.py",
+           "node_registry.py", "large_copy_state.py", "large_copy_runtime.py")
 UNIT = "vincula-core-worker.service"
 OLD_UNIT = "vincula-agent-worker.service"
 ACTIVE = ("pending", "queued", "running", "stopping")
