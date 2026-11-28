@@ -59,10 +59,23 @@ Le CLI owner-local aggiunte sono:
 - `large-copy-emergency-stop UUID`, che applica soltanto il fence metadati;
 - `large-copy-metadata FILE`, per una richiesta JSON della facade.
 
-La suite locale passa 698 test con 20 esclusioni di piattaforma. I nuovi test
-coprono ledger, catalogo, facade, CLI con helper installati e discovery MCP
-stdio in ambienti temporanei. Non qualificano ancora il controller autonomo,
-le credenziali dei servizi o un nuovo rollout sui tre PC.
+La suite locale passa 698 test con 20 esclusioni di piattaforma. Il
+[collaudo nativo](collaudi/2026-11-28-copy-controller-metadata.json) esegue
+45 metodi su ciascuno dei tre PC:
+
+| Nodo | Python | Esito | Durata |
+| --- | --- | --- | ---: |
+| Ubuntu | 3.14.4 | 45 metodi, nessuna esclusione | 5,160 s |
+| Windows | 3.14.7 | 45 metodi, un caso agent Linux escluso | 10,789 s |
+| Kali | 3.14.10 | 45 metodi, nessuna esclusione | 9,147 s |
+
+Nessun errore o fallimento, exit code 0 del test e del trasporto, worker
+originali chiusi, nessun job/claim residuo e 17 helper verificati prima di
+rimuovere i nuovi TEMP. Queste prove coprono ledger, catalogo, facade, CLI con
+helper installati e discovery MCP stdio locale. Non qualificano un controller
+autonomo, le credenziali dei servizi, una migrazione fra client fisici o un
+rollout produttivo. Le ricevute separano queste prove dai trasferimenti SSH
+del protocollo 2 già documentati.
 
 ## Autorità e processo
 
