@@ -162,13 +162,41 @@ La regressione locale passa 183 test desktop, con sette esclusioni native;
 passano anche i cinque test tool e il QA headless dei 118 ELF su Ubuntu e Kali.
 Il [triage aggiornato](collaudi/2026-11-28-desktop-security-triage.md)
 distingue questi rilievi corretti dai quattro alert statici e dal debito di
-manutenzione. L'aggiornamento delle app attende lo stop del gruppo attivo.
+manutenzione. Il rollout e i collaudi seguenti qualificano queste correzioni.
+
+L'operatore ha poi fermato il gruppo e chiuso la sola finestra Windows.
+I tre runtime sono aggiornati al bundle `0fffcdf…` e tutti i collegamenti
+selezionano la GUI `756ab123…`, con progresso Windows invariato. La prima
+pubblicazione Windows si è fermata prima di sostituire file perché il
+descrittore del sorgente differiva da quello generico dei nuovi file.
+La creazione con il descrittore originale, verificata su fixture native,
+conserva proprietario, ACL e label. Il resume esplicito ha riverificato Ubuntu
+senza ripubblicarlo e completato Windows/Kali; cataloghi, motori e Core
+sono rimasti invariati. La
+[ricevuta di aggiornamento](collaudi/2026-11-28-desktop-controller-update.json)
+si riferisce al checkpoint prima dell'avvio dei collaudi. È aperta soltanto
+la GUI Windows; sui destinatari basta il runtime nella sessione grafica.
+
+I due collaudi del nuovo controller sono conclusi. Una chiusura TCP mirata
+del collegamento desktop Windows→Kali ha fermato il gruppo sui tre nodi.
+Una nuova sessione, con UUID diverso, si è fermata dopo il click dell'operatore
+su «Ferma condivisione schermo» di GNOME, che revoca il consenso Wayland.
+Entrambe le osservazioni hanno registrato almeno 30 secondi consecutivi di
+stato terminale e un audit ha verificato che i processi originali non fossero
+più in esecuzione. Dopo ciascuna prova, tre nuovi lavori MCP sono terminati
+con codice 0. La
+[ricevuta dei guasti](collaudi/2026-11-28-desktop-faults.json)
+distingue l'azione GNOME confermata dall'operatore dalle verifiche automatiche,
+e la chiusura di un flusso TCP dalla perdita silenziosa di pacchetti.
+La latenza dal click fisico non è misurata. La condivisione è lasciata ferma.
 
 Prima del rilascio restano:
 
-1. Completare la prova esplicita di revoca/disconnessione del nuovo motore.
-2. Completare le review e autorizzare il merge della PR. Il
-   [triage delle quattro segnalazioni automatiche](collaudi/2026-11-28-desktop-security-triage.md)
-   documenta i confini esaminati; non modifica lo stato degli alert o il Quality Gate.
+1. Concludere la classificazione dei quattro alert nel servizio Sonar:
+   Reliability e Maintainability sono A, ma Security E mantiene il gate rosso.
+   La sessione web verificata non è autenticata. Il
+   [triage delle segnalazioni](collaudi/2026-11-28-desktop-security-triage.md)
+   documenta i confini esaminati senza modificare gli stati remoti.
+2. Completare la review finale e autorizzare il merge della PR, ancora in bozza.
 
-Questa preparazione non ha richiesto riavvii o cambiamenti alle identità Core.
+Questa qualificazione non ha richiesto riavvii o cambiamenti alle identità Core.

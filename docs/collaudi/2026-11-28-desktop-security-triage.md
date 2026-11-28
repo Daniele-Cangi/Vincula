@@ -59,5 +59,14 @@ costanti duplicate, refactor e struttura dei test. Restano debito di
 manutenzione: questo esame non ha dimostrato ulteriori bug funzionali e non
 le archivia come falsi positivi.
 
-Gli stati remoti degli issue non sono stati modificati. L'effetto delle due
-correzioni sul gate richiede una nuova analisi del commit pubblicato.
+La nuova analisi Sonar sul commit `986a665` è completata il 28 novembre alle
+07:56 UTC: zero bug, Reliability A, Maintainability A e 63 code smell.
+Il gate resta `ERROR` per Security E e le quattro vulnerabilità già esaminate.
+Gli stati remoti degli issue non sono stati modificati. La matrice funzionale
+Windows/Linux Python 3.10/3.14 passa nel
+[run 46123446463](https://github.com/Daniele-Cangi/Vincula/actions/runs/46123446463);
+la build nativa Windows passa nel
+[run 46123446459](https://github.com/Daniele-Cangi/Vincula/actions/runs/46123446459),
+con sei suite CTest riuscite. La review Codex dello stesso commit è conclusa
+senza rilievi; lo stato della security review Codex è separato e non risulta
+eseguita in questo ciclo.

@@ -2,6 +2,12 @@
 
 `agent/desktop_install.py` installa file locali del motore opzionale nella root privata dell’account. Non esegue il motore, helper, servizi, SSH o comandi amministrativi; non cambia catalogo, layout, profili, certificati, policy Core o firewall. L’installazione dei servizi supervisor e dei helper è un passaggio distinto. Un’installazione riuscita continua a restituire `desktop_ready=false`, `engine_started=false` e `service_installed=false`.
 
+Per usare il gruppo basta aprire l'app Vincula sul PC che lo coordina.
+I destinatari necessitano del runtime desktop nella propria sessione grafica
+e dei consensi del sistema, ma non di una finestra Vincula aperta. Le loro
+app rimangono opzionali. Il Core MCP continua a funzionare anche senza
+sessione grafica.
+
 La root è `~/.local/share/vincula-desktop` su Linux oppure `%LOCALAPPDATA%\Vincula-Desktop` su Windows. Non esiste un override CLI della destinazione. Il parent standard deve già esistere e superare i controlli di integrità; l’installer non ne cambia permessi o ACL. L’eventuale `VINCULA_DESKTOP_ARTIFACT_ROOT` deve coincidere con la sottodirectory `engines/approved` di questa installazione.
 
 ## Input e comandi
@@ -22,7 +28,7 @@ python agent/desktop_install.py plan \
 
 ## Verifica prima della pubblicazione
 
-Il manifest deve avere il formato canonico e il pin esterno di `desktop_backend.verify_artifact_manifest`. Sono accettati soltanto Deskflow 1.27.0, repository e commit definiti in `desktop_deskflow`, patch SHA256 `70afdffdba804e5bc95644f7ac27b24f8815857426d6737577d3d3e47d18ea5a` e le quattro capability gestite richieste. Il chiamante non può sostituire questi pin. Restano separate le licenze del [motore e della patch](../third_party/deskflow/README.md) e quelle del codice originale Vincula.
+Il manifest deve avere il formato canonico e il pin esterno di `desktop_backend.verify_artifact_manifest`. Le nuove installazioni accettano soltanto Deskflow 1.27.0, repository e commit definiti in `desktop_deskflow`, patch SHA256 `654f8ed741cb5042bc02e0c68d1de5d4924bfaac06c01a1d2c395dfe075dc37c` e le quattro capability gestite richieste. Il chiamante non può sostituire questi pin. Il Windows del collaudo conserva un artifact precedentemente approvato con patch `70afdffd…`, senza EIS: la sua compatibilità runtime non equivale all'accettazione da parte del nuovo installer. Restano separate le licenze del [motore e della patch](../third_party/deskflow/README.md) e quelle del codice originale Vincula.
 
 Piattaforma e architettura devono corrispondere al sistema chiamante; l’header ELF64 little-endian oppure PE deve dichiarare la stessa architettura x86_64/aarch64. Il controllo PE legge al massimo 1 MiB di header. Questo non certifica ABI, librerie OS, backend grafico, TLS, portali o funzionalità del programma.
 
