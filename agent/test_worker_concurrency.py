@@ -29,7 +29,7 @@ class WorkerConcurrencyTests(unittest.TestCase):
         temporary = TemporaryDirectory(prefix="vincula-worker-pool-")
         self.addCleanup(temporary.cleanup)
         self.home = Path(temporary.name).resolve()
-        self.root = self.home / "jobs"
+        self.root = self.home / ("Vincula-Jobs" if jobs.WINDOWS else "jobs")
         change = patch.multiple(jobs, ROOT=self.root, DATABASE=self.root / "jobs.sqlite3")
         change.start()
         self.addCleanup(change.stop)
@@ -57,6 +57,7 @@ class WorkerConcurrencyTests(unittest.TestCase):
         self.fixture.write_text(
             "import json,os,subprocess,sys,time\nfrom pathlib import Path\n"
             "marker,gate=map(Path,sys.argv[1:3])\n"
+            "marker.with_suffix('.cwd.json').write_text(json.dumps(str(Path.cwd())),encoding='utf-8')\n"
             "with marker.with_suffix('.history').open('a') as h: h.write('started\\n')\n"
             "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(25)'],"
             "start_new_session=(sys.platform=='linux' and sys.argv[3]=='detached'))\n"
@@ -113,15 +114,20 @@ class WorkerConcurrencyTests(unittest.TestCase):
     def start_worker(self, slow_marker=None, slow_gate=None):
         code = ("import runpy,time\nfrom pathlib import Path\nfrom contextlib import contextmanager\n"
                 "m=runpy.run_path(" + repr(str(self.root / "jobs.py")) + ",run_name='owned_worker_fixture')\n"
-                "g=m['work'].__globals__\ng['ROOT']=Path(" + repr(str(self.root)) + ")\n"
-                "g['DATABASE']=g['ROOT']/'jobs.sqlite3'\n")
+                "g=m['work'].__globals__\n")
+        if jobs.WINDOWS:
+            # Fresh imports in worker, guardian and launcher must all resolve
+            # the same private profile without touching the parent account.
+            code += "assert g['ROOT']==Path(" + repr(str(self.root)) + "),'Fixture LOCALAPPDATA did not resolve its private ROOT'\n"
+        code += ("g['ROOT']=Path(" + repr(str(self.root)) + ")\n"
+                 "g['DATABASE']=g['ROOT']/'jobs.sqlite3'\n")
         options = {}
         if jobs.WINDOWS:
             handover = self.home / ("guardian-handles-" + uuid4().hex + ".jsonl")
             self.guardian_handovers.append(handover)
             startup = subprocess.STARTUPINFO()
             startup.lpAttributeList = {"handle_list": [int(self.parent_handle)]}
-            options.update(startupinfo=startup, close_fds=True)
+            options.update(startupinfo=startup, close_fds=True, env=dict(os.environ, LOCALAPPDATA=str(self.home)))
             code += (
                 "import json,threading,traceback,win32api,win32con\n"
                 "original_popen=g['subprocess'].Popen\nhandover_lock=threading.Lock()\n"
@@ -236,14 +242,19 @@ class WorkerConcurrencyTests(unittest.TestCase):
         first, a, gate_a = self.registered("parallel_a")
         second, b, gate_b = self.registered("parallel_b")
         third, c, gate_c = self.registered("parallel_c")
+        parent_profile = os.environ.get("LOCALAPPDATA")
         self.start_worker()
+        self.assertEqual(os.environ.get("LOCALAPPDATA"), parent_profile)
         self.wait(lambda: a.exists() and b.exists())
+        for marker in (a, b):
+            self.assertEqual(Path(json.loads(marker.with_suffix(".cwd.json").read_text(encoding="utf-8"))), self.root)
         self.assertFalse(c.exists())
         with jobs.transaction() as db:
             claims = jobs.resource_policy.status(db)["claims"]
         self.assertEqual({item["job_id"] for item in claims}, {first, second})
         gate_a.touch()
         self.wait(c.exists)
+        self.assertEqual(Path(json.loads(c.with_suffix(".cwd.json").read_text(encoding="utf-8"))), self.root)
         gate_b.touch(); gate_c.touch()
         self.wait(lambda: all(jobs.rpc("read", key)["state"] == "completed" for key in (first, second, third)))
 

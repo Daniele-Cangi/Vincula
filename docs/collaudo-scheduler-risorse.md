@@ -15,6 +15,7 @@ policy produttive, finestre o consensi desktop, e non sono stati riavviati PC.
 | Ubuntu fisico, profili temporanei | 104 test, 5 skip, nessun errore |
 | Kali fisico, profili temporanei | 104 test, 5 skip, nessun errore |
 | Windows fisico, profili temporanei | 104 test, 3 skip, nessun errore |
+| Windows, pool dopo l’allineamento del profilo temporaneo | 14 test passati; directory effettiva dei tre programmi verificata |
 | Sei ripetizioni diagnostiche Windows del caso concorrente | Tutte passate |
 | Piano su tre destinatari reali | Tre programmi nativi senza registrazioni, log attesi, exit code 0 |
 | Quote e Stop nel piano reale | Due programmi in esecuzione, terzo in attesa; Stop cancella tutti e libera le prenotazioni dopo pulizia |
@@ -60,6 +61,15 @@ fixture ora attendono la lock Linux o gli handle Windows originali. Due vecchie
 iniezioni Windows sono state adattate al nuovo confine dei processi: perdita
 dell’ack dopo il contenimento, e file `ready` realmente aperto durante il
 risultato nativo. Gli errori di pulizia non sono stati ignorati.
+
+La CI su `08d4ea5` ha poi rilevato che la fixture del pool reimpostava `ROOT`
+nel worker e nel guardian, mentre il launcher lo ricalcolava da `LOCALAPPDATA`.
+La cartella dell’account esisteva sul PC fisico e mancava sui runner puliti:
+il programma falliva prima dell’avvio con `WinError 267`. La fixture ora passa
+`LOCALAPPDATA` temporaneo soltanto al processo figlio, e verifica la directory
+effettiva di tutti e tre i programmi. L’ambiente del padre e le cartelle
+dell’account reale non vengono modificati. La suite pool nativa passa tutti
+i 14 test dopo questa correzione; il codice prodotto è invariato.
 
 La review GitHub ha rilevato inoltre che i programmi registrati Windows
 ereditavano la directory temporanea degli ack. La correzione conserva `ROOT`

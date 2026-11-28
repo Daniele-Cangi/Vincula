@@ -113,6 +113,12 @@
       "comment_id": 4726499393,
       "resolved_by_code_commit": "211b69f6aaa3346fbd34a195ac7aa9c3d4eb46dc",
       "test": "test_registered_and_shell_relative_files_use_worker_root_after_ack_cleanup"
+    },
+    "ci_08d4ea5": {
+      "run_id": 46133824273,
+      "linux": "success",
+      "windows": "failure",
+      "cause": "Pool fixture default ROOT mismatched custom runpy ROOT; WinError267 before program launch. Product runtime unchanged by the fixture-only correction."
     }
   },
   "ci_previous_green": {
@@ -231,5 +237,29 @@
     ],
     "relative_outputs_persist_after_ack_cleanup": true,
     "native_approved_cwd_unchanged": true
+  },
+  "post_ci_windows_pool_isolation": {
+    "runtime_changed": false,
+    "pool_fixture_sha256": "abc64c7485deb17c83ce54c0455f36fcdc69792e523a5c4810c352b02ddb0151",
+    "native_windows_suite": {
+      "tests": 14,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "success": true,
+      "node": "windows",
+      "production_helpers_unchanged": true,
+      "runner_exit_code": 0,
+      "log_sha256": "485078259acebaa35f1fad42a0114528b01a7d13de1b8e86100e05bacd956da1",
+      "private_log_sha256": "6f592d0ad678b7807c5fa303de9e979294cf7d41ef4c6f26231410a30088a929"
+    },
+    "child_only_localappdata": true,
+    "parent_environment_unchanged": true,
+    "real_program_cwd_verified_for_all_three_jobs": true,
+    "linux_pool_tests": {
+      "tests": 14,
+      "success": true
+    },
+    "reason": "The prior runpy fixture changed ROOT only in worker and guardian; fresh Windows launcher used account LOCALAPPDATA. Clean CI had no such account folder; the physical PC did. The fixture now aligns all three roles to TEMP/Vincula-Jobs before overriding globals."
   }
 }
