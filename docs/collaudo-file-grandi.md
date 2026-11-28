@@ -4,6 +4,36 @@ Questo resoconto riguarda il [primo incremento](large-file-protocol.md),
 sviluppato sopra l’head `85f559a` della PR #27. Non è un rollout produttivo né
 il completamento del [piano per dataset grandi](large-file-transfers.md).
 
+## Risultati finali
+
+Il commit dei sorgenti è `755a5f3a1a58e1ad87e23903cd91bea4357821e7`.
+Il bundle finale è `03601cf1bd80c8df8fff51e2e992c763c33fe61237146ea01dcb3af3258199b9`:
+88 file verificati prima dell’invio. Le [ricevute pubbliche](collaudi/2026-11-28-large-files.json)
+includono SHA-256 di ogni file e risultati privi dei percorsi locali privati.
+
+| Prova | Risultato | Durata |
+| --- | --- | --- |
+| Suite completa locale, Python 3.14.4 | 630 test, 18 esclusioni, zero errori o fallimenti | 95,295 s |
+| Suite nativa Ubuntu, Python 3.14.4 | 121 test, zero esclusioni/errori/fallimenti | 17,733 s |
+| Suite nativa Windows, Python 3.14.7 | 121 test, zero esclusioni/errori/fallimenti | 24,439 s |
+| Suite nativa Kali, Python 3.14.10 | 121 test, zero esclusioni/errori/fallimenti | 29,566 s |
+
+Ogni run usa `-B -W error`. Per i tre run nativi sono confermati codice 0 del
+processo di test e del trasporto, conclusione dei worker e rimozione del nuovo
+TEMP. Le precedenti evidenze fallite sono conservate separatamente.
+Passano anche i due test del benchmark esistente e lo smoke MCP con profili
+privati legacy e registro di tre nodi. Una sessione MCP reale verifica i 34 tool,
+le annotazioni di sola lettura, l’opt-in e l’attestazione del worker.
+
+Per ripetere la suite mirata su ogni macchina, dalla directory `agent` con un
+Python provvisto delle dipendenze del runtime:
+
+```text
+python -B -W error -m unittest test_transfer_state test_transfer_storage test_transfer_wire test_large_transfer_plans test_large_transfer_server test_large_files_runtime test_windows_launch_ack -v
+```
+
+La CI e la review della PR rimangono controlli separati sull’head pubblicato.
+
 ## Verifiche e perimetro
 
 Le suite usano file sintetici, cartelle e database temporanei, worker nativi

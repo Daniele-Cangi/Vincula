@@ -5,6 +5,7 @@ limite di 64 MiB. La nuova funzione richiede un consenso iniziale dell’operato
 su ciascun endpoint ed è disabilitata per impostazione predefinita. I vecchi tool
 e i loro limiti restano compatibili. Questo incremento dipende dai piani e dal
 pool di worker della PR #27; non è stato installato sui nodi di produzione.
+I risultati e i limiti delle prove sono nel [resoconto del collaudo](collaudo-file-grandi.md).
 
 Su Windows anche il Python selezionato da `py.exe -3` per l’helper SSH deve
 avere `pywin32`, già richiesto dal worker. Un venv separato del worker non
