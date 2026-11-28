@@ -90,7 +90,12 @@ def _volumes(runtime, record):
 def _binding_guard(runtime, db, key, epoch, binding, *, control=None):
     token, revision = binding
     adapter = runtime.copy_endpoint_bindings
-    guard = adapter.guard_fence if control == "fence" else adapter.guard_control if control == "resume" else adapter.guard_data
+    if control == "fence":
+        guard = adapter.guard_fence
+    elif control == "resume":
+        guard = adapter.guard_control
+    else:
+        guard = adapter.guard_data
     return guard(db, key, epoch, token, expected_binding_revision=revision)
 
 

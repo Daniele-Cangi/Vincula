@@ -265,7 +265,9 @@ def status(db, key, intent_sha256=None, now=None):
     _tx(db)
     now, record = _clock(now), _record(db, key)
     endpoint = files.details(db, key)
-    checked = intent_sha256 if intent_sha256 is not None else record["intent_sha256"] if record else None
+    checked = intent_sha256
+    if checked is None and record:
+        checked = record["intent_sha256"]
     intent = _intent(db, key, checked) if checked is not None else None
     history = endpoint["spec"]["expected_state_id"] == resource_policy.state_id(db) and (record is None or record["state_id"] == resource_policy.state_id(db))
     return {"version": VERSION, "endpoint_id": key, "managed": record is not None,

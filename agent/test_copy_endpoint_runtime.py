@@ -88,8 +88,9 @@ class CopyEndpointRuntimeTests(unittest.TestCase):
         for operation in ("worker_seen", "set_policy", "approve", "cleanup", "emergency_stop", "revoke"):
             with self.subTest(operation=operation), self.assertRaises(ValueError):
                 self.call(operation, endpoint_id=self.export["id"])
+        proposal = self.proposal("source")
         with self.assertRaises(ValueError):
-            self.call("prepare", manifest=self.manifest, proposal=self.proposal("source"),
+            self.call("prepare", manifest=self.manifest, proposal=proposal,
                       expected_binding_revision=0, verified=True)
 
     def test_binding_ack_replay_and_old_clients_cannot_mutate_managed_endpoint(self):

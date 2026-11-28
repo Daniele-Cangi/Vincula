@@ -31,6 +31,19 @@ def check_path(runtime, record):
         runtime.large_files._path(runtime, record)
 
 
+def _prepare(runtime, fields):
+    _fields(fields, {"manifest", "proposal", "expected_binding_revision"})
+    registry = large_copy_runtime.catalog(runtime)  # Operator file I/O outside SQL.
+    manifest = plans.validate_manifest(fields["manifest"])
+    for side in ("source", "destination"):
+        node_id = manifest["request"][side]["node_id"]
+        if registry.get(node_id).node_id != node_id:
+            raise ValueError("Use canonical nodes from the explicit service catalog.")
+    with runtime.transaction() as db:
+        return bindings.prepare(db, manifest, fields["proposal"], local_node_id=registry.local_id,
+                                expected_binding_revision=fields["expected_binding_revision"])
+
+
 def dispatch(runtime, operation, protocol_version=1, endpoint_id=None, **fields):
     if type(protocol_version) is not int or protocol_version != 1:
         raise ValueError("Unsupported endpoint binding protocol.")
@@ -39,16 +52,7 @@ def dispatch(runtime, operation, protocol_version=1, endpoint_id=None, **fields)
             return dict(bindings.info(db), enforcement_implemented=True,
                         autonomous_copy_implemented=False)
     if operation == "prepare" and endpoint_id is None:
-        _fields(fields, {"manifest", "proposal", "expected_binding_revision"})
-        registry = large_copy_runtime.catalog(runtime)  # Operator file I/O outside SQL.
-        manifest = plans.validate_manifest(fields["manifest"])
-        for side in ("source", "destination"):
-            node_id = manifest["request"][side]["node_id"]
-            if registry.get(node_id).node_id != node_id:
-                raise ValueError("Use canonical nodes from the explicit service catalog.")
-        with runtime.transaction() as db:
-            return bindings.prepare(db, manifest, fields["proposal"], local_node_id=registry.local_id,
-                                    expected_binding_revision=fields["expected_binding_revision"])
+        return _prepare(runtime, fields)
     key = plans.identity(endpoint_id)
     if operation == "status":
         if not set(fields) <= {"intent_sha256"}:

@@ -196,8 +196,9 @@ class CopyEndpointBindingTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 self.prepare(proposal=proposal)
         manifest = deepcopy(self.manifest);manifest["request"]["source"]["path"] = "other.bin"
+        proposal = self.proposal(manifest=manifest)
         with self.assertRaises(ValueError):
-            self.prepare(manifest=manifest, proposal=self.proposal(manifest=manifest))
+            self.prepare(manifest=manifest, proposal=proposal)
         with self.assertRaises(ValueError):
             self.prepare(local_node=self.destination)
 

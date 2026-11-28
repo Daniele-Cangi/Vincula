@@ -363,41 +363,23 @@ def dispatch_capability(operation, capability_id=None, job_id=None, revision=Non
         raise ValueError("Unknown capability operation.")
 
 
-def dispatch(action, **payload):
-    if action == "copy-binding":
-        return copy_endpoint_runtime.dispatch(LOCAL_RUNTIME, **payload)
-    if action == "copy-metadata":
-        return large_copy_runtime.dispatch(LOCAL_RUNTIME, **payload)
-    if action == "large-files":
-        if payload.get("operation") in {"block-read", "block-write", "verify-block"}:
-            raise ValueError("Use the bounded binary large-file entrypoint.")
-        return large_files.dispatch(LOCAL_RUNTIME, **payload)[0]
-    if action == "resources":
-        if payload:
-            raise ValueError("Resource status is read-only and accepts no parameters.")
-        with transaction() as db:
-            return dict(resource_policy.status(db), mode=mode(db),
-                        native_execution_enabled=direct_execution.support(db)["enabled"])
-    if action == "process":
-        return dispatch_process(**payload)
-    if action == "plan":
-        with transaction() as db:
-            return plan_journal.dispatch(db, **payload)
-    if action == "capability":
-        return dispatch_capability(**payload)
-    if action == "files":
-        try:
-            with transaction() as db:
-                return files.dispatch(db, ROOT, mode(db), **payload)
-        except OSError:
-            raise ValueError("The file or folder is unavailable, or its filesystem refused the operation.") from None
-    if action == "discover":
-        return discover_tools(**payload)
-    if action == "shell":
-        return shell_rpc(**payload)
-    if action != "batch":
-        return rpc(action, **payload)
+def _dispatch_resources(payload):
+    if payload:
+        raise ValueError("Resource status is read-only and accepts no parameters.")
+    with transaction() as db:
+        return dict(resource_policy.status(db), mode=mode(db),
+                    native_execution_enabled=direct_execution.support(db)["enabled"])
 
+
+def _dispatch_files(payload):
+    try:
+        with transaction() as db:
+            return files.dispatch(db, ROOT, mode(db), **payload)
+    except OSError:
+        raise ValueError("The file or folder is unavailable, or its filesystem refused the operation.") from None
+
+
+def _dispatch_batch(payload):
     operation, items = payload["operation"], payload["items"]
     if operation not in {"start", "status"} or not 1 <= len(items) <= BATCH_LIMIT:
         raise ValueError("Invalid batch request.")
@@ -408,6 +390,36 @@ def dispatch(action, **payload):
         except ValueError as error:
             results.append({"error": str(error)})
     return results
+
+
+def dispatch(action, **payload):
+    if action == "copy-binding":
+        return copy_endpoint_runtime.dispatch(LOCAL_RUNTIME, **payload)
+    if action == "copy-metadata":
+        return large_copy_runtime.dispatch(LOCAL_RUNTIME, **payload)
+    if action == "large-files":
+        if payload.get("operation") in {"block-read", "block-write", "verify-block"}:
+            raise ValueError("Use the bounded binary large-file entrypoint.")
+        return large_files.dispatch(LOCAL_RUNTIME, **payload)[0]
+    if action == "resources":
+        return _dispatch_resources(payload)
+    if action == "process":
+        return dispatch_process(**payload)
+    if action == "plan":
+        with transaction() as db:
+            return plan_journal.dispatch(db, **payload)
+    if action == "capability":
+        return dispatch_capability(**payload)
+    if action == "files":
+        return _dispatch_files(payload)
+    if action == "discover":
+        return discover_tools(**payload)
+    if action == "shell":
+        return shell_rpc(**payload)
+    if action != "batch":
+        return rpc(action, **payload)
+
+    return _dispatch_batch(payload)
 
 
 def dispatch_process(operation, protocol_version, job_id=None, **payload):
