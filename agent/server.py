@@ -5,7 +5,7 @@
 
 import asyncio
 import base64
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from contextlib import suppress
 import json
 import os
@@ -29,6 +29,7 @@ import node_registry
 import node_ssh
 import capability_workflow
 import execution_plans
+import large_transfer_plans
 
 dock_dir = Path(__file__).resolve().parents[1] / "outputs" / "Windows Dock"
 sys.path.insert(0, str(dock_dir))
@@ -855,8 +856,11 @@ async def publish_plan(manifest):
         jobs.plan_journal.check_replication(receipt, record["sha256"])
         return node_id, None
 
-    parts = manifest["plan"] if manifest["kind"] in {"batch", "execution"} else manifest["plan"]["parts"]
-    nodes = dict.fromkeys(part["node_id"] for part in parts)
+    if manifest["kind"] == "large-file":
+        nodes = dict.fromkeys(manifest["request"][side]["node_id"] for side in ("source", "destination"))
+    else:
+        parts = manifest["plan"] if manifest["kind"] in {"batch", "execution"} else manifest["plan"]["parts"]
+        nodes = dict.fromkeys(part["node_id"] for part in parts)
     replies = await asyncio.gather(*(publish(node) for node in nodes))
     return {node: error for node, error in replies if error is not None}
 
@@ -1258,6 +1262,372 @@ async def get_capability_run(run_id: UUID) -> CapabilityReport:
         raise ToolError("Unknown capability run on this origin and its reachable replicas.")
     return await capability_workflow.reconcile(run_id, manifest["plan"], destination_request,
                                                inspect_transfer=inspect_capability_transfer)
+
+
+class LargeFileEndpoint(FileEndpoint):
+    model_config = ConfigDict(extra="forbid")
+
+
+class LargeTransferReport(BaseModel):
+    transfer_id: UUID
+    authority_node_id: NodeId
+    manifest_sha256: str
+    manifest: dict[str, JsonValue]
+    state: str
+    source: dict[str, JsonValue] | None = None
+    destination: dict[str, JsonValue] | None = None
+    errors: dict[str, str] = Field(default_factory=dict)
+    bytes_copied_this_call: int = 0
+    blocks_checked_this_call: int = 0
+    coordinator_next_block: int | None = None
+    publication_may_exist: bool = False
+    stop_semantics: str = ("Endpoint epoch fencing; in-flight network delivery is not certified stopped. "
+                           "Publication authorized before Stop may complete; an absent receipt does not prove an absent final file.")
+
+
+# A cursor is only a performance hint for this MCP process, never evidence of
+# integrity. Another process/origin or endpoint epoch starts verification at 0;
+# final assembly always verifies every block and the whole-file hash again.
+_large_cursors = OrderedDict()
+
+
+def _large_cursor_key(manifest, destination):
+    return (jobs.plan_journal.package(manifest)["sha256"], destination["epoch"],
+            jobs.transfer_state.digest(destination["header"]))
+
+
+def _large_cursor_save(key, index):
+    _large_cursors[key] = max(index, _large_cursors.get(key, 0))
+    _large_cursors.move_to_end(key)
+    while len(_large_cursors) > 128:
+        _large_cursors.popitem(last=False)
+
+
+def large_exchange(node_id, operation, *, payload=b"", request_id=None, **fields):
+    """The operator registry chooses every connection; no caller-supplied routes."""
+    node = registered_node(node_id)
+    request = {"action": "large-files", "protocol_version": 2, "operation": operation, **fields}
+    if request_id is not None:
+        request["request_id"] = str(request_id)
+    try:
+        if node.node_id == local_node():
+            request.pop("action")
+            result, data = jobs.large_files.dispatch(jobs.LOCAL_RUNTIME, payload=payload, **request)
+        else:
+            reply, data = jobs.transfer_wire.remote_exchange(node.route, node.family, request, payload,
+                                                             spool_dir=jobs.ROOT)
+            if not isinstance(reply, dict) or set(reply) not in ({"result"}, {"error"}):
+                raise ValueError("Invalid large-file response envelope.")
+            if "error" in reply:
+                raise ToolError(str(reply["error"]))
+            result = reply["result"]
+        if operation != "block-read" and data:
+            raise ValueError("Unexpected binary data in a metadata response.")
+        return result, data
+    except ToolError:
+        raise
+    except ValueError as error:
+        raise ToolError(str(error)) from None
+    except (OSError, subprocess.SubprocessError, windows_ssh.LinkError):
+        raise ToolError("Large-file service unavailable. Preserve the transfer handle and retry after checking its status.") from None
+
+
+async def large_info(node_id):
+    before = monotonic()
+    reply, _ = await asyncio.to_thread(large_exchange, node_id, "info")
+    if not isinstance(reply, dict) or reply.get("version") != 2:
+        raise ToolError("The helper does not support large-file protocol 2.")
+    reply = dict(reply)
+    remaining = max(0, reply["file_worker_remaining_seconds"] - (monotonic() - before))
+    reply.update(file_worker_remaining_seconds=remaining,
+                 file_worker_fresh=reply["file_worker_fresh"] and remaining > 0)
+    return reply
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_large_file_info(node_id: NodeId) -> dict[str, JsonValue]:
+    """Read the owner's explicit large-file opt-in, disk budget and file-aware worker attestation.
+    Existing file tools retain their 64 MiB limit; this protocol is separately disabled by default.
+    """
+    return await large_info(node_id)
+
+
+async def large_manifest(transfer_id, authority):
+    reachable = False
+    try:
+        first = await asyncio.to_thread(destination_request, authority,
+            {"action": "plan", "operation": "get", "kind": "large-file", "plan_id": str(transfer_id)})
+        reachable = True
+    except ToolError:
+        first = None
+    local = await asyncio.to_thread(jobs.dispatch, "plan", operation="get", kind="large-file", plan_id=str(transfer_id))
+    remote = await find_plan_manifest("large-file", transfer_id)
+    manifest = large_transfer_plans.select_replica(str(transfer_id),
+        [first, local, jobs.plan_journal.package(remote) if remote is not None else None])
+    if manifest is not None and manifest["origin"] != authority:
+        raise ToolError("Preserve the original large-file authority as well as its transfer UUID.")
+    return manifest, reachable
+
+
+async def large_authority(manifest):
+    expected = jobs.plan_journal.package(manifest)
+    receipt = await asyncio.to_thread(destination_request, manifest["origin"],
+        {"action": "plan", "operation": "store", "manifest": manifest})
+    if isinstance(receipt, dict) and receipt.get("state") == "conflict":
+        record = await asyncio.to_thread(destination_request, manifest["origin"],
+            {"action": "plan", "operation": "get", "kind": "large-file", "plan_id": manifest["id"]})
+        original = large_transfer_plans.select_replica(manifest["id"], [record])
+        if original is None or original["origin"] != manifest["origin"] or original["request"] != manifest["request"]:
+            raise ToolError("The authority holds a different immutable large-file request.")
+        return original
+    jobs.plan_journal.check_replication(receipt, expected["sha256"])
+    return manifest
+
+
+async def large_endpoint(manifest, side, operation, *, current=None, payload=b"", **fields):
+    endpoint = manifest["request"][side]
+    plan = manifest["plan"]
+    request_id = plan["source_id" if side == "source" else "destination_id"]
+    arguments = {"request_id": request_id, "expected_state_id": plan[side + "_state_id"], **fields}
+    if current is not None:
+        arguments["epoch"] = current["epoch"]
+    return await asyncio.to_thread(large_exchange, endpoint["node_id"], operation, payload=payload, **arguments)
+
+
+def _large_status(manifest, side, value):
+    plan, request = manifest["plan"], manifest["request"]
+    role = "export" if side == "source" else "import"
+    key = plan["source_id" if side == "source" else "destination_id"]
+    if not isinstance(value, dict) or value.get("id") != key or value.get("version") != 2:
+        raise ValueError("The large-file endpoint identity differs.")
+    expected = jobs.transfer_state.validate_spec(large_transfer_plans.endpoint_spec(manifest, role,
+        value.get("spec", {}).get("source_sha256") if role == "import" else None))
+    if value.get("spec") != expected:
+        raise ValueError("The large-file endpoint request differs from the saved plan.")
+    jobs.transfer_state._digest(value.get("request_sha256"))
+    if value.get("header") is not None:
+        header = jobs.transfer_storage.validate_header(value["header"])
+        source_digest = value["request_sha256"] if role == "export" else expected["source_sha256"]
+        if header["export_id"] != plan["source_id"] or header["request_sha256"] != source_digest:
+            raise ValueError("The content header belongs to a different export request.")
+    return value
+
+
+async def large_report(manifest, copied=0):
+    endpoints, errors = {}, {}
+    async def read(side):
+        try:
+            value, _ = await large_endpoint(manifest, side, "status")
+            endpoints[side] = _large_status(manifest, side, value)
+        except (ToolError, ValueError, TypeError, KeyError) as error:
+            endpoints[side] = None
+            errors[side] = str(error)
+    await asyncio.gather(read("source"), read("destination"))
+    source, destination = endpoints["source"], endpoints["destination"]
+    if source and destination:
+        if (destination["spec"]["source_sha256"] != source["request_sha256"]
+                or destination["header"] is not None and destination["header"] != source["header"]):
+            raise ToolError("The endpoint content bindings disagree; preserve both endpoints for inspection.")
+    receipt = destination.get("receipt") if destination else None
+    if receipt is not None:
+        header = destination.get("header")
+        if (not isinstance(receipt, dict) or header is None or set(receipt) != set(header) | {"import_id", "published"}
+                or receipt["published"] is not True or receipt["import_id"] != destination["id"]
+                or {key: receipt[key] for key in header} != header):
+            raise ToolError("The destination publication receipt differs from its immutable content manifest.")
+        phase = "completed"
+    elif destination and destination["state"] == "published":
+        raise ToolError("The destination claims publication without a durable receipt.")
+    elif errors:
+        phase = "unavailable"
+    elif any(endpoint["state"] == "stopping" for endpoint in (source, destination)):
+        phase = "stopping"
+    elif any(endpoint["state"] in {"stopped", "revoked", "denied", "cleaned"}
+             for endpoint in (source, destination)):
+        phase = "stopped"
+    elif any(endpoint["approval_stage"] is not None for endpoint in (source, destination)):
+        phase = "awaiting_approval"
+    else:
+        phase = destination["state"] if source["header"] is not None else source["state"]
+    return LargeTransferReport(transfer_id=manifest["id"], authority_node_id=manifest["origin"],
+        manifest_sha256=jobs.plan_journal.package(manifest)["sha256"], manifest=manifest,
+        state=phase, source=source, destination=destination, errors=errors, bytes_copied_this_call=copied,
+        publication_may_exist=bool(destination and (destination.get("publication_committed") or receipt is not None)))
+
+
+async def known_large(transfer_id, authority_node_id):
+    authority = registered_node(authority_node_id).node_id
+    manifest, _ = await large_manifest(transfer_id, authority)
+    if manifest is None:
+        raise ToolError("Unknown large-file transfer on its authority and reachable replicas.")
+    return manifest
+
+
+@mcp.tool()
+async def start_large_transfer(transfer_id: UUID, authority_node_id: NodeId, source: LargeFileEndpoint,
+        destination: LargeFileEndpoint,
+        max_bytes: Annotated[int, Field(ge=1, le=1024**4, strict=True)],
+        ttl_seconds: Annotated[int, Field(ge=60, le=30*86400, strict=True)] = 86400) -> LargeTransferReport:
+    """Create an immutable transfer handle; reserve both endpoints before preparing data.
+    Supply an explicit byte budget. Ask approves export/import intent, then the exact
+    content manifest on the destination; full proceeds within prior grants and budgets.
+    Use advance_large_transfer to move bounded blocks, and get_large_transfer for progress.
+    Preserve both UUID and authority on retry or another coordinator. No file is overwritten.
+    """
+    authority = registered_node(authority_node_id).node_id
+    request = {"source": source.model_dump(), "destination": destination.model_dump(),
+               "max_bytes": max_bytes, "ttl_seconds": ttl_seconds}
+    for side in ("source", "destination"):
+        request[side]["node_id"] = registered_node(request[side]["node_id"]).node_id
+    try:
+        request = large_transfer_plans.normalize_request(request)
+        manifest, reachable = await large_manifest(transfer_id, authority)
+        if manifest is None:
+            if not reachable:
+                raise ToolError("An unknown transfer needs its fixed authority online.")
+            observed = await asyncio.gather(*(large_info(request[side]["node_id"]) for side in ("source", "destination")))
+            proposed = large_transfer_plans.make_manifest(str(transfer_id), authority, request,
+                observed[0]["state_id"], observed[1]["state_id"], jobs.time.time())
+            manifest = await large_authority(proposed)
+        elif manifest["request"] != request:
+            raise ToolError("Transfer UUID already binds different endpoints or budgets.")
+        errors = await publish_plan(manifest)
+        if errors:
+            raise ToolError("The immutable transfer could not be replicated before effects.")
+        source_result, _ = await asyncio.to_thread(large_exchange, request["source"]["node_id"], "request",
+            spec=large_transfer_plans.endpoint_spec(manifest, "export"))
+        source_result = _large_status(manifest, "source", source_result)
+        await asyncio.to_thread(large_exchange, request["destination"]["node_id"], "request",
+            spec=large_transfer_plans.endpoint_spec(manifest, "import", source_result["request_sha256"]))
+        return await _advance_large(manifest, 0)
+    except (ValueError, TypeError, KeyError) as error:
+        raise ToolError(str(error)) from None
+
+
+async def _advance_large(manifest, maximum):
+    report = await large_report(manifest)
+    if report.state in {"completed", "unavailable", "stopping", "stopped", "awaiting_approval"}:
+        return report
+    source, destination = report.source, report.destination
+    for side, current in (("source", source), ("destination", destination)):
+        result, _ = await large_endpoint(manifest, side, "reserve", current=current)
+        if not result["reservation"]["reserved"]:
+            return await large_report(manifest)
+    if source["header"] is None:
+        await large_endpoint(manifest, "source", "queue", current=source)
+        return await large_report(manifest)
+    destination, _ = await large_endpoint(manifest, "destination", "bind", current=destination, header=source["header"])
+    if destination["approval_stage"] is not None or maximum == 0:
+        return await large_report(manifest)
+    copied = 0
+    # A bounded call is resumable from any origin. The source snapshot and
+    # destination blocks remain durable; this first increment has no daemon
+    # that continues copying after the coordinating MCP process is gone.
+    cursor_key = _large_cursor_key(manifest, destination)
+    page_offset, examined = _large_cursors.get(cursor_key, 0), 0
+    async def progress():
+        value = await large_report(manifest, copied)
+        value.blocks_checked_this_call = examined
+        value.coordinator_next_block = _large_cursors.get(cursor_key, 0)
+        return value
+    while examined < maximum:
+        page, _ = await large_endpoint(manifest, "source", "blocks", offset=page_offset, limit=128)
+        for block in page["blocks"]:
+            examined += 1
+            valid, _ = await large_endpoint(manifest, "destination", "verify-block", current=destination,
+                                           index=block["index"], expected=block)
+            if valid["valid"]:
+                _large_cursor_save(cursor_key, block["index"] + 1)
+                if examined >= maximum:
+                    if block["index"] + 1 == source["header"]["block_count"]:
+                        await large_endpoint(manifest, "destination", "queue", current=destination)
+                    return await progress()
+                continue
+            received, data = await large_endpoint(manifest, "source", "block-read", current=source, index=block["index"])
+            if received.get("block") != block:
+                raise ToolError("The source returned different immutable block metadata.")
+            written, _ = await large_endpoint(manifest, "destination", "block-write", current=destination,
+                                             index=block["index"], expected=block, payload=data)
+            if written.get("block") != block:
+                raise ToolError("The destination did not confirm the expected block.")
+            copied += len(data)
+            _large_cursor_save(cursor_key, block["index"] + 1)
+            if examined >= maximum:
+                if block["index"] + 1 == source["header"]["block_count"]:
+                    await large_endpoint(manifest, "destination", "queue", current=destination)
+                return await progress()
+        if page["next_offset"] is None:
+            await large_endpoint(manifest, "destination", "queue", current=destination)
+            return await progress()
+        page_offset = page["next_offset"]
+    return await progress()
+
+
+@mcp.tool()
+async def advance_large_transfer(transfer_id: UUID, authority_node_id: NodeId,
+        max_blocks: Annotated[int, Field(ge=1, le=8, strict=True)] = 1) -> LargeTransferReport:
+    """Check at most max_blocks of 4 MiB and copy missing blocks, then report progress.
+    Repeat to completion. Copy/hash work occurs outside write transactions. An
+    origin loss retains endpoint checkpoints; another origin uses the same handle.
+    A new coordinator verifies previously committed blocks before skipping them. This is
+    not an always-on background transfer or a throughput benchmark.
+    """
+    try:
+        return await _advance_large(await known_large(transfer_id, authority_node_id), max_blocks)
+    except (ValueError, TypeError, KeyError) as error:
+        raise ToolError(str(error)) from None
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_large_transfer(transfer_id: UUID, authority_node_id: NodeId) -> LargeTransferReport:
+    """Read durable progress and receipts without copying, hashing or resuming."""
+    return await large_report(await known_large(transfer_id, authority_node_id))
+
+
+async def large_control(transfer_id, authority_node_id, operation):
+    manifest = await known_large(transfer_id, authority_node_id)
+    report = await large_report(manifest)
+    if operation == "cleanup" and report.state != "completed":
+        raise ToolError("Cleanup requires the authenticated publication receipt; stopped partials are retained.")
+    errors = {}
+    async def contact(side):
+        current = report.source if side == "source" else report.destination
+        if current is None:
+            errors[side] = report.errors.get(side, "The endpoint is unavailable; its stop is unconfirmed.")
+            return
+        if operation == "resume" and current["state"] not in {"stopped"}:
+            return
+        try:
+            await large_endpoint(manifest, side, operation, current=current)
+        except (ToolError, ValueError, TypeError, KeyError) as error:
+            errors[side] = str(error)
+    await asyncio.gather(contact("source"), contact("destination"))
+    result = await large_report(manifest)
+    result.errors.update(errors)
+    if result.errors and result.state != "completed":
+        result.state = "unavailable"
+    return result
+
+
+@mcp.tool()
+async def stop_large_transfer(transfer_id: UUID, authority_node_id: NodeId) -> LargeTransferReport:
+    """Fence old endpoint epochs and stop supervised writers, without taking their I/O locks.
+    Current network delivery may still be in flight; the report does not certify a
+    remote connection has stopped. Retain partials and disk claims for explicit resume.
+    """
+    return await large_control(transfer_id, authority_node_id, "stop")
+
+
+@mcp.tool()
+async def resume_large_transfer(transfer_id: UUID, authority_node_id: NodeId) -> LargeTransferReport:
+    """Explicitly resume stopped endpoints after their owned writers confirm cleanup."""
+    return await large_control(transfer_id, authority_node_id, "resume")
+
+
+@mcp.tool()
+async def cleanup_large_transfer(transfer_id: UUID, authority_node_id: NodeId) -> LargeTransferReport:
+    """Remove only private staging after authenticated destination publication; preserve the final file."""
+    return await large_control(transfer_id, authority_node_id, "cleanup")
 
 
 if __name__ == "__main__":

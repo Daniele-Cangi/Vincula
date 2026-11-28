@@ -50,13 +50,14 @@ Vincula Core uses Python, SQLite, OpenSSH and MCP over standard input/output. Th
 | Browse, read and transfer files within configured roots, including between remote nodes | `list_file_roots`, `request_file`, `transfer_file` — [File access](docs/file-mcp.md) |
 | Run independent tasks in parallel on different computers | `submit_batch`, `get_batch` — [Distributed batches](docs/calcolo-distribuito.md) |
 | Assign prepared native commands using fresh resources and shared local admission | `get_node_resources`, `submit_execution_plan`, `get_execution_plan`, `stop_execution_plan` — [Resource-aware plans](docs/resource-scheduling.md) |
+| Transfer large files with bounded blocks, checkpoints and explicit owner opt-in | `get_large_file_info`, `start_large_transfer`, `advance_large_transfer`, `get_large_transfer`, `stop_large_transfer`, `resume_large_transfer`, `cleanup_large_transfer` — [Protocol](docs/large-file-protocol.md), [remaining plan](docs/large-file-transfers.md) |
 | Discover and invoke versioned, parameterized software adapters | `discover_capabilities`, `submit_capability`, `get_capability_run` — [External capabilities](docs/capacita-mcp.md) |
 | Recover existing distributed plans and results from another reachable node | [Runtime recovery](docs/recupero-runtime.md) |
 | Run a Linux worker independently of desktop login | [Core service](docs/core-service.md) |
 | Use an OS-managed outgoing SSH identity on Linux controllers | [Controller identity](docs/controller-identity.md) |
 | Add nodes through verified public invitations using the GUI or local JSON CLI | [Node enrollment](docs/node-enrollment.md), [registry](docs/registro-nodi.md) |
 
-The current [MCP server](agent/server.py) exposes 27 tools. Enrollment, service installation and local policy configuration are separate operator-facing functions. Resource budgets govern declared admission; CPU, RAM and GPU OS hard limits are not enforced by this increment.
+The current [MCP server](agent/server.py) exposes 34 tools. Enrollment, service installation and local policy configuration are separate operator-facing functions. Resource budgets govern declared admission; CPU, RAM and GPU OS hard limits are not enforced by this increment. Large-file transfers are disabled by default and require repeated bounded advancement calls; a durable transfer controller remains future work.
 
 ### Example workflow
 

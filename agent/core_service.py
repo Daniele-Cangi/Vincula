@@ -25,7 +25,8 @@ else:
     fcntl = pwd = None
 
 HELPERS = ("jobs.py", "direct_execution.py", "plan_journal.py", "vincula_capabilities.py", "vincula_files.py", "wire_framing.py",
-           "resource_policy.py", "worker_resources.py", "execution_plans.py")
+           "resource_policy.py", "worker_resources.py", "execution_plans.py", "transfer_state.py", "transfer_storage.py",
+           "transfer_wire.py", "large_transfer_plans.py", "large_files.py")
 UNIT = "vincula-core-worker.service"
 OLD_UNIT = "vincula-agent-worker.service"
 ACTIVE = ("pending", "queued", "running", "stopping")

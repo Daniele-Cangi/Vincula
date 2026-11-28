@@ -1,6 +1,6 @@
 # Piano dei trasferimenti per dataset grandi
 
-Questo è il progetto della fase 9, non una funzione già disponibile. Il protocollo attuale limita ogni file a 64 MiB, prepara copie complete e usa un relay temporaneo sull’origine quando entrambi gli endpoint sono remoti. Una ripetizione mantiene gli UUID, ma non costituisce una ripresa a blocchi dopo la perdita del relay. Il trasporto SFTP corrente ha un timeout di 90 secondi.
+Questo è il progetto completo della fase 9. Il [primo incremento protocollo 2](large-file-protocol.md), separatamente disabilitato per impostazione predefinita, introduce prenotazioni agli endpoint, export immutabile, blocchi verificati e avanzamento MCP limitato. Controller durevole, relay con quota persistente e collaudo della triade restano da realizzare; i requisiti sotto rimangono validi. Il protocollo legacy conserva il limite di 64 MiB, le copie complete e il relay temporaneo sull’origine quando entrambi gli endpoint sono remoti. Il trasporto SFTP legacy ha un timeout di 90 secondi.
 
 ## Contratto del trasferimento
 
