@@ -39,7 +39,9 @@ Configurazione e catalogo vengono letti fuori dalle transazioni SQLite.
 La facade interna `copy-metadata` ammette soltanto `info`, `prepare`, `read` e
 `stop`, con protocollo 1 e campi chiusi. `prepare` usa il manifest già presente
 sull'autorità, il suo digest e il pin della storia, verificando gli UUID nel
-catalogo. `proposed_endpoint_epochs` indica una proposta di intento: non è
+catalogo. La preview owner-local mostra il manifest leggibile con nodi,
+percorsi e budget; `copy_metadata.policy_revision` consente di aggiornare la
+policy con confronto della revisione attesa. `proposed_endpoint_epochs` indica una proposta di intento: non è
 un'attestazione dei peer o una barriera di cleanup. Le due righe di outbox
 restano pendenti. Nessuna operazione wire approva intenti, attesta worker,
 conferma binding/cleanup, riprende o avvia copie.

@@ -70,6 +70,7 @@ class LargeCopyRuntimeTests(unittest.TestCase):
         self.assertFalse(result["launchable"])
         self.assertFalse(result["runtime_implemented"])
         self.assertFalse(result["policy"]["enabled"])
+        self.assertEqual(result["policy_revision"], self.state.digest(result["policy"]))
         self.assertNotIn(str(self.registry), json.dumps(result))
 
     def test_prepare_requires_local_config_and_exact_authority_manifest(self):
@@ -202,12 +203,17 @@ class LargeCopyRuntimeTests(unittest.TestCase):
             return json.loads(result.stdout)
         pending = cli("large-copy-pending")
         self.assertEqual(pending["intent_sha256"], value["intent_sha256"])
+        self.assertEqual(pending["manifest"], self.manifest)
+        self.assertEqual(pending["manifest"]["request"]["source"]["path"], "input.bin")
+        self.assertEqual(pending["manifest"]["request"]["destination"]["path"], "output.bin")
+        self.assertEqual(pending["intent"]["relay_budget_bytes"], 8 * 1024 * 1024)
         approved = cli("large-copy-approve", value["controller_id"], "--sha256", value["intent_sha256"],
                        "--epoch", "1", "--state-id", self.state_id)
         self.assertFalse(approved["approval_required"])
         policy = self.root / "metadata-policy.json"
         policy.write_text(json.dumps(dict(self.state.DEFAULT_POLICY, enabled=True)))
-        self.assertTrue(cli("large-copy-policy", str(policy))["policy"]["enabled"])
+        revision = self.call("info")["policy_revision"]
+        self.assertTrue(cli("large-copy-policy", str(policy), "--expected-revision", revision)["policy"]["enabled"])
         query = self.root / "metadata-query.json"
         query.write_text(json.dumps({"operation": "read", "controller_id": value["controller_id"]}))
         result = cli("large-copy-metadata", str(query))

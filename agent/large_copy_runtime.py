@@ -59,6 +59,7 @@ def info(runtime):
         result = {"version": VERSION, "state_id": resource_policy.state_id(db),
                   "policy": state.policy(db), "mode": runtime.mode(db),
                   "worker": state.worker_info(db)}
+        result["policy_revision"] = state.digest(result["policy"])
     return dict(result, configuration=configured,
                 authority_node_id=registry.local_id if registry else None,
                 registered_nodes=[node.node_id for node in registry.nodes] if registry else [],
