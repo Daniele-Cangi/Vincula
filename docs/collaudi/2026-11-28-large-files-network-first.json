@@ -1,0 +1,133 @@
+{
+  "version": 1,
+  "date": "2026-11-28",
+  "scope": "actual first Windows to Kali SSH transfer; six-direction qualification NOT achieved",
+  "first_attempt": {
+    "script_sha256": "3f15c27ad6c28cd513aa53a90154389159fab7d4939853c94f40991b1a44edff",
+    "bundle_sha256": "15da18128e9ad68afc98983b5826fc26fd3093c3ab6b17f46ccf048d97121a76",
+    "driver_success": false,
+    "failure_type": "RuntimeError",
+    "failure_message": "Fixture ValueError: Endpoint I/O is stopped or terminal.",
+    "driver_resumption": {
+      "emulated_origin": true,
+      "same_python_process": true,
+      "actual_crash": false,
+      "physical_outage": false,
+      "after_blocks": 8,
+      "prefix_verified_calls": 8,
+      "same_manifest_sha256": "3c38bbb68c4a45d4d926f41b82b5ef2d1c234dbc398e5db8742fda9395994f39",
+      "remaining_bytes": 33554689
+    },
+    "audit_read_only": true,
+    "audit_nodes": {
+      "ubuntu": {
+        "endpoints": [],
+        "jobs": [],
+        "resource_claim_count": 0,
+        "disk_claim_count": 0
+      },
+      "windows": {
+        "endpoints": [
+          {
+            "id": "012d6750-a3b6-5cf0-bd4c-c43ec53115a0",
+            "phase": "stopped",
+            "epoch": 2,
+            "verified_blocks": 17,
+            "verified_bytes": 67109121
+          }
+        ],
+        "jobs": [
+          {
+            "id": "a229d320-c6fe-407b-9cf3-f8fead153970",
+            "program": "@file-v2",
+            "state": "completed",
+            "exit_code": 0,
+            "created": 1795867689.2831645,
+            "finished": 1795867690.3339474
+          }
+        ],
+        "resource_claim_count": 0,
+        "disk_claim_count": 1,
+        "synthetic_file": {
+          "exists": true,
+          "size": 67109121,
+          "sha256": "6d34a05cc759d868580a0084d64f05fb76f101278f5dbfc55ba47507a1032b30",
+          "matches_expected_source": true
+        }
+      },
+      "kali": {
+        "endpoints": [
+          {
+            "id": "b1dfd9d1-e02f-5982-a733-271617221bb0",
+            "phase": "published",
+            "epoch": 1,
+            "verified_blocks": 17,
+            "verified_bytes": 67109121
+          }
+        ],
+        "jobs": [
+          {
+            "id": "a55ab52c-f10e-4ebc-aed4-bda7c5fc1789",
+            "program": "@file-v2",
+            "state": "completed",
+            "exit_code": 0,
+            "created": 1795867750.1517272,
+            "finished": 1795867751.5097904
+          }
+        ],
+        "resource_claim_count": 0,
+        "disk_claim_count": 1,
+        "synthetic_file": {
+          "exists": true,
+          "size": 67109121,
+          "sha256": "6d34a05cc759d868580a0084d64f05fb76f101278f5dbfc55ba47507a1032b30",
+          "matches_expected_source": true
+        }
+      }
+    },
+    "cleanup": {
+      "original_workers_exit_zero": true,
+      "active_resource_claims": 0,
+      "temporary_profiles_removed": false
+    }
+  },
+  "fix": {
+    "source_commit": "b8e512b6cbc42baeb7f5207866dd2abe91b404db",
+    "tests_added": 8,
+    "local_full_suite": {
+      "tests_run": 654,
+      "skipped": 20,
+      "errors": 0,
+      "failures": 0,
+      "duration_seconds": 98.932
+    },
+    "behavior": "Wait for publishing; reconcile only exact terminal ToolError against an authenticated completed receipt; preserve acknowledged copied bytes."
+  },
+  "second_attempt": {
+    "script_sha256": "c026ec101cc7b3faaa87660d65c3bf6272b47ef393c803a618f114bb3900bb0b",
+    "bundle_sha256": "0f347d22aa07db0a933c7c0093cf2826970c5927a166b0d393bd800bdd631e2f",
+    "driver_success": false,
+    "failure_type": "TimeoutError",
+    "failure_message": "Transfer observation deadline exceeded; no automatic retry",
+    "last_observed_state": "receiving",
+    "last_observed_destination_blocks": 15,
+    "snapshot_note": "The last report was captured before the final advance; it is not the final physical block count.",
+    "driver_resumption": {
+      "emulated_origin": true,
+      "same_python_process": true,
+      "actual_crash": false,
+      "physical_outage": false,
+      "after_blocks": 8,
+      "prefix_verified_calls": 8,
+      "same_manifest_sha256": "5a260769ffeb1fb09a2b254473c0e2c9a8626760032fc59100ddc6527d4fb2dd",
+      "remaining_bytes": 33554689
+    },
+    "temporary_profiles_removed": false
+  },
+  "limits": [
+    "No complete six-direction qualification from these attempts.",
+    "No production, service, GUI or credential update.",
+    "Failed synthetic profiles retained; no automatic retry.",
+    "Observation deadline performance diagnosis is separate from transport or software failure."
+  ]
+}

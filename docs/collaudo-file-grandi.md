@@ -151,6 +151,26 @@ che l’evento osservato fosse uno sharing violation.
 
 ## Lavoro ancora necessario
 
+Il primo collaudo SSH reale Windows→Kali ha consegnato tutti i 17 blocchi e
+superato la ripresa emulata dopo otto blocchi, ma il driver ha segnalato un errore
+mentre il job concludeva la pubblicazione. L’audit successivo, con database in
+sola lettura e hash del file sintetico, conferma: file Kali pubblicato di
+67.109.121 byte, SHA-256 uguale alla sorgente, job terminato con codice 0 e
+cleanup attestato. Il coordinatore tentava di prenotare nuovamente l’endpoint
+già terminale. La correzione `b8e512b` attende `publishing` e riconcilia soltanto
+il rifiuto terminale esatto mediante una ricevuta valida, conservando il progresso.
+Otto regressioni e la suite completa aggiornata (654 test, 20 esclusioni) passano.
+
+Il secondo run, su nuove cartelle sintetiche, avanzava ma è stato interrotto dal
+limite di osservazione del driver di 360 secondi. L’ultimo snapshot precedente
+alla chiamata mostrava 15 blocchi e cursore 15; non viene presentato come conteggio
+fisico finale. Serve misurare separatamente handshake, bootstrap e controlli
+aggiuntivi della fixture prima di attribuire la durata al prodotto. Le
+[ricevute della storia del collaudo](collaudi/2026-11-28-large-files-network-first.json)
+distinguono dati consegnati, errore di controllo e mancato completamento del run.
+I worker sono drenati, lo staging e le prenotazioni sono conservati; nessun
+tentativo automatico e nessuna qualificazione delle sei direzioni sono dichiarati.
+
 Prima del rollout servono CI e review dell’head finale e una prova dedicata di
 trasferimento tra receiver temporanei su Ethernet/Wi-Fi, con coordinatore
 interrotto e ripresa da un’altra origine. Le suite su tre PC non sostituiscono

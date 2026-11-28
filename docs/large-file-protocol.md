@@ -42,6 +42,12 @@ coordinatore, non una prova di integrità. Nello stesso processo MCP evita di
 rileggere tutto il prefisso a ogni chiamata. Dopo cambio processo, origine o
 epoch, la verifica riparte dal primo blocco, sempre con chiamate limitate. La
 pubblicazione ricontrolla tutti i blocchi, il digest complessivo e la dimensione.
+Quando lo stato è `publishing`, l’avanzamento attende il job già supervisionato
+e non ripete prenotazioni, copie o pubblicazione. Se il job conclude fra una
+lettura e un controllo successivo, soltanto il rifiuto terminale esatto viene
+riconciliato mediante una nuova ricevuta autenticata e coerente con il manifest.
+Gli errori di autenticazione, rete e integrità continuano a essere segnalati.
+I byte dei blocchi già confermati restano nel report anche in questa transizione.
 Ogni endpoint espone anche il suo ultimo `job`, con UUID, stato, codice di uscita
 e conferma del cleanup. I tool di lettura dei job del Core permettono di leggerne
 i log usando quell’UUID e il nodo dell’endpoint.
