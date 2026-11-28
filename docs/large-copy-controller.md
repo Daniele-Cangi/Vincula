@@ -1,7 +1,7 @@
 # Controller Core per le copie autonome
 
-Questo documento descrive il prossimo incremento del [piano dei dataset
-grandi](large-file-transfers.md). È un progetto: nel protocollo 2 attuale la
+Questo documento descrive gli incrementi del [piano dei dataset
+grandi](large-file-transfers.md). Il controller resta da realizzare: nel protocollo 2 attuale la
 consegna e il coordinamento dei blocchi dipendono dalle chiamate del client a
 `advance_large_transfer`. Preparazione dell'export e pubblicazione finale sono
 già job Core autonomi. Non esiste ancora un controller dell'intera copia
@@ -80,6 +80,58 @@ helper installati e discovery MCP stdio locale. Non qualificano un controller
 autonomo, le credenziali dei servizi, una migrazione fra client fisici o un
 rollout produttivo. Le ricevute separano queste prove dai trasferimenti SSH
 del protocollo 2 già documentati.
+
+## Incremento implementato: binding sul destinatario
+
+Il destinatario ora conserva intenti e revisioni del binding, separati dal
+ledger dell'autorità. La policy `copy-binding-policy` parte disabilitata, anche
+quando le precedenti policy di file e metadati sono abilitate. In `ask` serve
+una decisione owner-local sul digest esatto della preview; `full` preautorizza
+l'intento entro gli opt-in e i grant locali. Un successivo passaggio a `ask`
+richiede una decisione esplicita anche per gli intenti prima automatici.
+
+La facade interna `copy-binding` offre `info`, `prepare`, `status` e `bind`.
+Non espone approvazioni, modifiche di policy, attestazioni o prove di cleanup.
+`prepare` valida manifest, UUID del catalogo esplicito e storia del destinatario.
+`bind` usa CAS, il lock OS dell'endpoint e il ledger dei tentativi: ogni vecchio
+job deve avere cleanup confermato. Un intento pendente nuovo non sostituisce
+il consenso del binding attivo. Le conferme ripetute restituiscono lo stesso ACK
+finché il binding è ancora quello corrente.
+
+Le modifiche e gli I/O di un endpoint gestito richiedono `binding_token`
+(digest pubblico della proposta) e `binding_revision`, oltre a UUID, storia ed
+epoch del protocollo 2. I job in coda conservano la coppia originale; non
+acquisiscono quella corrente al momento dell'avvio. Il controllo viene ripetuto
+prima di lancio, I/O, checkpoint e permit di pubblicazione. I trasferimenti non
+gestiti restano compatibili. Stato e pagine di blocchi restano leggibili.
+
+Stop autentica il binding corrente senza richiedere la policy di esecuzione o
+un worker fresco. Registra il fence senza attendere il lock I/O. Lo Stop locale
+di emergenza non dipende da token, autorità raggiungibile o storia valida e non
+libera spazio. Resume richiede consenso, policy, worker attivo e cleanup del
+vecchio tentativo; dopo resume i dati restano bloccati fino al nuovo CAS, con
+epoch del controller crescente. Cleanup verifica il token e i tentativi prima
+di cancellare solo lo staging posseduto, poi ricontrolla il fence prima di
+liberare la prenotazione. Una pubblicazione già autorizzata conserva la sua
+ricevuta valida anche se lo Stop arriva dopo il permit.
+
+Il worker aggiornato attesta separatamente questo adapter. L'installazione
+distribuisce 19 helper; i file nuovi sul disco non attestano il vecchio worker.
+`get_large_file_info.copy_binding` distingue enforcement implementato e copia
+autonoma ancora assente. I tool MCP restano 34. La nuova facade non avvia il
+controller, non autentica il trasporto e non isola agenti con lo stesso account.
+
+Le nuove CLI locali sono `copy-binding-policy FILE [--expected-revision DIGEST]`,
+`copy-binding-pending`, `copy-binding-approve UUID --sha256 DIGEST
+--binding-revision N`, `copy-binding-deny` con gli stessi argomenti, e
+`copy-binding-emergency-stop UUID`. Lo Stop owner-local richiede l'arresto dei
+soli job associati all'endpoint. Nessun aggiornamento produttivo è implicito.
+
+La suite locale di questo incremento esegue 728 test, con 20 esclusioni di
+piattaforma e nessun errore. I nuovi casi includono I/O limitato in TEMP con
+worker reali, snapshot del token del job, checkpoint dopo Stop, resume senza
+riattivazione implicita, pubblicazione e cleanup. La qualificazione nativa dei
+tre PC resta separata dalla prova locale e da un rollout produttivo.
 
 ## Autorità e processo
 

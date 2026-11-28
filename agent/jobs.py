@@ -66,7 +66,9 @@ large_transfer_plans = load_adapter("large_transfer_plans")
 node_registry = load_adapter("node_registry")
 large_copy_state = load_adapter("large_copy_state")
 large_copy_runtime = load_adapter("large_copy_runtime")
+copy_endpoint_bindings = load_adapter("copy_endpoint_bindings")
 large_files = load_adapter("large_files")
+copy_endpoint_runtime = load_adapter("copy_endpoint_runtime")
 
 LAUNCH_PROTOCOL_VERSION = 1
 WORKER_SCHEMA = """
@@ -143,6 +145,7 @@ def initialize():
         db.executescript(transfer_state.SCHEMA)
         db.executescript(large_files.SCHEMA)
         db.executescript(large_copy_state.SCHEMA)
+        db.executescript(copy_endpoint_bindings.SCHEMA)
         # Older specialized jobs have no fixed argv or manifest the current worker can launch.
         with db:
             db.execute("UPDATE jobs SET state='cancelled',finished=? WHERE state IN ('pending','queued') "
@@ -150,7 +153,8 @@ def initialize():
     for name in ("vincula_files.py", "vincula_capabilities.py", "plan_journal.py", "wire_framing.py",
                  "direct_execution.py", "resource_policy.py", "worker_resources.py", "execution_plans.py", "jobs.py",
                  "transfer_state.py", "transfer_storage.py", "transfer_wire.py", "large_transfer_plans.py", "large_files.py",
-                 "node_registry.py", "large_copy_state.py", "large_copy_runtime.py"):
+                 "node_registry.py", "large_copy_state.py", "large_copy_runtime.py",
+                 "copy_endpoint_bindings.py", "copy_endpoint_runtime.py"):
         source = Path(__file__).resolve().with_name(name)
         installed = ROOT / name
         if source == installed:
@@ -360,6 +364,8 @@ def dispatch_capability(operation, capability_id=None, job_id=None, revision=Non
 
 
 def dispatch(action, **payload):
+    if action == "copy-binding":
+        return copy_endpoint_runtime.dispatch(LOCAL_RUNTIME, **payload)
     if action == "copy-metadata":
         return large_copy_runtime.dispatch(LOCAL_RUNTIME, **payload)
     if action == "large-files":
@@ -500,6 +506,22 @@ def operator(args):
                 expected_controller_epoch=args.epoch, expected_authority_state_id=args.state_id)))
         elif args.command == "large-copy-emergency-stop":
             print(json.dumps(large_copy_state.emergency_stop(db, args.id)))
+        elif args.command == "copy-binding-policy":
+            print(json.dumps(copy_endpoint_bindings.set_policy(db, args.document, args.expected_revision)))
+        elif args.command == "copy-binding-pending":
+            for row in copy_endpoint_bindings.pending(db):
+                print(json.dumps(row))
+        elif args.command in {"copy-binding-approve", "copy-binding-deny"}:
+            result = copy_endpoint_bindings.decide(db, args.id, args.command == "copy-binding-approve",
+                expected_intent_sha256=args.sha256, expected_binding_revision=args.binding_revision)
+            for job_id in result.get("stop_job_ids", []):
+                request_stop(db, job_id)
+            print(json.dumps(result))
+        elif args.command == "copy-binding-emergency-stop":
+            result = copy_endpoint_bindings.emergency_stop(db, args.id)
+            for job_id in result["stop_job_ids"]:
+                request_stop(db, job_id)
+            print(json.dumps(result))
         elif args.command in {"large-files-approve", "large-files-deny"}:
             print(json.dumps(transfer_state.decide(db, args.id, args.command == "large-files-approve", args.sha256)))
         elif args.command in {"register", "remove"}:
@@ -1298,6 +1320,8 @@ def work():
                     transfer_state.worker_seen(db, generation)
                     large_copy_state.worker_seen(db, generation,
                                                  expected_authority_state_id=resource_policy.state_id(db))
+                    copy_endpoint_bindings.worker_seen(db, generation,
+                                                       expected_state_id=resource_policy.state_id(db))
                 if not shutdown.exists() and len(active) < resource_policy.MAX_JOBS:
                     rows, failures = claim_jobs(generation, resource_policy.MAX_JOBS - len(active), scan=scan)
                     for job_id, diagnostic in failures:
@@ -1411,6 +1435,16 @@ def main():
         approval.add_argument("--state-id", required=True)
     commands.add_parser("large-copy-emergency-stop").add_argument("id")
     commands.add_parser("large-copy-metadata", help="Prepare/read/fence metadata only; no copy execution.").add_argument("file", type=Path)
+    binding_config = commands.add_parser("copy-binding-policy", help="Operator-only receiving binding policy JSON.")
+    binding_config.add_argument("file", type=Path)
+    binding_config.add_argument("--expected-revision")
+    commands.add_parser("copy-binding-pending")
+    for name in ("copy-binding-approve", "copy-binding-deny"):
+        approval = commands.add_parser(name)
+        approval.add_argument("id")
+        approval.add_argument("--sha256", required=True)
+        approval.add_argument("--binding-revision", required=True, type=int)
+    commands.add_parser("copy-binding-emergency-stop").add_argument("id")
     commands.add_parser("large-files-pending")
     for name in ("large-files-approve", "large-files-deny"):
         approval = commands.add_parser(name)
@@ -1442,7 +1476,7 @@ def main():
     commands.add_parser("process-stdin")
     commands.add_parser("large-files-stdin")
     args = parser.parse_args()
-    if args.command in {"resource-policy", "large-files-policy", "large-copy-policy", "large-copy-metadata"}:
+    if args.command in {"resource-policy", "large-files-policy", "large-copy-policy", "large-copy-metadata", "copy-binding-policy"}:
         with args.file.open("rb") as stream:
             raw = stream.read(16385)
         if len(raw) > 16384:
