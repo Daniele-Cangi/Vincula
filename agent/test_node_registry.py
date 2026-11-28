@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import asyncio
+from contextlib import contextmanager
+from copy import deepcopy
 from hashlib import sha256
+import io
 import json
 import os
 from pathlib import Path
@@ -210,6 +213,176 @@ class LiveRegistryTests(unittest.TestCase):
                 self.assertEqual(asyncio.run(server.get_node_status(peer)).label, "Renamed")
                 nodes.execute({"action": "remove", "node_id": peer}, path)
                 self.assertEqual([node.node_id for node in asyncio.run(server.list_nodes()).nodes], [local])
+
+
+class ServiceRegistryTests(unittest.TestCase):
+    def setUp(self):
+        temporary = TemporaryDirectory(prefix="vincula-service-catalog-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.local, self.first, self.second, self.spare = (str(uuid4()) for _ in range(4))
+        self.empty_config = "NUL" if sys.platform == "win32" else "/dev/null"
+        self.document = {"local": self.local, "nodes": [
+            {"id": self.local, "label": "Controller", "family": "linux", "aliases": ["main"]},
+            {"id": self.first, "label": "First receiver", "family": "windows", "aliases": ["peer-a"],
+             "ssh": self.route("192.0.2.31", 2222, "Ethernet", "192.0.2.10")},
+            {"id": self.second, "label": "Second receiver", "family": "linux", "aliases": ["peer-b"],
+             "ssh": self.route("2001:db8::32", 22, "Wi-Fi")},
+            {"id": self.spare, "label": "Future receiver", "family": "linux", "aliases": ["spare"]},
+        ]}
+
+    def route(self, host, port, network, bind_address=None):
+        value = {"host": host, "user": "core-worker", "port": port,
+                 "identity_file": str(self.root / "controller identity.pub"),
+                 "known_hosts_file": str(self.root / "host pins"), "network": network}
+        if bind_address is not None:
+            value["bind_address"] = bind_address
+        return value
+
+    def parse(self, document=None, family="linux"):
+        return node_registry.from_service_document(self.document if document is None else document, family, self.empty_config)
+
+    def test_four_uuid_catalog_preserves_explicit_routes_and_unconfigured_peer(self):
+        original = deepcopy(self.document)
+        topology = self.parse()
+        self.assertEqual(topology.local_id, self.local)
+        self.assertEqual([node.node_id for node in topology.nodes], [self.local, self.first, self.second, self.spare])
+        self.assertIsNone(topology.get(self.local).route)
+        self.assertIsNone(topology.get("spare").route)
+        first, second = topology.get("peer-a").route, topology.get("peer-b").route
+        self.assertEqual(first.destination, "192.0.2.31")
+        self.assertEqual(second.destination, "2001:db8::32")
+        self.assertEqual((first.network, second.network), ("Ethernet", "Wi-Fi"))
+        self.assertEqual(first.required_files, (self.root / "controller identity.pub", self.root / "host pins"))
+        self.assertEqual(first.options[:4], ("-F", self.empty_config, "-i", str(self.root / "controller identity.pub")))
+        for identity, route in ((self.first, first), (self.second, second)):
+            self.assertIn(f"HostKeyAlias=vincula-{identity}", route.options)
+            self.assertIn('UserKnownHostsFile="' + str(self.root / "host pins") + '"', route.options)
+            self.assertIn("GlobalKnownHostsFile=" + self.empty_config, route.options)
+            self.assertIn("HostKeyAlgorithms=ssh-ed25519", route.options)
+            self.assertIn("UpdateHostKeys=no", route.options)
+        self.assertIn("Port=2222", first.options)
+        self.assertIn("BindAddress=192.0.2.10", first.options)
+        self.assertIn("User=core-worker", first.options)
+        self.assertEqual(self.document, original)
+
+    def test_configuration_does_not_read_identity_known_hosts_or_attest_connections(self):
+        with patch.object(Path, "open", side_effect=AssertionError("Only catalog data is supplied")), \
+                patch.object(node_registry.Route, "configured", side_effect=AssertionError("Do not claim live readiness")):
+            topology = self.parse()
+        self.assertIsNotNone(topology.get(self.first).route)
+        self.assertFalse((self.root / "controller identity.pub").exists())
+        self.assertFalse((self.root / "host pins").exists())
+
+    def test_local_family_uuid_and_local_route_are_checked(self):
+        with self.assertRaisesRegex(ValueError, "family"): self.parse(family="windows")
+        for family in ("unknown", None, []):
+            with self.subTest(family=family), self.assertRaises(ValueError): self.parse(family=family)
+        for local in ("main", "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA", str(uuid4()), None):
+            with self.subTest(local=local), self.assertRaises(ValueError):
+                self.parse(dict(self.document, local=local))
+        document = deepcopy(self.document)
+        document["nodes"][0]["ssh"] = self.route("192.0.2.99", 22, "test")
+        with self.assertRaisesRegex(ValueError, "local node"): self.parse(document)
+
+    def test_legacy_route_presence_is_rejected_instead_of_borrowing_any_catalog(self):
+        for index, value in ((0, "ubuntu"), (1, "windows"), (2, None)):
+            document = deepcopy(self.document)
+            document["nodes"][index]["legacy_route"] = value
+            with self.subTest(index=index), self.assertRaisesRegex(ValueError, "legacy_route"):
+                self.parse(document)
+
+    def test_present_routes_reuse_existing_validation(self):
+        for change in ({"host": "bad;command"}, {"user": "-invalid"}, {"port": True},
+                       {"identity_file": "relative"}, {"known_hosts_file": "relative"}, {"password": "forbidden"}):
+            document = deepcopy(self.document)
+            document["nodes"][1]["ssh"].update(change)
+            with self.subTest(change=change), self.assertRaises(ValueError): self.parse(document)
+
+    def test_optional_desktop_metadata_is_preserved_without_activating_it(self):
+        document = deepcopy(self.document)
+        document["desktop"] = {"primary": self.first, "clipboard": True,
+                               "members": [{"node_id": self.local, "x": -1, "y": 0},
+                                           {"node_id": self.first, "x": 0, "y": 0}]}
+        topology = self.parse(document)
+        self.assertEqual(topology.desktop.primary, self.first)
+        self.assertEqual(topology.desktop.members[0].node_id, self.local)
+        self.assertTrue(topology.desktop.clipboard)
+
+    @unittest.skipUnless(sys.platform == "linux", "Managed explicit agent routes are Linux-only")
+    def test_managed_public_identity_and_socket_configuration_are_preserved(self):
+        document = deepcopy(self.document)
+        socket = self.root / "service-owned runtime" / "agent.sock"
+        document["nodes"][1]["ssh"]["identity_agent"] = str(socket)
+        topology = self.parse(document)
+        route = topology.get(self.first).route
+        self.assertIn(f'IdentityAgent="{socket}"', route.options)
+        self.assertEqual(route.required_files, (self.root / "controller identity.pub", self.root / "host pins"))
+        self.assertFalse(socket.exists())
+
+    def test_load_service_uses_explicit_file_and_accepts_utf8_bom(self):
+        path = self.root / "service-catalog.json"
+        document = deepcopy(self.document);document["nodes"][0]["label"] = "Contrôleur"
+        path.write_bytes(b"\xef\xbb\xbf" + json.dumps(document, ensure_ascii=False).encode("utf-8"))
+        with patch.object(Path, "home", side_effect=AssertionError("No user default path")), \
+                patch.object(node_registry, "load", side_effect=AssertionError("No legacy loader fallback")):
+            topology = node_registry.load_service(str(path), "linux", self.empty_config)
+        self.assertEqual(topology.get(self.local).label, "Contrôleur")
+        self.assertIsNone(topology.get(self.spare).route)
+
+    def test_missing_invalid_or_unset_service_file_never_falls_back(self):
+        path = self.root / "service-catalog.json"
+        with patch.object(node_registry, "load", side_effect=AssertionError("No fallback")):
+            with self.assertRaises(FileNotFoundError): node_registry.load_service(path, "linux", self.empty_config)
+            with self.assertRaises(ValueError): node_registry.load_service(None, "linux", self.empty_config)
+            for content in (b"invalid JSON", b"\xff", b"[]", b'{"local":null,"nodes":[]}'):
+                path.write_bytes(content)
+                with self.subTest(content=repr(content)), self.assertRaises(ValueError):
+                    node_registry.load_service(path, "linux", self.empty_config)
+
+    def test_service_file_exact_limit_and_oversize_are_distinct(self):
+        path = self.root / "service-catalog.json"
+        raw = json.dumps(self.document).encode("utf-8")
+        raw += b" " * (node_registry.MAX_SERVICE_DOCUMENT_BYTES - len(raw))
+        path.write_bytes(raw)
+        self.assertEqual(node_registry.load_service(path, "linux", self.empty_config).local_id, self.local)
+        path.write_bytes(raw + b" ")
+        with self.assertRaisesRegex(ValueError, "one MiB"):
+            node_registry.load_service(path, "linux", self.empty_config)
+
+    def test_guard_covers_the_bounded_read_and_validation(self):
+        events, sizes = [], []
+
+        @contextmanager
+        def guard():
+            events.append("enter")
+            try: yield
+            finally: events.append("exit")
+
+        class Source(io.BytesIO):
+            def read(inner, size=-1):
+                self.assertEqual(events, ["enter"])
+                sizes.append(size)
+                return super().read(size)
+
+        stream = Source(json.dumps(self.document).encode("utf-8"))
+        with patch.object(node_registry, "registry_guard", guard), patch.object(Path, "open", return_value=stream):
+            topology = node_registry.load_service(self.root / "explicit.json", "linux", self.empty_config)
+        self.assertEqual(events, ["enter", "exit"])
+        self.assertEqual(sizes, [node_registry.MAX_SERVICE_DOCUMENT_BYTES + 1])
+        self.assertEqual(topology.local_id, self.local)
+        self.assertTrue(stream.closed)
+
+    def test_existing_loaders_keep_their_legacy_behavior(self):
+        legacy_route = node_registry.Route("legacy-peer", ("-o", "test-option"))
+        legacy = node_registry.Registry("old-local", (
+            node_registry.Node("old-local", "Old local", "linux"),
+            node_registry.Node("windows", "Old peer", "windows", route=legacy_route)))
+        self.assertIs(node_registry.load(None, legacy, self.empty_config), legacy)
+        document = {"local": self.local, "nodes": [self.document["nodes"][0],
+                    {"id": self.first, "label": "Explicit migration", "family": "windows", "legacy_route": "windows"}]}
+        self.assertIs(node_registry.from_document(document, legacy, self.empty_config).get(self.first).route, legacy_route)
+        with self.assertRaisesRegex(ValueError, "legacy_route"): self.parse(document)
 
 
 if __name__ == "__main__":

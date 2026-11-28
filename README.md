@@ -57,7 +57,7 @@ Vincula Core uses Python, SQLite, OpenSSH and MCP over standard input/output. Th
 | Use an OS-managed outgoing SSH identity on Linux controllers | [Controller identity](docs/controller-identity.md) |
 | Add nodes through verified public invitations using the GUI or local JSON CLI | [Node enrollment](docs/node-enrollment.md), [registry](docs/registro-nodi.md) |
 
-The current [MCP server](agent/server.py) exposes 34 tools. Enrollment, service installation and local policy configuration are separate operator-facing functions. Resource budgets govern declared admission; CPU, RAM and GPU OS hard limits are not enforced by this increment. Large-file transfers are disabled by default and require repeated bounded advancement calls; a durable transfer controller remains future work.
+The current [MCP server](agent/server.py) exposes 34 tools. Enrollment, service installation and local policy configuration are separate operator-facing functions. Resource budgets govern declared admission; CPU, RAM and GPU OS hard limits are not enforced by this increment. Large-file transfers are disabled by default and require repeated bounded advancement calls; a durable transfer controller remains future work. The [controller metadata increment](docs/large-copy-controller.md) adds local intent preparation and explicit service-catalog loading; it does not start autonomous copies or verify an SSH provider.
 
 ### Example workflow
 

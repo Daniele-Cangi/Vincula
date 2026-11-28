@@ -292,7 +292,9 @@ def dispatch(runtime, operation, protocol_version=2, request_id=None, payload=b"
         raise ValueError("Unsupported large-file protocol.")
     if operation == "info" and request_id is None and not fields and not payload:
         with runtime.transaction() as db:
-            return dict(state.info(db), mode=runtime.mode(db)), b""
+            result = dict(state.info(db), mode=runtime.mode(db))
+        result["copy_metadata"] = runtime.large_copy_runtime.info(runtime)
+        return result, b""
     if operation == "request" and request_id is None and set(fields) == {"spec"} and not payload:
         return request(runtime, fields["spec"]), b""
     key = state._uuid(request_id)

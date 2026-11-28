@@ -15,6 +15,7 @@ from uuid import UUID
 
 SELECTOR_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,63}$"
 MAX_NODES = 64
+MAX_SERVICE_DOCUMENT_BYTES = 1024 * 1024
 SELECTOR = re.compile(SELECTOR_PATTERN)
 HOST = re.compile(r"[A-Za-z0-9][A-Za-z0-9.\-]{0,252}")
 ACCOUNT = re.compile(r"[A-Za-z0-9_.\\@-]{1,120}")
@@ -305,6 +306,42 @@ def from_document(config, legacy, empty_config):
         raise ValueError("The local node's OS family must match the running server.")
     registry.desktop = desktop_from_config(config.get("desktop"), registry)
     return registry
+
+
+def from_service_document(document, local_family, empty_config):
+    """Validate an explicit Core catalog, with no user/legacy route fallback.
+
+    local_family is the wrapper's actual OS family. Missing peer routes remain
+    not configured; validation does not attest files, providers or connections.
+    """
+    if local_family not in ("linux", "windows"):
+        raise ValueError("Supply the running service's supported OS family.")
+    local_id = document.get("local") if isinstance(document, dict) else None
+    if not isinstance(local_id, str) or str(UUID(local_id)) != local_id:
+        raise ValueError("The service catalog needs a canonical local node UUID.")
+    entries = document.get("nodes")
+    if isinstance(entries, list) and any(isinstance(entry, dict) and "legacy_route" in entry for entry in entries):
+        raise ValueError("Service catalogs require explicit SSH routes, never legacy_route.")
+    # from_document needs a family reference. This private one-node baseline
+    # contains no routes and is never returned or used as a fallback catalog.
+    baseline = Registry(local_id, (Node(local_id, "Local service", local_family),))
+    return from_document(document, baseline, empty_config)
+
+
+@synchronized
+def load_service(path, local_family, empty_config):
+    """Read only the explicit bounded catalog; errors never select other sources.
+
+    This validates configuration, not a live worker, OS identity provider,
+    private-key availability, SSH authentication or destination reachability.
+    """
+    if path is None:
+        raise ValueError("Specify an explicit service registry path.")
+    with Path(path).open("rb") as source:
+        raw = source.read(MAX_SERVICE_DOCUMENT_BYTES + 1)
+    if len(raw) > MAX_SERVICE_DOCUMENT_BYTES:
+        raise ValueError("The service node registry exceeds its one MiB limit.")
+    return from_service_document(json.loads(raw.decode("utf-8-sig")), local_family, empty_config)
 
 
 @synchronized

@@ -44,6 +44,12 @@ class LargeTransferMCPTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(info["version"], 2)
             self.assertFalse(info["policy"]["enabled"])
             self.assertEqual(info["mode"], "ask")
+            metadata = info["copy_metadata"]
+            self.assertEqual(metadata["configuration"], "configuration_missing")
+            self.assertTrue(metadata["worker"]["fresh"])
+            self.assertFalse(metadata["runtime_implemented"])
+            self.assertFalse(metadata["launchable"])
+            self.assertFalse(metadata["policy"]["enabled"])
             policy = harness.home / "large-files-policy.json"
             policy.write_text(json.dumps(info["policy"] | {"enabled": True}), encoding="utf-8")
             harness.cli("large-files-policy", str(policy))
@@ -52,6 +58,7 @@ class LargeTransferMCPTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(updated.is_error, updated.content)
             self.assertTrue(updated.structured_content["policy"]["enabled"])
             self.assertEqual(updated.structured_content["mode"], "full")
+            self.assertEqual(updated.structured_content["copy_metadata"]["mode"], "full")
             self.assertEqual(updated.structured_content["state_id"], info["state_id"])
             self.assertNotEqual(updated.structured_content["policy_revision"], info["policy_revision"])
             invalid = await client.call_tool("get_large_transfer", {"transfer_id": "../../bad", "authority_node_id": harness.node})

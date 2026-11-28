@@ -2,6 +2,10 @@
 
 Questo è il progetto completo della fase 9. Il [primo incremento protocollo 2](large-file-protocol.md), separatamente disabilitato per impostazione predefinita, introduce prenotazioni agli endpoint, export immutabile, blocchi verificati e avanzamento MCP limitato. Il [collaudo nelle sei direzioni](collaudo-file-grandi.md) verifica la consegna SSH fra receiver temporanei reali. Controller durevole, relay con quota persistente e ripresa dopo un vero crash del coordinatore da un'altra origine fisica restano da realizzare; i requisiti sotto rimangono validi. Il protocollo legacy conserva il limite di 64 MiB, le copie complete e il relay temporaneo sull’origine quando entrambi gli endpoint sono remoti. Il trasporto SFTP legacy ha un timeout di 90 secondi.
 
+Il [progetto del controller Core](large-copy-controller.md) dettaglia il prossimo
+incremento: copia indipendente dal client, corsia I/O separata, binding degli
+endpoint, quota relay e Stop locale. Non descrive una capacità già operativa.
+
 ## Contratto del trasferimento
 
 Il nuovo protocollo deve avere una versione distinta e mantenere invariato quello esistente. La richiesta immutabile contiene UUID del trasferimento, endpoint identificati per UUID/root/percorso, dimensione massima autorizzata e politica di scadenza. Gli UUID di export e import derivano da quello del trasferimento. Il manifest del contenuto aggiunge dimensione effettiva, SHA-256 complessivo, dimensione dei blocchi e rispettivi digest.
