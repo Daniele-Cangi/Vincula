@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """SQL-only ownership fixtures; no payload files, processes, SSH or OS grants."""
 from copy import deepcopy
+import json
 import sqlite3
 from tempfile import TemporaryDirectory
 import time
@@ -375,6 +376,49 @@ class CopyEndpointBindingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             binding.decide(self.db, self.key, True, expected_intent_sha256=value["intent_sha256"], expected_binding_revision=0, now=expired)
         self.assertEqual(binding.emergency_stop(self.db, self.key, expired)["phase"], "unmanaged")
+
+    def test_expired_unbound_history_does_not_exhaust_metadata_capacity_or_free_claims(self):
+        binding.set_policy(self.db, dict(binding.DEFAULT_POLICY, enabled=True, max_pending_bindings=1))
+        self.reserve()
+        claims = [tuple(row) for row in self.db.execute("SELECT * FROM large_file_claims")]
+        self.db.execute("UPDATE policy SET mode='ask'")
+        old = self.prepare()
+        self.assertEqual(len(binding.pending(self.db, self.now)), 1)
+        later = self.now + 3600
+        self.assertEqual(binding.pending(self.db, later), [])
+
+        def new_request():
+            manifest = plans.make_manifest(str(uuid4()), self.authority, self.manifest["request"],
+                                            self.state_id, str(uuid4()), later)
+            endpoint = files.request(self.db, plans.endpoint_spec(manifest, "export"), self.grant,
+                                     self.identity, [], "ask", now=later)
+            proposal = self.proposal(manifest=manifest, endpoint_epoch=endpoint["epoch"])
+            return manifest, proposal
+
+        manifest, proposal = new_request()
+        fresh = binding.prepare(self.db, manifest, proposal, local_node_id=self.source,
+                                expected_binding_revision=0, now=later)
+        self.assertTrue(fresh["approval_required"])
+        self.assertEqual(len(binding.pending(self.db, later)), 1)
+        third_manifest, third_proposal = new_request()
+        with self.assertRaisesRegex(ValueError, "Too many pending"):
+            binding.prepare(self.db, third_manifest, third_proposal, local_node_id=self.source,
+                            expected_binding_revision=0, now=later)
+        retained = binding.status(self.db, self.key, old["intent_sha256"], later)
+        self.assertEqual(retained["preview"], old["preview"])
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM copy_binding_intents").fetchone()[0], 2)
+        self.assertEqual([tuple(row) for row in self.db.execute("SELECT * FROM large_file_claims")], claims)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM copy_binding_events").fetchone()[0], 0)
+
+    def test_capacity_does_not_trust_an_expiry_changed_without_its_intent_digest(self):
+        self.prepare()
+        row = self.db.execute("SELECT document FROM copy_binding_intents").fetchone()
+        document = json.loads(row[0])
+        document["manifest"]["plan"]["expires_at"] = self.now - 1
+        self.db.execute("UPDATE copy_binding_intents SET document=?", (binding.canonical(document),))
+        proposal = self.proposal(controller_epoch=2)
+        with self.assertRaisesRegex(ValueError, "intent digest differs"):
+            self.prepare(proposal=proposal)
 
     def test_caller_rollback_removes_intent_binding_and_revision_events(self):
         self.enable();self.db.execute("SAVEPOINT own_binding")

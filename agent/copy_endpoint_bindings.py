@@ -148,15 +148,38 @@ def _cas(record, expected):
         raise ValueError("Endpoint binding revision changed.")
 
 
+def _intent_document(raw, expected):
+    document = json.loads(raw)
+    if not isinstance(document, dict) or digest(document) != expected:
+        raise ValueError("Endpoint binding intent digest differs.")
+    return document
+
+
 def _intent(db, key, expected):
     row = db.execute("SELECT document,decision,automatic,bound_revision FROM copy_binding_intents "
                      "WHERE endpoint_id=? AND intent_sha256=?", (key, expected)).fetchone()
     if row is None:
         raise ValueError("Unknown exact endpoint binding intent.")
-    document = json.loads(row[0])
-    if digest(document) != expected:
-        raise ValueError("Endpoint binding intent digest differs.")
+    document = _intent_document(row[0], expected)
     return {"document": document, "decision": row[1], "automatic": row[2], "bound_revision": row[3]}
+
+
+def _has_pending_capacity(db, now, maximum):
+    """Only live metadata proposals consume this cap; retain every history row.
+
+    Stream one pinned, bounded manifest at a time, without SQLite JSON extensions.
+    Expiry never releases a binding, a process claim or a disk reservation.
+    """
+    count = 0
+    for raw, checked in db.execute("SELECT document,intent_sha256 FROM copy_binding_intents "
+                                   "WHERE bound_revision IS NULL AND decision IS NOT 0"):
+        document = _intent_document(raw, checked)
+        manifest = plans.validate_manifest(document["manifest"])
+        if now < manifest["plan"]["expires_at"]:
+            count += 1
+            if count >= maximum:
+                return False
+    return True
 
 
 def _consent(intent, access):
@@ -252,8 +275,7 @@ def prepare(db, manifest, proposal, *, local_node_id, expected_binding_revision,
     _cas(record, expected_binding_revision)
     if now >= endpoint["spec"]["expires_at"]:
         raise ValueError("Transfer expired.")
-    pending_count = db.execute("SELECT COUNT(*) FROM copy_binding_intents WHERE bound_revision IS NULL AND decision IS NOT 0").fetchone()[0]
-    if pending_count >= policy(db)["max_pending_bindings"]:
+    if not _has_pending_capacity(db, now, policy(db)["max_pending_bindings"]):
         raise ValueError("Too many pending endpoint binding intents.")
     automatic = _mode(db) == "full"
     db.execute("INSERT INTO copy_binding_intents VALUES(?,?,?,?,?,NULL,?)",
