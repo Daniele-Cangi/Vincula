@@ -1,0 +1,644 @@
+{
+  "reviewed_at_utc": "2026-11-28T09:52:09.012555+00:00",
+  "pull_request": "https://github.com/Daniele-Cangi/Vincula/pull/27",
+  "commit": "f39e8aa5cfd6f7b1d399b0204fdb2656ecba053b",
+  "sonar_analysis_at": "2026-11-28T09:46:30+0000",
+  "analysis_uuid": "9cd84111-a8d1-49d5-91ec-62692ffff0fd",
+  "scope": "Read-only public GET API plus source inspection and two pure counterexamples; no source refactor, issue mutation, authentication or hardware tests.",
+  "quality_gate": "OK",
+  "sonar_new_bugs": 0,
+  "sonar_new_vulnerabilities": 0,
+  "sonar_new_security_hotspots": 0,
+  "sonar_new_code_smells": 36,
+  "rule_counts": {
+    "python:S3776": 16,
+    "python:S3358": 3,
+    "python:S5713": 2,
+    "python:S1192": 4,
+    "python:S7504": 1,
+    "python:S5778": 9,
+    "python:S6659": 1
+  },
+  "triage_counts": {
+    "maintenance_actionable": 34,
+    "context_not_actionable_as_suggested": 2
+  },
+  "runtime_bug_confirmed_from_these_issues": false,
+  "security_vulnerability_confirmed_from_these_issues": false,
+  "limits": "This triage does not prove absence of other defects and does not replace CI, independent code review or real-node qualification.",
+  "raw_api_sha256": "e8eef7e3d85fbe2d727c0cfae96931429aee8471a5ed75b3c4d73dea3f210cfa",
+  "issues": [
+    {
+      "key": "AaIhjP02aqLzH6o7p_Hi",
+      "rule": "python:S3776",
+      "file": "agent/direct_execution.py",
+      "line": 74,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "HIGH"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Ridurre la complessità con estrazioni circoscritte preservando transazioni, ordine dei controlli e cleanup; riesame e regressioni dedicate.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP02aqLzH6o7p_Hi"
+    },
+    {
+      "key": "AaIhjP02aqLzH6o7p_Hj",
+      "rule": "python:S3358",
+      "file": "agent/direct_execution.py",
+      "line": 89,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Espandere condizioni annidate conservando semantica piattaforma e valori None.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP02aqLzH6o7p_Hj"
+    },
+    {
+      "key": "AaIhjP02aqLzH6o7p_Hk",
+      "rule": "python:S3358",
+      "file": "agent/direct_execution.py",
+      "line": 90,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Espandere condizioni annidate conservando semantica piattaforma e valori None.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP02aqLzH6o7p_Hk"
+    },
+    {
+      "key": "AaIhjP02aqLzH6o7p_Hl",
+      "rule": "python:S3776",
+      "file": "agent/direct_execution.py",
+      "line": 215,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "HIGH"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Ridurre la complessità con estrazioni circoscritte preservando transazioni, ordine dei controlli e cleanup; riesame e regressioni dedicate.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP02aqLzH6o7p_Hl"
+    },
+    {
+      "key": "AaIhjP0raqLzH6o7p_Hg",
+      "rule": "python:S5713",
+      "file": "agent/execution_plans.py",
+      "line": 46,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Rimuovere UnicodeError dai catch che includono già ValueError; UnicodeError ne è sottoclasse.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP0raqLzH6o7p_Hg"
+    },
+    {
+      "key": "AaIhjP0raqLzH6o7p_Hh",
+      "rule": "python:S3776",
+      "file": "agent/execution_plans.py",
+      "line": 144,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "HIGH"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Ridurre la complessità con estrazioni circoscritte preservando transazioni, ordine dei controlli e cleanup; riesame e regressioni dedicate.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP0raqLzH6o7p_Hh"
+    },
+    {
+      "key": "AaIhjPw1aqLzH6o7p_HD",
+      "rule": "python:S1192",
+      "file": "agent/jobs.py",
+      "line": 28,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "HIGH"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Introdurre costanti per i quattro valori ripetuti senza cambiare SQL, marker o percorsi.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjPw1aqLzH6o7p_HD"
+    },
+    {
+      "key": "AaIhjPw1aqLzH6o7p_HE",
+      "rule": "python:S3776",
+      "file": "agent/jobs.py",
+      "line": 332,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "HIGH"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Ridurre la complessità con estrazioni circoscritte preservando transazioni, ordine dei controlli e cleanup; riesame e regressioni dedicate.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjPw1aqLzH6o7p_HE"
+    },
+    {
+      "key": "AaIhjPw1aqLzH6o7p_HF",
+      "rule": "python:S3776",
+      "file": "agent/jobs.py",
+      "line": 371,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "HIGH"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Ridurre la complessità con estrazioni circoscritte preservando transazioni, ordine dei controlli e cleanup; riesame e regressioni dedicate.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjPw1aqLzH6o7p_HF"
+    },
+    {
+      "key": "AaIhjPw1aqLzH6o7p_HG",
+      "rule": "python:S3776",
+      "file": "agent/jobs.py",
+      "line": 499,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "HIGH"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Ridurre la complessità con estrazioni circoscritte preservando transazioni, ordine dei controlli e cleanup; riesame e regressioni dedicate.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjPw1aqLzH6o7p_HG"
+    },
+    {
+      "key": "AaIhjPw1aqLzH6o7p_HH",
+      "rule": "python:S3776",
+      "file": "agent/jobs.py",
+      "line": 751,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "HIGH"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Ridurre la complessità con estrazioni circoscritte preservando transazioni, ordine dei controlli e cleanup; riesame e regressioni dedicate.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjPw1aqLzH6o7p_HH"
+    },
+    {
+      "key": "AaIhjPw1aqLzH6o7p_HI",
+      "rule": "python:S3776",
+      "file": "agent/jobs.py",
+      "line": 880,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "HIGH"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Ridurre la complessità con estrazioni circoscritte preservando transazioni, ordine dei controlli e cleanup; riesame e regressioni dedicate.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjPw1aqLzH6o7p_HI"
+    },
+    {
+      "key": "AaIhjPw1aqLzH6o7p_HJ",
+      "rule": "python:S3776",
+      "file": "agent/jobs.py",
+      "line": 1046,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "HIGH"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Ridurre la complessità con estrazioni circoscritte preservando transazioni, ordine dei controlli e cleanup; riesame e regressioni dedicate.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjPw1aqLzH6o7p_HJ"
+    },
+    {
+      "key": "AaIhjPw1aqLzH6o7p_HC",
+      "rule": "python:S1192",
+      "file": "agent/jobs.py",
+      "line": 1052,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "HIGH"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Introdurre costanti per i quattro valori ripetuti senza cambiare SQL, marker o percorsi.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjPw1aqLzH6o7p_HC"
+    },
+    {
+      "key": "AaIhjPw1aqLzH6o7p_HK",
+      "rule": "python:S3776",
+      "file": "agent/jobs.py",
+      "line": 1159,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "HIGH"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Ridurre la complessità con estrazioni circoscritte preservando transazioni, ordine dei controlli e cleanup; riesame e regressioni dedicate.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjPw1aqLzH6o7p_HK"
+    },
+    {
+      "key": "AaIhjPw1aqLzH6o7p_HL",
+      "rule": "python:S7504",
+      "file": "agent/jobs.py",
+      "line": 1180,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "context_not_actionable_as_suggested",
+      "action": "Conservare lo snapshot necessario quando il ciclo elimina elementi dal dizionario; valutare proposta di falso positivo documentata, senza classificare via API.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjPw1aqLzH6o7p_HL"
+    },
+    {
+      "key": "AaIhjPw1aqLzH6o7p_HM",
+      "rule": "python:S3776",
+      "file": "agent/jobs.py",
+      "line": 1234,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "HIGH"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Ridurre la complessità con estrazioni circoscritte preservando transazioni, ordine dei controlli e cleanup; riesame e regressioni dedicate.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjPw1aqLzH6o7p_HM"
+    },
+    {
+      "key": "AaIhjP0GaqLzH6o7p_HP",
+      "rule": "python:S3776",
+      "file": "agent/resource_policy.py",
+      "line": 120,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "HIGH"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Ridurre la complessità con estrazioni circoscritte preservando transazioni, ordine dei controlli e cleanup; riesame e regressioni dedicate.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP0GaqLzH6o7p_HP"
+    },
+    {
+      "key": "AaIhjP0GaqLzH6o7p_HO",
+      "rule": "python:S1192",
+      "file": "agent/resource_policy.py",
+      "line": 200,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "HIGH"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Introdurre costanti per i quattro valori ripetuti senza cambiare SQL, marker o percorsi.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP0GaqLzH6o7p_HO"
+    },
+    {
+      "key": "AaIhjP0GaqLzH6o7p_HN",
+      "rule": "python:S1192",
+      "file": "agent/resource_policy.py",
+      "line": 202,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "HIGH"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Introdurre costanti per i quattro valori ripetuti senza cambiare SQL, marker o percorsi.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP0GaqLzH6o7p_HN"
+    },
+    {
+      "key": "AaIhjP0GaqLzH6o7p_HQ",
+      "rule": "python:S3776",
+      "file": "agent/resource_policy.py",
+      "line": 280,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "HIGH"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Ridurre la complessità con estrazioni circoscritte preservando transazioni, ordine dei controlli e cleanup; riesame e regressioni dedicate.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP0GaqLzH6o7p_HQ"
+    },
+    {
+      "key": "AaIhjP0GaqLzH6o7p_HR",
+      "rule": "python:S3776",
+      "file": "agent/resource_policy.py",
+      "line": 327,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "HIGH"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Ridurre la complessità con estrazioni circoscritte preservando transazioni, ordine dei controlli e cleanup; riesame e regressioni dedicate.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP0GaqLzH6o7p_HR"
+    },
+    {
+      "key": "AaIhjP0GaqLzH6o7p_HS",
+      "rule": "python:S3776",
+      "file": "agent/resource_policy.py",
+      "line": 373,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "HIGH"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Ridurre la complessità con estrazioni circoscritte preservando transazioni, ordine dei controlli e cleanup; riesame e regressioni dedicate.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP0GaqLzH6o7p_HS"
+    },
+    {
+      "key": "AaIhjP0GaqLzH6o7p_HT",
+      "rule": "python:S3358",
+      "file": "agent/resource_policy.py",
+      "line": 396,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Espandere condizioni annidate conservando semantica piattaforma e valori None.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP0GaqLzH6o7p_HT"
+    },
+    {
+      "key": "AaIhjP0haqLzH6o7p_Hf",
+      "rule": "python:S3776",
+      "file": "agent/server.py",
+      "line": 686,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "HIGH"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Ridurre la complessità con estrazioni circoscritte preservando transazioni, ordine dei controlli e cleanup; riesame e regressioni dedicate.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP0haqLzH6o7p_Hf"
+    },
+    {
+      "key": "AaIhjP0IaqLzH6o7p_HU",
+      "rule": "python:S5778",
+      "file": "agent/test_execution_plans.py",
+      "line": 87,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Preparare gli argomenti e le fixture fuori da assertRaises; lasciare nel blocco la sola chiamata oggetto del test.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP0IaqLzH6o7p_HU"
+    },
+    {
+      "key": "AaIhjP0IaqLzH6o7p_HV",
+      "rule": "python:S5778",
+      "file": "agent/test_execution_plans.py",
+      "line": 97,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Preparare gli argomenti e le fixture fuori da assertRaises; lasciare nel blocco la sola chiamata oggetto del test.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP0IaqLzH6o7p_HV"
+    },
+    {
+      "key": "AaIhjP0IaqLzH6o7p_HW",
+      "rule": "python:S5778",
+      "file": "agent/test_execution_plans.py",
+      "line": 102,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Preparare gli argomenti e le fixture fuori da assertRaises; lasciare nel blocco la sola chiamata oggetto del test.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP0IaqLzH6o7p_HW"
+    },
+    {
+      "key": "AaIhjP0IaqLzH6o7p_HX",
+      "rule": "python:S5778",
+      "file": "agent/test_execution_plans.py",
+      "line": 120,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Preparare gli argomenti e le fixture fuori da assertRaises; lasciare nel blocco la sola chiamata oggetto del test.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP0IaqLzH6o7p_HX"
+    },
+    {
+      "key": "AaIhjP0IaqLzH6o7p_HY",
+      "rule": "python:S5778",
+      "file": "agent/test_execution_plans.py",
+      "line": 169,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Preparare gli argomenti e le fixture fuori da assertRaises; lasciare nel blocco la sola chiamata oggetto del test.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP0IaqLzH6o7p_HY"
+    },
+    {
+      "key": "AaIhjP0IaqLzH6o7p_HZ",
+      "rule": "python:S5778",
+      "file": "agent/test_execution_plans.py",
+      "line": 224,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Preparare gli argomenti e le fixture fuori da assertRaises; lasciare nel blocco la sola chiamata oggetto del test.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP0IaqLzH6o7p_HZ"
+    },
+    {
+      "key": "AaIhjP0KaqLzH6o7p_Ha",
+      "rule": "python:S5778",
+      "file": "agent/test_resource_policy.py",
+      "line": 137,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Preparare gli argomenti e le fixture fuori da assertRaises; lasciare nel blocco la sola chiamata oggetto del test.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP0KaqLzH6o7p_Ha"
+    },
+    {
+      "key": "AaIhjP0KaqLzH6o7p_Hb",
+      "rule": "python:S5778",
+      "file": "agent/test_resource_policy.py",
+      "line": 149,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Preparare gli argomenti e le fixture fuori da assertRaises; lasciare nel blocco la sola chiamata oggetto del test.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP0KaqLzH6o7p_Hb"
+    },
+    {
+      "key": "AaIhjP0KaqLzH6o7p_Hc",
+      "rule": "python:S5778",
+      "file": "agent/test_resource_policy.py",
+      "line": 236,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "MEDIUM"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Preparare gli argomenti e le fixture fuori da assertRaises; lasciare nel blocco la sola chiamata oggetto del test.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP0KaqLzH6o7p_Hc"
+    },
+    {
+      "key": "AaIhjP0MaqLzH6o7p_Hd",
+      "rule": "python:S6659",
+      "file": "agent/worker_resources.py",
+      "line": 52,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "context_not_actionable_as_suggested",
+      "action": "Conservare uguaglianza canonica del suffisso UUID; eventualmente assegnare il suffisso a una variabile, senza riscrivere il controllo come endswith.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP0MaqLzH6o7p_Hd"
+    },
+    {
+      "key": "AaIhjP0MaqLzH6o7p_He",
+      "rule": "python:S5713",
+      "file": "agent/worker_resources.py",
+      "line": 116,
+      "sonar_type": "CODE_SMELL",
+      "sonar_impacts": [
+        {
+          "softwareQuality": "MAINTAINABILITY",
+          "severity": "LOW"
+        }
+      ],
+      "status_observed": "OPEN",
+      "triage": "maintenance_actionable",
+      "action": "Rimuovere UnicodeError dai catch che includono già ValueError; UnicodeError ne è sottoclasse.",
+      "url": "https://sonarcloud.io/project/issues?id=Daniele-Cangi_Vincula&pullRequest=27&issues=AaIhjP0MaqLzH6o7p_He"
+    }
+  ]
+}

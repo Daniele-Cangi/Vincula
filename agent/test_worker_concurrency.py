@@ -35,8 +35,21 @@ class WorkerConcurrencyTests(unittest.TestCase):
         self.addCleanup(change.stop)
         jobs.initialize()
         self.workers, self.streams, self.handles = [], [], ExitStack()
+        self.launch_gates, self.guardian_handovers = [], []
         self.addCleanup(self.handles.close)
         self.addCleanup(self.cleanup)
+        if jobs.WINDOWS:
+            import win32api
+            import win32con
+            current = win32api.GetCurrentProcess()
+            # The worker can hand original guardian SYNCHRONIZE handles into
+            # this exact process object; no guardian PID is reopened/adopted.
+            self.parent_handle = win32api.DuplicateHandle(
+                current, current, current, win32con.PROCESS_DUP_HANDLE, True, 0)
+            self.handles.callback(self.parent_handle.Close)
+        else:
+            self.ownership = (self.root / "worker.lock").open("a+b")
+            self.handles.callback(self.ownership.close)
         with jobs.transaction() as db:
             jobs.set_mode(db, "full")
             jobs.direct_execution.set_enabled(db, True)
@@ -55,10 +68,40 @@ class WorkerConcurrencyTests(unittest.TestCase):
             "sys.exit(7)\n", encoding="utf-8")
 
     def cleanup(self):
+        # Cancel even queued fixture jobs, so an in-progress admission page
+        # cannot launch another item after the final stop snapshot.
+        (self.root / "worker.stop").touch()
+        with jobs.transaction() as db:
+            for row in db.execute("SELECT id FROM jobs WHERE state IN ('pending','queued','running','stopping')").fetchall():
+                jobs.request_stop(db, row[0])
+        for gate in self.launch_gates:
+            gate.touch()  # Release only the fixture's deliberate prelaunch I/O gate.
         for worker in self.workers:
-            if worker.poll() is None:
-                worker.terminate()  # Original Popen handle; never a saved PID.
-                worker.wait(timeout=10)
+            worker.wait(timeout=15)  # Graceful drain awaits original guardian handles.
+        if jobs.WINDOWS:
+            import win32api
+            import win32event
+            for path in self.guardian_handovers:
+                for line in path.read_text().splitlines() if path.exists() else []:
+                    handle = json.loads(line)
+                    self.assertIs(type(handle), int)
+                    self.handles.callback(win32api.CloseHandle, handle)
+                    self.assertEqual(win32event.WaitForSingleObject(handle, 15000), win32event.WAIT_OBJECT_0,
+                                     "The original guardian still owns the fixture namespace")
+        else:
+            import fcntl
+            original = os.fstat(self.ownership.fileno())
+            current = (self.root / "worker.lock").stat()
+            self.assertEqual((current.st_dev, current.st_ino), (original.st_dev, original.st_ino))
+
+            def acquire():
+                try:
+                    fcntl.flock(self.ownership, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return False
+                return True
+
+            self.wait(acquire)
         for stream in self.streams:
             stream.close()
 
@@ -72,7 +115,28 @@ class WorkerConcurrencyTests(unittest.TestCase):
                 "m=runpy.run_path(" + repr(str(self.root / "jobs.py")) + ",run_name='owned_worker_fixture')\n"
                 "g=m['work'].__globals__\ng['ROOT']=Path(" + repr(str(self.root)) + ")\n"
                 "g['DATABASE']=g['ROOT']/'jobs.sqlite3'\n")
+        options = {}
+        if jobs.WINDOWS:
+            handover = self.home / ("guardian-handles-" + uuid4().hex + ".jsonl")
+            self.guardian_handovers.append(handover)
+            startup = subprocess.STARTUPINFO()
+            startup.lpAttributeList = {"handle_list": [int(self.parent_handle)]}
+            options.update(startupinfo=startup, close_fds=True)
+            code += (
+                "import json,threading,win32api,win32con\n"
+                "original_popen=g['subprocess'].Popen\nhandover_lock=threading.Lock()\n"
+                "def observed_popen(*args,**kwargs):\n"
+                " p=original_popen(*args,**kwargs)\n"
+                " command=args[0] if args else kwargs.get('args')\n"
+                " if isinstance(command,(list,tuple)) and len(command)>3 and command[3]=='_windows_supervise':\n"
+                "  duplicate=win32api.DuplicateHandle(win32api.GetCurrentProcess(),int(p._handle),"
+                + str(int(self.parent_handle)) + ",win32con.SYNCHRONIZE,False,0)\n"
+                "  number=duplicate.Detach()\n"
+                "  with handover_lock:\n"
+                "   with open(" + repr(str(handover)) + ",'a') as stream:stream.write(json.dumps(number)+'\\n')\n"
+                " return p\ng['subprocess'].Popen=observed_popen\n")
         if slow_marker is not None:
+            self.launch_gates.append(slow_gate)
             code += ("original=g['program_process']\n@contextmanager\ndef slow(argv,*a,**kw):\n"
                      " if " + repr(str(slow_marker)) + " in str(argv):\n"
                      "  Path(" + repr(str(slow_marker)) + ").touch()\n"
@@ -81,8 +145,9 @@ class WorkerConcurrencyTests(unittest.TestCase):
         code += "m['work']()\n"
         stream = (self.home / ("worker-" + uuid4().hex + ".log")).open("wb")
         self.streams.append(stream)
+        self.handles.callback(stream.close)
         worker = subprocess.Popen([sys.executable, "-I", "-B", "-c", code], cwd=self.root,
-                                  stdout=stream, stderr=stream)
+                                  stdout=stream, stderr=stream, **options)
         self.workers.append(worker)
         return worker
 

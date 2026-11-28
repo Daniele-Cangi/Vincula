@@ -4,6 +4,7 @@
 """Native execution lifecycle in a disposable account-state directory."""
 
 from argparse import Namespace
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ import shutil
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+from textwrap import indent
 import time
 import unittest
 from unittest.mock import patch
@@ -32,16 +34,58 @@ class ProcessRuntimeTests(unittest.TestCase):
         change.start()
         self.addCleanup(change.stop)
         jobs.initialize()
+        self.handles = ExitStack()
+        self.addCleanup(self.handles.close)
+        if not jobs.WINDOWS:
+            self.ownership = (self.root / "worker.lock").open("a+b")
+            self.handles.callback(self.ownership.close)
         self.workers = []
         self.addCleanup(self.cleanup_workers)
         jobs.operator(Namespace(command="process-access", access="enable"))
         self.start_worker()
 
     def cleanup_workers(self):
+        (self.root / "worker.stop").touch()
+        with jobs.transaction() as db:
+            for row in db.execute("SELECT id FROM jobs WHERE state IN ('pending','queued','running','stopping')").fetchall():
+                jobs.request_stop(db, row[0])
         for worker in self.workers:
-            if worker.poll() is None:
-                worker.terminate()
-                worker.wait(timeout=10)
+            worker.wait(timeout=15)  # Original worker drains its original guardian handles.
+        if not jobs.WINDOWS:
+            import fcntl
+            original = os.fstat(self.ownership.fileno())
+            current = (self.root / "worker.lock").stat()
+            self.assertEqual((current.st_dev, current.st_ino), (original.st_dev, original.st_ino))
+
+            def acquire():
+                try:
+                    fcntl.flock(self.ownership, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return False
+                return True
+
+            self.wait(acquire)
+
+    def windows_wrapper(self, name, *, guardian_hook="pass\n", launcher_hook="pass\n"):
+        """Instrument the actual roles without bypassing guardian containment."""
+        wrapper = self.home / name
+        wrapper.write_text(
+            "import ctypes,json,os,runpy,sys,time\nfrom pathlib import Path\n"
+            f"module=runpy.run_path({jobs.__file__!r},run_name='native_role_fixture')\n"
+            "g=module['windows_supervise'].__globals__\n"
+            f"g['ROOT']=Path({str(self.root)!r})\ng['DATABASE']=g['ROOT']/'jobs.sqlite3'\n"
+            f"g['__file__']={str(wrapper)!r}\n"
+            "if sys.argv[1]=='_windows_supervise':\n"
+            + indent(guardian_hook, "    ")
+            + "    claim=None if len(sys.argv)==5 else dict(zip(('generation','job_id','cleanup_nonce'),sys.argv[5:]))\n"
+            "    sys.exit(module['windows_supervise'](int(sys.argv[2]),int(sys.argv[3]),sys.argv[4],claim))\n"
+            "elif sys.argv[1]=='_launch':\n"
+            "    payload=json.load(sys.stdin)\n"
+            + indent(launcher_hook, "    ")
+            + "    code=module['windows_launch'](payload)\n"
+            "    ctypes.windll.kernel32.ExitProcess(ctypes.c_uint32(code))\n"
+            "else:raise RuntimeError('Unexpected fixture launcher role')\n", encoding="utf-8")
+        return wrapper
 
     def start_worker(self):
         worker = subprocess.Popen([sys.executable, "-IB", str(self.root / "jobs.py"), "worker"], env=self.env,
@@ -255,35 +299,57 @@ class ProcessRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform == "win32", "Windows ready-file sharing semantics")
     def test_ready_file_open_during_child_exit_does_not_lose_native_result(self):
-        original = jobs.read_launch_status
-        held = []
-        reads = 0
-
-        def observe(path):
-            nonlocal reads
-            value = original(path)
-            if value and value.get("started") is True:
-                reads += 1
-                if reads == 1:
-                    held.append(path.open("rb"))
-                else:
-                    for stream in held:
-                        stream.close()
-            return value
-
+        gate, proof = self.home / "coordinator-gate", self.home / "held-ready-proof.json"
+        wrapper = self.windows_wrapper("held-ready.py", guardian_hook=(
+            "ack=g['ROOT']/sys.argv[4]\nheld=[]\nreads=[]\n"
+            "original_read=g['read_launch_status']\n"
+            "def observe(path):\n"
+            "    value=original_read(path)\n"
+            "    if value is not None:reads.append(path.name)\n"
+            "    if path.name=='outcome.json':\n"
+            "        evidence={'reads':reads,'held_during_outcome':bool(held) and not held[0].closed,'outcome':value}\n"
+            f"        Path({str(proof)!r}).write_text(json.dumps(evidence))\n"
+            "        for stream in held:stream.close()\n"
+            "    return value\n"
+            "g['read_launch_status']=observe\n"
+            "original_popen=g['subprocess'].Popen\n"
+            "class GatedInput:\n"
+            "    def __init__(self,source):self.source=source;self.closed=False\n"
+            "    def write(self,data):return self.source.write(data)\n"
+            "    def close(self):\n"
+            "        if self.closed:return\n"
+            "        self.closed=True\n"
+            "        self.source.close()\n"
+            "        deadline=time.monotonic()+5\n"
+            "        while True:\n"
+            "            value=observe(ack/'ready.json')\n"
+            "            if value and value.get('started') is True:break\n"
+            "            if time.monotonic()>=deadline:raise RuntimeError('Native ready was not published')\n"
+            "            time.sleep(.01)\n"
+            "        held.append((ack/'ready.json').open('rb'))\n"
+            f"        Path({str(gate)!r}).touch()\n"
+            "def gated_popen(*args,**kwargs):\n"
+            "    p=original_popen(*args,**kwargs)\n"
+            "    p.stdin=GatedInput(p.stdin)\n"
+            "    return p\n"
+            "g['subprocess'].Popen=gated_popen\n"))
+        code = ("import sys,time;from pathlib import Path\n"
+                f"while not Path({str(gate)!r}).exists():time.sleep(.01)\n"
+                "sys.exit(17)\n")
         spec = {"protocol_version": 1, "request": {
-            "argv": [sys.executable, "-c", "import sys,time; time.sleep(.3); sys.exit(17)"],
+            "argv": [sys.executable, "-c", code],
             "cwd": str(self.home), "env": dict(os.environ), "stdin_text": None, "timeout_seconds": 5}}
-        try:
-            with (self.home / "hold.out").open("wb") as out, (self.home / "hold.err").open("wb") as err, \
-                    patch.object(jobs, "read_launch_status", side_effect=observe):
-                with jobs.program_process(spec, out, err) as process:
-                    self.wait(lambda: jobs.exited(process))
-            self.assertEqual(process.returncode, 17)
-            self.assertGreaterEqual(reads, 2)
-        finally:
-            for stream in held:
-                stream.close()
+        with (self.home / "hold.out").open("wb") as out, (self.home / "hold.err").open("wb") as err, \
+                patch.object(jobs, "__file__", str(wrapper)):
+            with jobs.program_process(spec, out, err) as process:
+                self.wait(lambda: jobs.exited(process))
+        self.assertEqual(process.returncode, 17)
+        evidence = json.loads(proof.read_text())
+        self.assertTrue(evidence["held_during_outcome"])
+        self.assertIn("ready.json", evidence["reads"])
+        self.assertIn("outcome.json", evidence["reads"])
+        self.assertGreaterEqual(len(evidence["reads"]), 2)
+        self.assertEqual(evidence["outcome"], {"started": True, "exit_code": 17})
 
     def test_legacy_terminal_helper_exit_is_unconfirmed_and_retry_does_not_revive_it(self):
         request = self.request()
@@ -306,31 +372,42 @@ class ProcessRuntimeTests(unittest.TestCase):
             jobs.decide(db, request["id"], True, request["manifest"]["sha256"])
             db.execute("UPDATE jobs SET state='running' WHERE id=?", (request["id"],))
             row = db.execute("SELECT id,program,argv FROM jobs WHERE id=?", (request["id"],)).fetchone()
-        wrapper = self.home / "lost-native-ack.py"
-        wrapper.write_text(
-            "import runpy,sys,time,os,json\nfrom pathlib import Path\n"
-            f"module=runpy.run_path({jobs.__file__!r},run_name='native_ack_test')\n"
-            "def lose_ack():\n"
-            "    deadline=time.monotonic()+5\n"
-            f"    while not Path({str(marker)!r}).exists() and time.monotonic()<deadline: time.sleep(.01)\n"
-            "    raise OSError('synthetic lost native launch acknowledgment')\n"
-            "if sys.platform=='win32':\n"
-            "    original=module['write_launch_status']\n"
-            "    def broken(value,**options):\n"
-            "        if value.get('started') is True: lose_ack()\n"
-            "        return original(value,**options)\n"
-            "    module['windows_launch'].__globals__['write_launch_status']=broken\n"
-            "    module['windows_launch'](json.load(sys.stdin))\n"
-            "else:\n"
-            "    original=os.write\n"
-            "    def broken(fd,data):\n"
-            "        if data==b'{\"started\":true}\\n': lose_ack()\n"
-            "        return original(fd,data)\n"
-            "    os.write=broken\n"
-            "    module['supervise_linux'](int(sys.argv[2]),int(sys.argv[3]))\n", encoding="utf-8")
+        if jobs.WINDOWS:
+            containment = self.home / "lost-ack-containment.json"
+            wrapper = self.windows_wrapper("lost-native-ack.py", launcher_hook=(
+                "# _launch reads stdin only after AssignProcessToJobObject.\n"
+                "contained=ctypes.c_int()\n"
+                "if not ctypes.windll.kernel32.IsProcessInJob(ctypes.c_void_p(-1),None,ctypes.byref(contained)):\n"
+                "    raise ctypes.WinError()\n"
+                f"Path({str(containment)!r}).write_text(json.dumps(bool(contained.value)))\n"
+                "original=g['write_launch_status']\n"
+                "def broken(value,**options):\n"
+                "    if value.get('started') is True:\n"
+                "        deadline=time.monotonic()+5\n"
+                f"        while not Path({str(marker)!r}).exists() and time.monotonic()<deadline:time.sleep(.01)\n"
+                "        raise OSError('synthetic lost native launch acknowledgment')\n"
+                "    return original(value,**options)\n"
+                "g['write_launch_status']=broken\n"))
+        else:
+            wrapper = self.home / "lost-native-ack.py"
+            wrapper.write_text(
+                "import runpy,sys,time,os,json\nfrom pathlib import Path\n"
+                f"module=runpy.run_path({jobs.__file__!r},run_name='native_ack_test')\n"
+                "def lose_ack():\n"
+                "    deadline=time.monotonic()+5\n"
+                f"    while not Path({str(marker)!r}).exists() and time.monotonic()<deadline:time.sleep(.01)\n"
+                "    raise OSError('synthetic lost native launch acknowledgment')\n"
+                "original=os.write\n"
+                "def broken(fd,data):\n"
+                "    if data==b'{\"started\":true}\\n':lose_ack()\n"
+                "    return original(fd,data)\n"
+                "os.write=broken\n"
+                "module['supervise_linux'](int(sys.argv[2]),int(sys.argv[3]))\n", encoding="utf-8")
         with patch.object(jobs, "__file__", str(wrapper)):
             jobs.run_one(row)
         self.assertTrue(marker.exists())
+        if jobs.WINDOWS:
+            self.assertIs(json.loads(containment.read_text()), True)
         pids = json.loads(marker.read_text())
         self.wait(lambda: not any(self.alive(pid) for pid in pids))
         result = self.read(request["id"])
