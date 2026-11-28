@@ -85,9 +85,13 @@ class SmokeDiagnosticTests(unittest.TestCase):
         failure.__cause__ = OSError(13, self.secret)
         server, original, run, argv, kwargs, _ = self.fixture(error=failure)
         function = server.read_metrics
-        with self.assertRaises(subprocess.TimeoutExpired) as caught:
+
+        def invoke_probe():
             with diagnostics.observe_local_windows(server, self.output):
                 server.read_metrics(self.node, True)
+
+        with self.assertRaises(subprocess.TimeoutExpired) as caught:
+            invoke_probe()
         self.assertIs(caught.exception, failure)
         self.assertIs(caught.exception.__cause__, failure.__cause__)
         self.assertIs(server.read_metrics, function)

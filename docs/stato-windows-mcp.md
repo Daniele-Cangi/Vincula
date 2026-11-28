@@ -23,4 +23,12 @@ Il controllo locale della CI non esercita il limite della shell predefinita di W
 
 Il comando risultante misura 7.741 caratteri. Un test impone un budget di 8.000 caratteri. Parser PowerShell 5.1 e query SSH reale Ubuntu → Windows hanno verificato sintassi, risposta JSON, CPU, RAM e GPU Intel. I test del locator usano file vuoti che non vengono eseguiti e riconoscono anche alias Windows 8.3 mediante l’identità del file.
 
-Le misure riguardano questi runner e questo hardware. Restano possibili timeout reali se un provider o la rete non risponde; in quel caso il tool conserva il comportamento di indisponibilità esplicita.
+Le misure riguardano questi runner e questo hardware. Un successivo job Windows ha comunque superato i 12 secondi: l'osservatore della prima query originale ha registrato `TimeoutExpired` dopo 12,188 secondi, senza output. Questo conferma il timeout, senza attribuirne la causa a uno specifico provider CIM.
+
+## Recupero delle metriche di base
+
+Soltanto se la query PowerShell scade, Vincula tenta una lettura con le API native di Windows: RAM tramite `GlobalMemoryStatusEx`, uptime tramite `GetTickCount64`, CPU tramite due campioni `GetSystemTimes` distanziati di 50 ms e capacità dei soli dischi fissi. Non avvia un secondo PowerShell. Le [API di sistema Microsoft](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getsystemtimes) includono il tempo inattivo nel contatore kernel; Vincula lo sottrae dal totale kernel e utente.
+
+Il recupero locale avviene nel processo MCP. Quello remoto usa la stessa connessione SSH autenticata e invia un helper Python standard, con lettura di una lunghezza esatta, limite JSON di 16 KiB e budget di 3 secondi. Il limite originale di 12 secondi resta invariato. Serve il launcher Python `py.exe -3` sul nodo remoto, già richiesto dal runtime Windows.
+
+La GPU resta sconosciuta in questa modalità, così come la CPU se i contatori non sono validi o la macchina ha più di 64 processori logici. Non si sostituiscono valori sconosciuti con zero. Errori diversi dal timeout non attivano il recupero; se anche la lettura nativa fallisce, il nodo resta esplicitamente `unavailable`.

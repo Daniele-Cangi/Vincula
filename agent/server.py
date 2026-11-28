@@ -27,6 +27,7 @@ import jobs
 import linux_status
 import node_registry
 import node_ssh
+import windows_native_status
 import capability_workflow
 import execution_plans
 import large_transfer_plans
@@ -190,11 +191,26 @@ def registered_node(selector):
         raise ToolError(str(error)) from None
 
 
-def windows_metrics(node, is_local):
+def native_windows_metrics(node, is_local):
     if is_local:
-        status = windows_ssh.local_status(timeout=node_ssh.PROBE_TIMEOUT, command=WINDOWS_STATUS)
+        status = windows_native_status.read_status()
     else:
-        status = node_ssh.json_command(node.route, windows_ssh._powershell_command(WINDOWS_STATUS))
+        source = Path(windows_native_status.__file__).read_bytes()
+        command = ('py.exe -3 -IB -c "import sys;s=sys.stdin.buffer.read(' + str(len(source))
+                   + ');assert len(s)==' + str(len(source))
+                   + ";exec(compile(s,'vincula-native-status','exec'))\"")
+        status = node_ssh.json_command(node.route, command, input_data=source, output_limit=16 * 1024, timeout=3)
+    return Metrics.model_validate(status)
+
+
+def windows_metrics(node, is_local):
+    try:
+        if is_local:
+            status = windows_ssh.local_status(timeout=node_ssh.PROBE_TIMEOUT, command=WINDOWS_STATUS)
+        else:
+            status = node_ssh.json_command(node.route, windows_ssh._powershell_command(WINDOWS_STATUS))
+    except subprocess.TimeoutExpired:
+        return native_windows_metrics(node, is_local)
     return Metrics(
         os=status["os"], os_version=status["build"], uptime_seconds=status["uptime"],
         cpu_percent=status["cpu"], memory_total_bytes=status["ram_total"],
