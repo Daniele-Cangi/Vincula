@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+from time import monotonic
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Annotated, Literal
@@ -19,7 +20,7 @@ from uuid import UUID, uuid5
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 import batches
 import jobs
@@ -27,6 +28,7 @@ import linux_status
 import node_registry
 import node_ssh
 import capability_workflow
+import execution_plans
 
 dock_dir = Path(__file__).resolve().parents[1] / "outputs" / "Windows Dock"
 sys.path.insert(0, str(dock_dir))
@@ -410,6 +412,120 @@ def destination_process(node_id, operation, **fields):
                                         "protocol_version": jobs.direct_execution.PROTOCOL_VERSION, **fields})
 
 
+ResourceQuantity = Annotated[int, Field(ge=0, le=2**63 - 1, strict=True)]
+
+
+class ResourceGPURequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=1, max_length=160)
+    vram_bytes: ResourceQuantity
+    exclusive: Annotated[bool, Field(strict=True)] = False
+
+
+class ProcessResources(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    cpu_millis: ResourceQuantity
+    memory_bytes: ResourceQuantity
+    gpus: list[ResourceGPURequest] = Field(default_factory=list, max_length=64)
+
+
+class ResourceObservationGPU(BaseModel):
+    id: str
+    vram_total_bytes: ResourceQuantity | None
+    vram_available_bytes: ResourceQuantity | None
+
+
+class ResourceObservation(BaseModel):
+    observed_at: float
+    cpu_millis: ResourceQuantity | None
+    cpu_percent: float | None = Field(default=None, ge=0, le=100)
+    memory_total_bytes: ResourceQuantity | None
+    memory_available_bytes: ResourceQuantity | None
+    gpus: list[ResourceObservationGPU] | None
+
+
+class ResourceWorker(BaseModel):
+    generation: UUID
+    protocol_version: Literal[2]
+    platform: Literal["linux", "windows"] | None
+    heartbeat_at: float
+    fresh: bool
+    observation: ResourceObservation | None
+    observation_fresh: bool
+    stopped: bool = False
+    fresh_remaining_seconds: float = Field(default=0, ge=0, le=5, allow_inf_nan=False)
+    observation_remaining_seconds: float = Field(default=0, ge=0, le=5, allow_inf_nan=False)
+
+
+class ResourceBudgetGPU(BaseModel):
+    id: str
+    vram_bytes: ResourceQuantity
+
+
+class ResourcePolicy(BaseModel):
+    max_jobs: Annotated[int, Field(ge=1, le=64, strict=True)]
+    cpu_millis: ResourceQuantity | None
+    memory_bytes: ResourceQuantity | None
+    gpus: list[ResourceBudgetGPU] | None
+    legacy_defaults: ProcessResources | None
+
+
+class ResourceClaim(BaseModel):
+    job_id: UUID
+    generation: UUID
+    requirements: ProcessResources
+    legacy: bool
+    exclusive: bool
+    created: float
+
+
+class NodeResources(BaseModel):
+    node_id: NodeId
+    os_family: Literal["linux", "windows"]
+    mode: Literal["ask", "full"]
+    native_execution_enabled: bool
+    protocol_version: Literal[2]
+    state_id: UUID
+    policy: ResourcePolicy
+    policy_revision: str
+    worker: ResourceWorker | None
+    claims: list[ResourceClaim]
+    declared_consumption: dict[str, JsonValue]
+    job_counts: dict[str, int]
+    admission_only: Literal[True]
+    hard_limits_enforced: dict[str, Literal[False]]
+    request_round_trip_seconds: float = Field(default=0, ge=0, allow_inf_nan=False)
+
+
+async def node_resources(node_id):
+    node = registered_node(node_id)
+    before = monotonic()
+    reply = await asyncio.to_thread(destination_request, node.node_id, {"action": "resources"})
+    state = NodeResources(node_id=node.node_id, os_family=node.family, **reply)
+    state.request_round_trip_seconds = max(0, monotonic() - before)
+    if state.worker is not None:
+        # A full request round trip is an upper bound on time spent in transit.
+        # Never compare clocks from two different computers to renew freshness.
+        elapsed = state.request_round_trip_seconds
+        worker = state.worker
+        worker.fresh_remaining_seconds = max(0, worker.fresh_remaining_seconds - elapsed)
+        worker.observation_remaining_seconds = max(0, worker.observation_remaining_seconds - elapsed)
+        worker.fresh = worker.fresh and worker.fresh_remaining_seconds > 0 and not worker.stopped
+        worker.observation_fresh = (worker.observation_fresh and worker.fresh
+                                    and worker.observation_remaining_seconds > 0)
+    return state
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_node_resources(node_id: NodeId) -> NodeResources:
+    """Read owner budgets, live worker generation and fresh CPU/RAM/GPU observations.
+    Claims remain held until owned process cleanup is confirmed. Budgets govern
+    declared admission only: CPU, memory and GPU OS hard limits are not installed.
+    state_id identifies destination durable history; pin it when replaying a plan.
+    """
+    return await node_resources(node_id)
+
+
 @mcp.tool(annotations=READ_ONLY)
 async def get_process_execution_info(node_id: NodeId) -> ProcessExecutionInfo:
     """Read native helper protocol and owner opt-in. This does not certify a running worker's version."""
@@ -421,23 +537,225 @@ async def get_process_execution_info(node_id: NodeId) -> ProcessExecutionInfo:
 @mcp.tool()
 async def execute_process(node_id: NodeId, job_id: UUID, argv: list[str], cwd: str | None = None,
                           env: dict[str, str] | None = None, stdin_text: str | None = None,
-                          timeout_seconds: Annotated[int, Field(ge=1, le=3600, strict=True)] = 300) -> ProcessDetails:
+                          timeout_seconds: Annotated[int, Field(ge=1, le=3600, strict=True)] = 300,
+                          resources: ProcessResources | None = None, expected_state_id: UUID | None = None) -> ProcessDetails:
     """Execute native argv without preregistration when the owner enabled it. Ask requires exact approval;
     full queues immediately with the worker account's OS permissions. No shell expansion or elevation.
     cwd is absolute or defaults to home. UTF-8 input (64 KiB) ends at EOF. No PTY or streaming stdin.
     Supply a UUID and reuse the identical request on retry. Timeout includes computation, not queue time.
     Windows batch scripts need an explicit cmd.exe interpreter. Use read_process and stop_job afterwards.
+    Optional resources use protocol2 and require a live resource-aware worker.
+    Pin expected_state_id from get_node_resources to reject a replaced destination
+    database. Calls without resources preserve the existing process protocol.
     """
+    extra = {}
+    if resources is not None:
+        extra = {"protocol_version": jobs.direct_execution.RESOURCE_PROTOCOL_VERSION,
+                 "resources": resources.model_dump(),
+                 "expected_state_id": str(expected_state_id) if expected_state_id is not None else None}
+    elif expected_state_id is not None:
+        raise ToolError("A destination state pin requires a resource-aware process request.")
     return await asyncio.to_thread(destination_process, node_id, "execute", job_id=str(job_id), argv=argv,
-                                   cwd=cwd, env=env, stdin_text=stdin_text, timeout_seconds=timeout_seconds)
+                                   cwd=cwd, env=env, stdin_text=stdin_text, timeout_seconds=timeout_seconds, **extra)
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def read_process(node_id: NodeId, job_id: UUID) -> ProcessDetails:
+async def read_process(node_id: NodeId, job_id: UUID, expected_state_id: UUID | None = None) -> ProcessDetails:
     """Read immutable original/resolved request, approval digest, bounded log tails and confirmed outcome.
     An incompatible legacy worker cannot execute this request; its helper exit is reported unconfirmed.
     """
-    return await asyncio.to_thread(destination_process, node_id, "read", job_id=str(job_id))
+    fields = ({"protocol_version": 2, "expected_state_id": str(expected_state_id)}
+              if expected_state_id is not None else {})
+    return await asyncio.to_thread(destination_process, node_id, "read", job_id=str(job_id), **fields)
+
+
+class ExecutionInvocation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    argv: list[str] = Field(min_length=1)
+    cwd: str | None = None
+    env: dict[str, str] | None = None
+    stdin_text: str | None = None
+    timeout_seconds: Annotated[int, Field(ge=1, le=3600, strict=True)] = 300
+    resources: ProcessResources
+
+
+class ExecutionCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    node_id: NodeId
+    process: ExecutionInvocation
+    estimated_seconds: float = Field(default=1, gt=0, strict=True, allow_inf_nan=False)
+    setup_seconds: float = Field(default=0, ge=0, strict=True, allow_inf_nan=False)
+
+
+class ExecutionTask(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    candidates: list[ExecutionCandidate] = Field(min_length=1, max_length=64)
+
+
+class ExecutionPartResult(BaseModel):
+    index: int
+    node_id: NodeId
+    job_id: UUID
+    job: ProcessDetails | None = None
+    error: str | None = None
+
+
+class ExecutionPlanReport(BaseModel):
+    plan_id: UUID
+    authority_node_id: NodeId
+    coordinator_node_id: NodeId
+    manifest_sha256: str
+    manifest: dict[str, JsonValue]
+    parts: list[ExecutionPartResult]
+
+
+async def execution_manifest(plan_id, authority):
+    """Find the original plan without turning absence on a peer into creation."""
+    authority_reachable = False
+    try:
+        record = await asyncio.to_thread(destination_request, authority,
+            {"action": "plan", "operation": "get", "kind": "execution", "plan_id": str(plan_id)})
+        authority_reachable = True
+    except ToolError:
+        record = None
+    local = await asyncio.to_thread(jobs.dispatch, "plan", operation="get", kind="execution", plan_id=str(plan_id))
+    replicas = await find_plan_manifest("execution", plan_id)
+    rows = [record, local]
+    if replicas is not None:
+        rows.append(jobs.plan_journal.package(replicas))
+    saved = execution_plans.select_replica(str(plan_id), rows)
+    if saved is not None and saved["origin"] != authority:
+        raise ValueError("This plan UUID belongs to a different authority; preserve the original plan handle.")
+    return saved, authority_reachable
+
+
+async def store_execution_authority(manifest):
+    """One stable destination CAS prevents competing coordinators from creating two plans."""
+    expected = jobs.plan_journal.package(manifest)
+    receipt = await asyncio.to_thread(destination_request, manifest["origin"],
+        {"action": "plan", "operation": "store", "manifest": manifest})
+    if isinstance(receipt, dict) and receipt.get("state") == "conflict":
+        record = await asyncio.to_thread(destination_request, manifest["origin"],
+            {"action": "plan", "operation": "get", "kind": "execution", "plan_id": manifest["id"]})
+        original = execution_plans.select_replica(manifest["id"], [record])
+        if original is None or original["origin"] != manifest["origin"] or original["request"] != manifest["request"]:
+            raise ValueError("The plan authority already holds a different immutable request.")
+        return original
+    jobs.plan_journal.check_replication(receipt, expected["sha256"])
+    return manifest
+
+
+async def execution_report(manifest, operation, publication_errors=None):
+    async def contact(part):
+        identity = {name: part[name] for name in ("index", "node_id", "job_id")}
+        try:
+            if publication_errors and part["node_id"] in publication_errors:
+                raise ToolError(publication_errors[part["node_id"]])
+            current = await node_resources(part["node_id"])
+            if str(current.state_id) != part["expected_state_id"]:
+                raise ValueError("Destination durable state changed; the original job cannot be adopted or replayed.")
+            if operation == "execute":
+                result = await asyncio.to_thread(destination_process, part["node_id"], "execute",
+                    protocol_version=2, job_id=part["job_id"], expected_state_id=part["expected_state_id"], **part["process"])
+            else:
+                result = await asyncio.to_thread(destination_process, part["node_id"], "read",
+                    protocol_version=2, job_id=part["job_id"], expected_state_id=part["expected_state_id"])
+            job = ProcessDetails(**result)
+            checked = jobs.direct_execution.checked_manifest(json.dumps(job.manifest), _platform=current.os_family)
+            if (str(job.id) != part["job_id"] or job.program != jobs.direct_execution.PROGRAM_V2
+                    or checked["protocol_version"] != 2 or checked["original"] != part["process"]
+                    or checked["destination_state_id"] != part["expected_state_id"]):
+                raise ValueError("The destination returned a different immutable execution request.")
+            if operation == "stop":
+                # The receiver checks durable identity and digest atomically
+                # with Stop, rather than trusting this prior observational read.
+                result = await asyncio.to_thread(destination_process, part["node_id"], "stop",
+                    protocol_version=2, job_id=part["job_id"], expected_state_id=part["expected_state_id"],
+                    expected_sha256=checked["sha256"])
+                job = ProcessDetails(**result)
+            return ExecutionPartResult(**identity, job=job)
+        except (ToolError, OSError, ValueError, TypeError, KeyError) as error:
+            return ExecutionPartResult(**identity, error=str(error))
+    parts = await asyncio.gather(*(contact(part) for part in manifest["plan"]))
+    record = jobs.plan_journal.package(manifest)
+    return ExecutionPlanReport(plan_id=manifest["id"], authority_node_id=manifest["origin"],
+        coordinator_node_id=local_node(), manifest_sha256=record["sha256"], manifest=manifest, parts=parts)
+
+
+@mcp.tool()
+async def submit_execution_plan(plan_id: UUID, authority_node_id: NodeId,
+        tasks: list[ExecutionTask] = Field(min_length=1, max_length=12)) -> ExecutionPlanReport:
+    """Assign and execute arbitrary prepared argv using fresh resources and local admission.
+    Keep BOTH plan_id and authority_node_id unchanged on retry or another origin.
+    The authority atomically fixes the plan before any execution; existing replicas
+    let another coordinator resume the exact jobs even while the authority is down.
+    A new unknown plan needs its authority online. Candidate costs are advisory;
+    prepare compatible inputs/programs before submitting, without registrations.
+    Ask requires exact destination approvals; full proceeds within owner budgets.
+    """
+    try:
+        authority = registered_node(authority_node_id).node_id
+        manifest, reachable = await execution_manifest(plan_id, authority)
+        saved_nodes = {candidate["node_id"] for task in manifest["request"]["tasks"]
+                       for candidate in task["candidates"]} if manifest is not None else set()
+        request = {"tasks": [task.model_dump() for task in tasks]}
+        for task in request["tasks"]:
+            for candidate in task["candidates"]:
+                selector = candidate["node_id"]
+                try:
+                    candidate["node_id"] = registered_node(selector).node_id
+                except ToolError:
+                    # A replica already fixes the original choices. An unused
+                    # UUID need not be installed on this new coordinator; do not
+                    # resolve aliases or invent identities for an unknown plan.
+                    if selector not in saved_nodes or str(UUID(selector)) != selector:
+                        raise
+        request = execution_plans.normalize_request(request)
+        if manifest is not None:
+            if manifest["request"] != request:
+                raise ValueError("Plan ID already used for a different immutable process request.")
+        else:
+            if not reachable:
+                raise ValueError("An unknown plan cannot be created while its fixed authority is unavailable.")
+            candidates = dict.fromkeys(candidate["node_id"] for task in request["tasks"] for candidate in task["candidates"])
+            async def observe(node):
+                try:
+                    state = (await node_resources(node)).model_dump(mode="json")
+                    return node, state if state["native_execution_enabled"] else None
+                except (ToolError, OSError, ValueError, TypeError, KeyError):
+                    return node, None
+            snapshots = dict(await asyncio.gather(*(observe(node) for node in candidates)))
+            proposed = execution_plans.make_manifest(str(plan_id), authority, request, snapshots)
+            manifest = await store_execution_authority(proposed)
+        publication_errors = await publish_plan(manifest)
+    except (ValueError, TypeError, KeyError) as error:
+        raise ToolError(str(error)) from None
+    return await execution_report(manifest, "execute", publication_errors)
+
+
+async def known_execution_report(plan_id, authority_node_id, operation):
+    try:
+        authority = registered_node(authority_node_id).node_id
+        manifest, _ = await execution_manifest(plan_id, authority)
+        if manifest is None:
+            raise ValueError("Unknown execution plan on its authority and reachable replicas.")
+    except (ValueError, TypeError, KeyError) as error:
+        raise ToolError(str(error)) from None
+    return await execution_report(manifest, operation)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_execution_plan(plan_id: UUID, authority_node_id: NodeId) -> ExecutionPlanReport:
+    """Read original process UUIDs, logs and outcomes from reachable replicas and workers.
+    This operation neither assigns replacements nor restarts missing jobs.
+    """
+    return await known_execution_report(plan_id, authority_node_id, "read")
+
+
+@mcp.tool()
+async def stop_execution_plan(plan_id: UUID, authority_node_id: NodeId) -> ExecutionPlanReport:
+    """Request Stop for only the verified original process jobs, independently of other plans."""
+    return await known_execution_report(plan_id, authority_node_id, "stop")
 
 
 @mcp.tool()
@@ -537,7 +855,7 @@ async def publish_plan(manifest):
         jobs.plan_journal.check_replication(receipt, record["sha256"])
         return node_id, None
 
-    parts = manifest["plan"] if manifest["kind"] == "batch" else manifest["plan"]["parts"]
+    parts = manifest["plan"] if manifest["kind"] in {"batch", "execution"} else manifest["plan"]["parts"]
     nodes = dict.fromkeys(part["node_id"] for part in parts)
     replies = await asyncio.gather(*(publish(node) for node in nodes))
     return {node: error for node, error in replies if error is not None}

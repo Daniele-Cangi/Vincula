@@ -32,6 +32,10 @@ class WorkerCrashTests(unittest.TestCase):
         change.start()
         self.addCleanup(change.stop)
         jobs.initialize()
+        # Keep the original fixture inode open. Linux guardians inherit the
+        # worker's flock until descendant cleanup AND receipt publication end.
+        self.ownership = (self.root / "worker.lock").open("a+b")
+        self.addCleanup(self.ownership.close)
         self.workers = []
         self.addCleanup(self.stop_workers)
         self.fixture = self.home / "fixture.py"
@@ -58,6 +62,25 @@ class WorkerCrashTests(unittest.TestCase):
             if process.poll() is None:
                 process.terminate()
                 process.wait(timeout=5)
+        self.wait_guardian_cleanup()
+
+    def wait_guardian_cleanup(self):
+        import fcntl
+
+        original = os.fstat(self.ownership.fileno())
+        current = (self.root / "worker.lock").stat()
+        self.assertEqual((current.st_dev, current.st_ino), (original.st_dev, original.st_ino))
+
+        def acquire():
+            try:
+                fcntl.flock(self.ownership, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return False
+            return True
+
+        # This is an ownership barrier, not a delay or a saved-PID liveness
+        # guess. Retain the lock until the fixture namespace is removed.
+        self.wait_until(acquire)
 
     def start_worker(self):
         process = subprocess.Popen(
@@ -169,10 +192,16 @@ class WorkerCrashTests(unittest.TestCase):
             fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     def test_detached_descendant_is_adopted_and_stopped_after_worker_crash(self):
-        _, worker = self.start_fixture(detached_child=True)
+        key, worker = self.start_fixture(detached_child=True)
+        with jobs.transaction() as db:
+            generation = jobs.resource_policy.status(db)["worker"]["generation"]
+            claim = {"job_id": key, "generation": generation,
+                     "cleanup_nonce": jobs.resource_policy.claim_nonce(db, key, generation)}
         worker.kill()
         worker.wait(timeout=5)
         self.assert_children_stopped()
+        self.wait_guardian_cleanup()
+        self.assertEqual(jobs.read_cleanup(claim), jobs.claim_document(claim))
 
     def test_supervisor_death_before_ack_is_unconfirmed(self):
         helper = self.home / "broken-supervisor.py"

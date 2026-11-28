@@ -237,6 +237,20 @@ direct_execution=SimpleNamespace(support=support,set_enabled=set_enabled)
         self.assertFalse(self.paths.system.exists())
         self.assertFalse(self.paths.maintenance.exists())
 
+    def test_resource_helpers_must_match_before_any_os_setup(self):
+        for name in ("resource_policy.py", "worker_resources.py", "execution_plans.py"):
+            with self.subTest(name=name):
+                path = self.state / name
+                original = path.read_bytes()
+                try:
+                    path.write_bytes(b"# mismatched resource helper\n")
+                    with self.assertRaisesRegex(ValueError, "helper mismatch"):
+                        self.installer.plan()
+                    self.assertFalse(self.paths.system.exists())
+                    self.assertFalse(self.paths.maintenance.exists())
+                finally:
+                    path.write_bytes(original)
+
     def test_manifest_duplicate_key_is_rejected(self):
         path = self.release / "_release-manifest.json"
         path.write_text('{"source_commit":"' + "a" * 40 + '","source_commit":"' + "a" * 40 + '"}')

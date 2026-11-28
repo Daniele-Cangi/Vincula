@@ -6,6 +6,7 @@
 import argparse
 import base64
 from contextlib import ExitStack, closing, contextmanager, suppress
+from concurrent.futures import ThreadPoolExecutor
 import json
 from importlib.util import module_from_spec, spec_from_file_location
 import os
@@ -17,7 +18,8 @@ import sqlite3
 import subprocess
 import sys
 import time
-from tempfile import TemporaryDirectory, TemporaryFile
+from threading import Event, Thread
+from tempfile import TemporaryFile
 from uuid import UUID, uuid4
 
 WINDOWS = sys.platform == "win32"
@@ -36,7 +38,16 @@ def load_adapter(name):
     # The SSH entry point runs with Python -I, so load the installed adapter by absolute path.
     spec = spec_from_file_location(name, Path(__file__).resolve().with_name(f"{name}.py"))
     module = module_from_spec(spec)
-    spec.loader.exec_module(module)
+    previous = sys.modules.get(name)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        if previous is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = previous
+        raise
     return module
 
 
@@ -44,7 +55,18 @@ files = load_adapter("vincula_files")
 capabilities = load_adapter("vincula_capabilities")
 plan_journal = load_adapter("plan_journal")
 wire_framing = load_adapter("wire_framing")
+resource_policy = load_adapter("resource_policy")
+worker_resources = load_adapter("worker_resources")
 direct_execution = load_adapter("direct_execution")
+execution_plans = load_adapter("execution_plans")
+
+LAUNCH_PROTOCOL_VERSION = 1
+WORKER_SCHEMA = """
+CREATE TABLE IF NOT EXISTS worker_launches(
+    id TEXT PRIMARY KEY, generation TEXT NOT NULL, cleanup_nonce TEXT NOT NULL,
+    launch_possible INTEGER NOT NULL CHECK(launch_possible IN (0,1))
+);
+"""
 
 
 def initialize():
@@ -96,12 +118,14 @@ def initialize():
         db.executescript(capabilities.SCHEMA)
         db.executescript(plan_journal.SCHEMA)
         db.executescript(direct_execution.SCHEMA)
+        db.executescript(resource_policy.SCHEMA)
+        db.executescript(WORKER_SCHEMA)
         # Older specialized jobs have no fixed argv or manifest the current worker can launch.
         with db:
             db.execute("UPDATE jobs SET state='cancelled',finished=? WHERE state IN ('pending','queued') "
                        "AND argv='[]' AND id NOT IN (SELECT id FROM capability_jobs)", (time.time(),))
     for name in ("vincula_files.py", "vincula_capabilities.py", "plan_journal.py", "wire_framing.py",
-                 "direct_execution.py", "jobs.py"):
+                 "direct_execution.py", "resource_policy.py", "worker_resources.py", "execution_plans.py", "jobs.py"):
         source = Path(__file__).resolve().with_name(name)
         installed = ROOT / name
         if source == installed:
@@ -306,6 +330,12 @@ def dispatch_capability(operation, capability_id=None, job_id=None, revision=Non
 
 
 def dispatch(action, **payload):
+    if action == "resources":
+        if payload:
+            raise ValueError("Resource status is read-only and accepts no parameters.")
+        with transaction() as db:
+            return dict(resource_policy.status(db), mode=mode(db),
+                        native_execution_enabled=direct_execution.support(db)["enabled"])
     if action == "process":
         return dispatch_process(**payload)
     if action == "plan":
@@ -339,14 +369,34 @@ def dispatch(action, **payload):
 
 
 def dispatch_process(operation, protocol_version, job_id=None, **payload):
-    if type(protocol_version) is not int or protocol_version != direct_execution.PROTOCOL_VERSION:
+    if type(protocol_version) is not int or protocol_version not in getattr(direct_execution, "SUPPORTED_PROTOCOLS", (1,)):
         raise ValueError("Unsupported direct process protocol version.")
     with transaction() as db:
         if operation == "info" and not payload and job_id is None:
-            return dict(direct_execution.support(db), mode=mode(db))
+            return dict(direct_execution.support(db, protocol_version=protocol_version), mode=mode(db))
         key = str(UUID(job_id))
         if operation == "execute":
-            direct_execution.queue(db, mode(db), key, **payload)
+            direct_execution.queue(db, mode(db), key, protocol_version=protocol_version, **payload)
+        elif operation == "stop" and protocol_version == 2 and set(payload) == {"expected_state_id", "expected_sha256"}:
+            expected = payload["expected_state_id"]
+            digest = payload["expected_sha256"]
+            if (not isinstance(expected, str) or str(UUID(expected)) != expected
+                    or not isinstance(digest, str) or re.fullmatch("[0-9a-f]{64}", digest) is None
+                    or resource_policy.state_id(db) != expected):
+                raise ValueError("The targeted process stop belongs to another destination state.")
+            manifest = direct_execution.read(db, key)
+            if (manifest["protocol_version"] != 2 or manifest.get("destination_state_id") != expected
+                    or manifest["sha256"] != digest):
+                raise ValueError("The targeted process stop differs from its immutable manifest.")
+            request_stop(db, key)
+        elif operation == "read" and protocol_version == 2 and set(payload) == {"expected_state_id"}:
+            expected = payload["expected_state_id"]
+            if (not isinstance(expected, str) or str(UUID(expected)) != expected
+                    or resource_policy.state_id(db) != expected):
+                raise ValueError("The targeted process read belongs to another destination state.")
+            manifest = direct_execution.read(db, key)
+            if manifest["protocol_version"] != 2 or manifest.get("destination_state_id") != expected:
+                raise ValueError("The targeted process read differs from its immutable destination state.")
         elif operation != "read" or payload:
             raise ValueError("Unknown direct process operation.")
         details = read_output(db, key)
@@ -394,6 +444,11 @@ def operator(args):
     with transaction() as db:
         if args.command == "mode":
             set_mode(db, args.mode)
+        elif args.command == "resource-policy":
+            print(json.dumps(resource_policy.set_policy(db, args.document,
+                                                       expected_revision=args.expected_revision)))
+        elif args.command == "resource-status":
+            print(json.dumps(resource_policy.status(db)))
         elif args.command in {"register", "remove"}:
             if not NAME.fullmatch(args.name):
                 raise ValueError("Invalid program name.")
@@ -441,6 +496,133 @@ def exclusive_worker():
     return process_lock(ROOT / "worker.lock")
 
 
+def private_existing(path, *, directory=False):
+    """Trust only owner-controlled receipts, never a saved PID or a TTL."""
+    path = Path(path)
+    info = path.lstat()
+    if (path.is_symlink() or getattr(info, "st_file_attributes", 0) & 0x400
+            or not (path.is_dir() if directory else path.is_file())
+            or not directory and info.st_nlink != 1):
+        raise ValueError("Unsafe worker cleanup storage.")
+    if WINDOWS:
+        import ntsecuritycon
+        import win32api
+        import win32security as security
+        token = security.OpenProcessToken(win32api.GetCurrentProcess(), ntsecuritycon.TOKEN_QUERY)
+        try:
+            sid = security.ConvertSidToStringSid(security.GetTokenInformation(token, security.TokenUser)[0])
+        finally:
+            token.Close()
+        trusted = {sid, "S-1-5-18", "S-1-5-32-544"}
+        descriptor = security.GetNamedSecurityInfo(str(path), security.SE_FILE_OBJECT,
+            security.OWNER_SECURITY_INFORMATION | security.DACL_SECURITY_INFORMATION)
+        if security.ConvertSidToStringSid(descriptor.GetSecurityDescriptorOwner()) not in trusted:
+            raise ValueError("Worker cleanup storage has an unexpected owner.")
+        acl = descriptor.GetSecurityDescriptorDacl()
+        if acl is None:
+            raise ValueError("Worker cleanup storage is not private.")
+        for index in range(acl.GetAceCount()):
+            kind, mask, principal = acl.GetAce(index)
+            if kind[0] == security.ACCESS_DENIED_ACE_TYPE:
+                continue
+            if kind[0] != security.ACCESS_ALLOWED_ACE_TYPE or (
+                    mask and security.ConvertSidToStringSid(principal) not in trusted):
+                raise ValueError("Worker cleanup storage grants another principal access.")
+    elif info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ValueError("Worker cleanup storage is not owner-private.")
+    return info
+
+
+def private_directory(path):
+    path = Path(path)
+    try:
+        # Windows inherits the already private parent DACL. Its mode0700
+        # translation can add a logon-SID ACE instead of the actual owner SID.
+        path.mkdir() if WINDOWS else path.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    private_existing(path, directory=True)
+    return path
+
+
+def claim_document(claim):
+    if not isinstance(claim, dict) or set(claim) != {"job_id", "generation", "cleanup_nonce"}:
+        raise ValueError("Invalid internal cleanup identity.")
+    for value in claim.values():
+        if not isinstance(value, str) or str(UUID(value)) != value:
+            raise ValueError("Cleanup identities must be canonical UUIDs.")
+    return dict(protocol_version=2, **claim, cleanup_confirmed=True)
+
+
+def cleanup_path(claim, *, create=False):
+    claim_document(claim)
+    parent = ROOT / "cleanup"
+    generation = parent / claim["generation"]
+    if create:
+        private_existing(ROOT, directory=True)
+        private_directory(parent)
+        private_directory(generation)
+    else:
+        private_existing(parent, directory=True)
+        private_existing(generation, directory=True)
+    return generation / (claim["job_id"] + "-" + claim["cleanup_nonce"] + ".json")
+
+
+def publish_private_packet(path, value):
+    """Atomic no-clobber publication, private before the first byte is written."""
+    path = Path(path)
+    private_existing(path.parent, directory=True)
+    stage = path.with_name(".receipt-" + uuid4().hex)
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    if len(raw) > LAUNCH_ACK_BYTES:
+        raise ValueError("Worker cleanup receipt is too large.")
+    try:
+        descriptor = (os.open(stage, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+                      if not WINDOWS else os.open(stage, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_BINARY, 0o666))
+        with os.fdopen(descriptor, "wb") as stream:
+            private_existing(stage)
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(stage, path)
+    finally:
+        stage.unlink(missing_ok=True)
+    if not WINDOWS:
+        descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
+def write_cleanup(claim):
+    if claim is not None:
+        publish_private_packet(cleanup_path(claim, create=True), claim_document(claim))
+
+
+def read_cleanup(claim):
+    expected = claim_document(claim)
+    try:
+        path = cleanup_path(claim)
+        before = private_existing(path)
+        flags = os.O_RDONLY | (os.O_BINARY if WINDOWS else os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(os.open(path, flags), "rb") as stream:
+            current = os.fstat(stream.fileno())
+            if (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino):
+                raise ValueError("Worker cleanup receipt changed while opening.")
+            raw = stream.read(LAUNCH_ACK_BYTES + 1)
+        canonical = json.dumps(expected, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        if len(raw) > LAUNCH_ACK_BYTES or raw != canonical:
+            raise ValueError("Worker cleanup receipt does not match its exact claim.")
+        after = private_existing(path)
+        if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != (
+                before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns):
+            raise ValueError("Worker cleanup receipt changed while reading.")
+        return expected
+    except FileNotFoundError:
+        return None
+
+
 def linux_children():
     children = Path(f"/proc/self/task/{os.getpid()}/children")
     return [int(pid) for pid in children.read_text(encoding="ascii").split()]
@@ -479,7 +661,7 @@ def launch_context(payload):
         return
     if (payload.keys() != {"protocol_version", "request"}
             or type(payload["protocol_version"]) is not int
-            or payload["protocol_version"] != direct_execution.PROTOCOL_VERSION):
+            or payload["protocol_version"] != LAUNCH_PROTOCOL_VERSION):
         raise ValueError("Unsupported native launcher protocol.")
     # The public request bound has already been checked before queueing. The
     # internal specification additionally inherits the worker environment.
@@ -493,7 +675,7 @@ def launch_context(payload):
                             "executable": spec["argv"][0]}
 
 
-def supervise_linux(parent_pid, ready_fd):
+def supervise_linux(parent_pid, ready_fd, claim=None):
     import ctypes
 
     interrupted = False
@@ -520,6 +702,7 @@ def supervise_linux(parent_pid, ready_fd):
             proc = subprocess.Popen(argv, start_new_session=True, **options)
         except Exception as error:
             os.write(ready_fd, encode_launch_status({"error": str(error)}))
+            write_cleanup(claim)  # Popen failed; no native program was created.
             raise
         try:
             with suppress(BrokenPipeError):
@@ -532,6 +715,7 @@ def supervise_linux(parent_pid, ready_fd):
                 native_exited = exited(proc)
             finally:
                 stop_linux_program(proc)
+                write_cleanup(claim)
     with suppress(BrokenPipeError):
         result = {"exit_code": proc.returncode}
         if isinstance(payload, dict):
@@ -564,22 +748,36 @@ def confirm_linux_launch(proc, ready, payload):
 
 
 @contextmanager
-def linux_program_process(argv, stdout, stderr, worker_lock):
+def linux_program_process(argv, stdout, stderr, worker_lock, cleanup=None, claim=None):
+    cleanup = {} if cleanup is None else cleanup
     payload = json.dumps(argv).encode()
     reader, writer = os.pipe()
     inherited = (writer,) if worker_lock is None else (writer, worker_lock)
     with os.fdopen(reader, "rb") as ready:
         try:
+            command = [sys.executable, "-I", __file__, "_supervise", str(os.getpid()), str(writer)]
+            if claim is not None:
+                claim_document(claim)
+                command += [claim["generation"], claim["job_id"], claim["cleanup_nonce"]]
             proc = subprocess.Popen(
-                [sys.executable, "-I", __file__, "_supervise", str(os.getpid()), str(writer)],
+                command,
                 stdin=subprocess.PIPE, stdout=stdout, stderr=stderr, cwd=ROOT,
                 start_new_session=True, pass_fds=inherited,
             )
+        except BaseException:
+            cleanup["confirmed"] = True  # The supervisor never received a launch payload.
+            raise
         finally:
             os.close(writer)
         launched = False
         try:
-            confirm_linux_launch(proc, ready, payload)
+            cleanup["confirmed"] = False
+            try:
+                confirm_linux_launch(proc, ready, payload)
+            except RuntimeError as error:
+                if not isinstance(error, UnconfirmedLaunchError):
+                    cleanup["confirmed"] = True  # The owned guardian reported Popen failure.
+                raise
             launched = True
             yield proc
         finally:
@@ -589,6 +787,8 @@ def linux_program_process(argv, stdout, stderr, worker_lock):
                 proc.terminate()
             # The supervisor retains the worker lock until its process group is stopped.
             proc.wait()
+            if claim is not None:
+                cleanup["confirmed"] = read_cleanup(claim) is not None
             if launched:
                 line = ready.readline(8192)
                 result = json.loads(line) if line else {}
@@ -599,6 +799,7 @@ def linux_program_process(argv, stdout, stderr, worker_lock):
                     raise RuntimeError("Linux supervisor could not confirm the program exit.")
                 proc.returncode = result["exit_code"]
                 proc.native_exited = result.get("native_exited", False)
+                cleanup["confirmed"] = True
 
 
 def encode_launch_status(value):
@@ -628,10 +829,10 @@ def write_launch_status(value, *, completed=False):
 
 
 def windows_launch(payload):
-    if not isinstance(payload, dict):
-        return subprocess.call(payload, stdin=subprocess.DEVNULL)
     # The enclosing JobObject owns cleanup even if an acknowledgment is lost.
     with launch_context(payload) as (argv, options):
+        if isinstance(payload, list):
+            options["cwd"] = ROOT  # The private acknowledgment cwd belongs only to the helper.
         try:
             proc = subprocess.Popen(argv, **options)
         except Exception as error:
@@ -678,69 +879,162 @@ def confirm_windows_launch(proc, status):
         time.sleep(0.025)
 
 
-@contextmanager
-def program_process(argv, stdout, stderr, worker_lock=None):
-    streams = dict(stdout=stdout, stderr=stderr, cwd=ROOT)
-    if WINDOWS:
-        import win32job
-        # The helper waits for argv until its entire descendant tree is contained.
-        group = win32job.CreateJobObject(None, "Vincula-" + uuid4().hex)
-        launch_directory = None
-        status = None
+def windows_supervise(parent_handle, control_handle, ack_leaf, claim=None):
+    """Own the JobObject outside it; retain the real worker handle through cleanup."""
+    import msvcrt
+    import win32api
+    import win32event
+    import win32job
+
+    if not re.fullmatch(r"native-launch-[0-9a-f]{32}", ack_leaf):
+        raise ValueError("Invalid private guardian acknowledgment directory.")
+    ack = ROOT / ack_leaf
+    private_existing(ack, directory=True)
+    stopped = Event()
+    control_fd = msvcrt.open_osfhandle(control_handle, os.O_RDONLY | os.O_BINARY)
+
+    def control():
         try:
-            if isinstance(argv, dict):
-                launch_directory = TemporaryDirectory(prefix="native-launch-", dir=ROOT, ignore_cleanup_errors=True)
-                streams["cwd"] = launch_directory.name
-                status = Path(launch_directory.name) / "ready.json"
-            limits = win32job.QueryInformationJobObject(group, win32job.JobObjectExtendedLimitInformation)
-            limits["BasicLimitInformation"]["LimitFlags"] |= win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-            win32job.SetInformationJobObject(group, win32job.JobObjectExtendedLimitInformation, limits)
-            proc = subprocess.Popen([sys.executable, "-I", __file__, "_launch"], stdin=subprocess.PIPE,
-                                    creationflags=subprocess.CREATE_NO_WINDOW, **streams)
-            try:
-                win32job.AssignProcessToJobObject(group, int(proc._handle))
-            except Exception:
-                proc.kill()
-                proc.wait()
-                proc.stdin.close()
-                raise
-            launched = False
-            try:
-                proc.stdin.write(json.dumps(argv).encode())
-                proc.stdin.close()
-                if status is not None:
-                    confirm_windows_launch(proc, status)
-                launched = True
-                yield proc
-            finally:
-                with suppress(BrokenPipeError):
+            os.read(control_fd, 1)
+        except OSError:
+            pass
+        finally:
+            os.close(control_fd)
+            stopped.set()
+
+    Thread(target=control, daemon=True).start()
+    group, proc, cleanup_confirmed = None, None, False
+    outcome = {"cleanup_confirmed": False, "native_exited": False, "exit_code": None}
+    try:
+        payload = json.load(sys.stdin)
+        if stopped.is_set() or win32event.WaitForSingleObject(parent_handle, 0) == win32event.WAIT_OBJECT_0:
+            raise RuntimeError("The original worker exited before its program started.")
+        group = win32job.CreateJobObject(None, "Vincula-" + uuid4().hex)
+        limits = win32job.QueryInformationJobObject(group, win32job.JobObjectExtendedLimitInformation)
+        limits["BasicLimitInformation"]["LimitFlags"] |= win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        win32job.SetInformationJobObject(group, win32job.JobObjectExtendedLimitInformation, limits)
+        # This helper waits for JSON until containment is established. Neither
+        # the guardian nor its original-worker handle belongs to the JobObject.
+        proc = subprocess.Popen([sys.executable, "-I", __file__, "_launch"], stdin=subprocess.PIPE,
+                                creationflags=subprocess.CREATE_NO_WINDOW, cwd=ack, close_fds=True)
+        try:
+            win32job.AssignProcessToJobObject(group, int(proc._handle))
+        except BaseException:
+            proc.kill()
+            proc.wait()
+            raise
+        proc.stdin.write(json.dumps(payload).encode())
+        proc.stdin.close()
+        while proc.poll() is None and not stopped.is_set():
+            if win32event.WaitForSingleObject(parent_handle, 0) == win32event.WAIT_OBJECT_0:
+                break
+            time.sleep(0.025)
+    finally:
+        try:
+            if proc is not None:
+                with suppress(OSError):
                     proc.stdin.close()
-                normal_exit = proc.poll() is not None
+            if group is not None:
                 win32job.TerminateJobObject(group, 1)
-                proc.wait(timeout=5)
+                if proc is not None:
+                    proc.wait(timeout=5)
                 deadline = time.monotonic() + 5
                 while win32job.QueryInformationJobObject(group, win32job.JobObjectBasicAccountingInformation)["ActiveProcesses"]:
                     if time.monotonic() >= deadline:
-                        raise TimeoutError("Windows could not confirm that the job processes stopped.")
+                        raise TimeoutError("Windows could not confirm descendant cleanup.")
                     time.sleep(0.025)
-                if status is not None and launched:
-                    result = read_launch_status(status.with_name("outcome.json"))
-                    if (result and result.get("started") is True and set(result) == {"started", "exit_code"}
-                            and type(result["exit_code"]) is int):
-                        proc.returncode = result["exit_code"]
-                        proc.native_exited = True
-                    elif normal_exit:
-                        raise UnconfirmedLaunchError("Windows could not confirm the program exit.")
-                    else:
-                        # A forced stop confirms containment, but not the child's native exit code.
-                        proc.returncode = None
-                        proc.native_exited = False
+            cleanup_confirmed = True  # No program, or the original JobObject is empty.
+            native = read_launch_status(ack / "outcome.json")
+            if (native is not None and set(native) == {"started", "exit_code"}
+                    and native["started"] is True and type(native["exit_code"]) is int):
+                outcome.update(native_exited=True, exit_code=native["exit_code"])
+            outcome["cleanup_confirmed"] = True
+            write_cleanup(claim)
+            publish_private_packet(ack / "guardian-outcome.json", outcome)
         finally:
-            group.Close()
-            if launch_directory is not None:
-                launch_directory.cleanup()
+            if group is not None:
+                group.Close()
+            win32api.CloseHandle(parent_handle)
+    return 0 if cleanup_confirmed else 1
+
+
+@contextmanager
+def windows_program_process(argv, stdout, stderr, cleanup, claim):
+    import msvcrt
+    import win32api
+    import win32con
+
+    ack = reader = writer = parent = proc = None
+    launched = False
+    try:
+        ack = private_directory(ROOT / ("native-launch-" + uuid4().hex))
+        reader, writer = os.pipe()
+        inherited = msvcrt.get_osfhandle(reader)
+        current = win32api.GetCurrentProcess()
+        # This is an inherited handle to the original object, never OpenProcess(saved_pid).
+        parent = win32api.DuplicateHandle(current, current, current, win32con.SYNCHRONIZE, True, 0)
+        os.set_handle_inheritable(inherited, True)
+        startup = subprocess.STARTUPINFO()
+        startup.lpAttributeList = {"handle_list": [inherited, int(parent)]}
+        command = [sys.executable, "-I", __file__, "_windows_supervise", str(int(parent)), str(inherited), ack.name]
+        if claim is not None:
+            claim_document(claim)
+            command += [claim["generation"], claim["job_id"], claim["cleanup_nonce"]]
+        try:
+            proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=stdout, stderr=stderr, cwd=ROOT,
+                close_fds=True, startupinfo=startup, creationflags=subprocess.CREATE_NO_WINDOW)
+        finally:
+            parent.Close()
+            parent = None
+            os.close(reader)
+            reader = None
+        try:
+            cleanup["confirmed"] = False
+            proc.stdin.write(json.dumps(argv).encode())
+            proc.stdin.close()
+            confirm_windows_launch(proc, ack / "ready.json")
+            launched = True
+            yield proc
+        finally:
+            normal_exit = proc.poll() is not None
+            with suppress(OSError):
+                proc.stdin.close()
+            os.close(writer)
+            writer = None
+            # Do not kill a guardian whose JobObject cleanup is still uncertain.
+            proc.wait(timeout=15)
+            outcome = read_launch_status(ack / "guardian-outcome.json")
+            if (outcome is None or set(outcome) != {"cleanup_confirmed", "native_exited", "exit_code"}
+                    or outcome["cleanup_confirmed"] is not True or type(outcome["native_exited"]) is not bool
+                    or outcome["exit_code"] is not None and type(outcome["exit_code"]) is not int):
+                raise UnconfirmedLaunchError("Windows guardian did not confirm cleanup.")
+            cleanup["confirmed"] = True
+            proc.returncode = outcome["exit_code"]
+            proc.native_exited = outcome["native_exited"]
+            if launched and normal_exit and not proc.native_exited:
+                raise UnconfirmedLaunchError("Windows could not confirm the native program exit.")
+    finally:
+        if proc is None:
+            cleanup["confirmed"] = True  # No guardian received a launch specification.
+        if writer is not None:
+            os.close(writer)
+        if reader is not None:
+            os.close(reader)
+        if parent is not None:
+            parent.Close()
+        if ack is not None and cleanup.get("confirmed"):
+            shutil.rmtree(ack, ignore_errors=True)
+
+
+@contextmanager
+def program_process(argv, stdout, stderr, worker_lock=None, *, cleanup=None, claim=None):
+    cleanup = {} if cleanup is None else cleanup
+    cleanup["confirmed"] = True  # No launch until the owned guardian receives its private payload.
+    if WINDOWS:
+        with windows_program_process(argv, stdout, stderr, cleanup, claim) as proc:
+            yield proc
     else:
-        with linux_program_process(argv, stdout, stderr, worker_lock) as proc:
+        with linux_program_process(argv, stdout, stderr, worker_lock, cleanup, claim) as proc:
             yield proc
 
 
@@ -751,32 +1045,65 @@ def exited(proc):
     return os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
 
 
-def run_one(row, worker_lock=None):
+def run_one(row, worker_lock=None, generation=None):
     job_id = row["id"]
     code = None
     state = "unconfirmed"
     proc = None
-    direct = "program" in row.keys() and row["program"] == direct_execution.PROGRAM
+    direct = "program" in row.keys() and row["program"] in {
+        direct_execution.PROGRAM, getattr(direct_execution, "PROGRAM_V2", "@process-v2")}
     reason = "unconfirmed"
+    cleanup = {"confirmed": True}
+    claim = None
+    finalize = False
     try:
         with ExitStack() as stack:
             with transaction() as db:
-                stopped_before_launch = job(db, job_id)["state"] == "stopping"
+                current = job(db, job_id)["state"]
+                if current not in {"running", "stopping"}:
+                    return  # A delayed callable cannot revive a terminal job.
+                finalize = True
+                stopped_before_launch = current == "stopping"
                 if not stopped_before_launch:
-                    out = stack.enter_context((ROOT / f"{job_id}.out").open("xb"))
-                    err = stack.enter_context((ROOT / f"{job_id}.err").open("xb"))
                     direct = direct or db.execute("SELECT 1 FROM direct_process_jobs WHERE id=?", (job_id,)).fetchone() is not None
                     if direct:
                         spec = direct_execution.launch_spec(db, job_id, os.environ)
-                        argv = {"protocol_version": direct_execution.PROTOCOL_VERSION, "request": spec}
+                        argv = {"protocol_version": LAUNCH_PROTOCOL_VERSION, "request": spec}
                     else:
                         argv = (capabilities.arguments(db, job_id, ROOT) if capabilities.ID.fullmatch(row["program"])
                                 else json.loads(row["argv"]))
-                    proc = stack.enter_context(program_process(argv, out, err, worker_lock))
             if stopped_before_launch:
                 state = "cancelled"
                 reason = "stop"
                 return
+            # File creation, Popen, launch acknowledgments and cleanup must never
+            # hold BEGIN IMMEDIATE: another job's stop/status remains available.
+            out = stack.enter_context((ROOT / f"{job_id}.out").open("xb"))
+            err = stack.enter_context((ROOT / f"{job_id}.err").open("xb"))
+            with transaction() as db:
+                current = job(db, job_id)["state"]
+                if current not in {"running", "stopping"}:
+                    finalize = False
+                    return
+                if current == "stopping":
+                    state, reason = "cancelled", "stop"
+                    return
+                # Revalidate destination authorization after preparation I/O.
+                if direct:
+                    spec = direct_execution.launch_spec(db, job_id, os.environ)
+                    argv = {"protocol_version": LAUNCH_PROTOCOL_VERSION, "request": spec}
+                elif capabilities.ID.fullmatch(row["program"]):
+                    argv = capabilities.arguments(db, job_id, ROOT)
+                if generation is not None:
+                    nonce = resource_policy.claim_nonce(db, job_id, generation)
+                    claim = {"job_id": job_id, "generation": generation, "cleanup_nonce": nonce}
+                    changed = db.execute("UPDATE worker_launches SET launch_possible=1 WHERE id=? AND generation=? AND cleanup_nonce=? AND launch_possible=0",
+                                         (job_id, generation, nonce))
+                    if changed.rowcount != 1:
+                        finalize = False
+                        return  # This invocation does not own the launch ticket.
+            cleanup["confirmed"] = False
+            proc = stack.enter_context(program_process(argv, out, err, worker_lock, cleanup=cleanup, claim=claim))
             deadline = time.monotonic() + spec["timeout_seconds"] if direct else None
             timed_out = False
             while not exited(proc):
@@ -804,31 +1131,150 @@ def run_one(row, worker_lock=None):
         with suppress(OSError), (ROOT / f"{job_id}.err").open("ab") as err:
             err.write(str(error).encode("utf-8", "replace"))
     finally:
-        with transaction() as db:
-            db.execute("UPDATE jobs SET state=?,exit_code=?,finished=? WHERE id=?", (state, code, time.time(), job_id))
-            if direct:
-                started = None if state == "unconfirmed" and proc is None else proc is not None
-                direct_execution.record_outcome(db, job_id, state, code, reason, started)
+        if finalize:
+            with transaction() as db:
+                db.execute("UPDATE jobs SET state=?,exit_code=?,finished=? WHERE id=?", (state, code, time.time(), job_id))
+                if direct:
+                    started = None if state == "unconfirmed" and proc is None else proc is not None
+                    direct_execution.record_outcome(db, job_id, state, code, reason, started)
+                if generation is not None:
+                    resource_policy.finish(db, job_id, generation, cleanup_confirmed=cleanup["confirmed"])
+
+
+def submit_claimed(pool, rows, active, worker_lock, generation):
+    for index, row in enumerate(rows):
+        try:
+            active[row["id"]] = pool.submit(run_one, row, worker_lock, generation)
+        except BaseException:
+            # submit can enqueue a WorkItem before Thread.start raises. Its future
+            # was never returned, so keep every claim and stop the uncertain item
+            # plus this batch's unsubmitted items. Only a drained executor proves
+            # that launch_possible=0 cannot subsequently become a native launch.
+            with transaction() as db:
+                for pending in rows[index:]:
+                    if db.execute("SELECT 1 FROM worker_launches WHERE id=? AND generation=?",
+                                  (pending["id"], generation)).fetchone():
+                        request_stop(db, pending["id"])
+            raise
 
 
 def work():
     with exclusive_worker() as ownership:
         shutdown = ROOT / "worker.stop"
         shutdown.unlink(missing_ok=True)
+        generation = str(uuid4())
         with transaction() as db:
+            unknown = db.execute("SELECT id FROM jobs WHERE state IN ('running','stopping') "
+                "AND id NOT IN (SELECT id FROM resource_claims WHERE released IS NULL)").fetchall()
+            if unknown:
+                raise RuntimeError("An older worker left active jobs without cleanup ownership; operator reconciliation is required.")
             db.execute("INSERT OR REPLACE INTO worker_environment VALUES(1,?,?)",
                        (os.environ.get("PATH", ""), os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")))
             db.execute("UPDATE jobs SET state='unconfirmed',finished=? WHERE state IN ('running','stopping')",
                        (time.time(),))
-        while not shutdown.exists():
+            resource_policy.worker_start(db, generation, platform="windows" if WINDOWS else "linux")
+        # Threads persist for the entire owner lifetime. Linux PDEATHSIG follows
+        # the spawning thread, so do not retire it before its guardian's cleanup.
+        pool = ThreadPoolExecutor(max_workers=resource_policy.MAX_JOBS, thread_name_prefix="vincula-job")
+        try:
+            active, next_observation, latest_observation, scan = {}, 0.0, None, {}
+            while active or not shutdown.exists():
+                for job_id, future in list(active.items()):
+                    if future.done():
+                        with suppress(Exception):
+                            future.result()
+                        del active[job_id]
+                reconcile_cleanup(set(active))
+                if time.monotonic() >= next_observation:
+                    latest_observation = worker_resources.observe()  # Bounded OS I/O, outside SQLite.
+                    next_observation = time.monotonic() + 1.0
+                with transaction() as db:
+                    resource_policy.heartbeat(db, generation, observation=latest_observation)
+                if not shutdown.exists() and len(active) < resource_policy.MAX_JOBS:
+                    rows, failures = claim_jobs(generation, resource_policy.MAX_JOBS - len(active), scan=scan)
+                    for job_id, diagnostic in failures:
+                        with (ROOT / f"{job_id}.err").open("ab") as err:
+                            err.write(diagnostic.encode("utf-8", "replace"))
+                    submit_claimed(pool, rows, active, ownership.fileno(), generation)
+                time.sleep(0.1)
+        finally:
+            # Do not reconcile an unreturned future until shutdown has joined all
+            # workers, including callables that submit queued before raising.
+            # Interrupted/failed shutdown leaves the reservations held.
+            pool.shutdown(wait=True)
+            reconcile_cleanup(set())
             with transaction() as db:
-                row = db.execute("SELECT id,program,argv FROM jobs WHERE state='queued' ORDER BY created LIMIT 1").fetchone()
-                if row:
-                    db.execute("UPDATE jobs SET state='running' WHERE id=?", (row["id"],))
-            if row:
-                run_one(row, ownership.fileno())
-            else:
-                time.sleep(0.25)
+                resource_policy.worker_stopped(db, generation)
+
+
+def reconcile_cleanup(active):
+    with transaction() as db:
+        claims = resource_policy.status(db)["claims"]
+        pending = []
+        for item in claims:
+            job_id, generation = item["job_id"], item["generation"]
+            if job_id in active:
+                continue
+            nonce = resource_policy.claim_nonce(db, job_id, generation)
+            row = db.execute("SELECT launch_possible FROM worker_launches WHERE id=? AND generation=? AND cleanup_nonce=?",
+                             (job_id, generation, nonce)).fetchone()
+            pending.append(({"job_id": job_id, "generation": generation, "cleanup_nonce": nonce},
+                            row is not None and row[0] == 0))
+    for claim, never_launched in pending:
+        try:
+            receipt = claim_document(claim) if never_launched else read_cleanup(claim)
+            if receipt is not None:
+                with transaction() as db:
+                    resource_policy.reconcile(db, receipt)
+                    db.execute("UPDATE jobs SET state='unconfirmed',exit_code=NULL,finished=? "
+                               "WHERE id=? AND state IN ('running','stopping')", (time.time(), claim["job_id"]))
+        except (OSError, ValueError):
+            # Missing/untrusted evidence reserves capacity; no PID adoption or TTL.
+            continue
+
+
+def claim_jobs(generation, limit, *, scan=None):
+    rows, failures = [], []
+    scan = {} if scan is None else scan
+    # Page only identifiers outside write transactions. A long busy queue must
+    # not monopolize BEGIN IMMEDIATE or starve a later compatible request.
+    with closing(sqlite3.connect(DATABASE.as_uri() + "?mode=rw", uri=True, timeout=5)) as db:
+        cursor = scan.get("cursor")
+        candidates = db.execute("SELECT id,created FROM jobs WHERE state='queued' "
+            + ("AND (created>? OR (created=? AND id>?)) " if cursor else "")
+            + "ORDER BY created,id LIMIT 64", () if cursor is None else (cursor[0], cursor[0], cursor[1])).fetchall()
+    if not candidates:
+        scan["cursor"] = None
+    for job_id, created in candidates:
+        if len(rows) >= limit:
+            break
+        scan["cursor"] = (created, job_id)
+        with transaction() as db:
+            row = db.execute("SELECT id,program,argv FROM jobs WHERE id=? AND state='queued'", (job_id,)).fetchone()
+            if row is None:
+                continue
+            try:
+                demand = resource_policy.request_for_job(db, row["id"])
+                if row["program"] == getattr(direct_execution, "PROGRAM_V2", "@process-v2") and demand is None:
+                    raise ValueError("Native protocol2 requires its immutable resource request.")
+                admission = resource_policy.admission(db, row["id"], generation)
+                if not admission["admitted"]:
+                    assessment = resource_policy.evaluate(resource_policy.status(db), admission["requirements"])
+                    if not assessment["eligible"]:
+                        raise ValueError("Declared resources cannot run on this node: " + assessment["reason"])
+                    continue
+                if not resource_policy.try_claim(db, row["id"], generation):
+                    continue
+                nonce = resource_policy.claim_nonce(db, row["id"], generation)
+                db.execute("INSERT INTO worker_launches VALUES(?,?,?,0)", (row["id"], generation, nonce))
+                db.execute("UPDATE jobs SET state='running' WHERE id=? AND state='queued'", (row["id"],))
+                rows.append(dict(row))
+            except (ValueError, TypeError, KeyError) as error:
+                db.execute("UPDATE jobs SET state='failed',finished=? WHERE id=? AND state='queued'", (time.time(), row["id"]))
+                if row["program"] in {direct_execution.PROGRAM, getattr(direct_execution, "PROGRAM_V2", "@process-v2")}:
+                    direct_execution.record_outcome(db, row["id"], "failed", None, "launch_error", False)
+                failures.append((row["id"], str(error)))
+    return rows, failures
 
 
 def main():
@@ -837,6 +1283,10 @@ def main():
     for name in ("init", "worker", "shutdown", "pending"):
         commands.add_parser(name)
     commands.add_parser("mode").add_argument("mode", choices=("ask", "full"))
+    resource_config = commands.add_parser("resource-policy", help="Operator-only resource policy JSON file.")
+    resource_config.add_argument("file", type=Path)
+    resource_config.add_argument("--expected-revision")
+    commands.add_parser("resource-status", help="Read destination-local admission and held cleanup claims.")
     register = commands.add_parser("register")
     register.add_argument("name")
     register.add_argument("argv", nargs=argparse.REMAINDER)
@@ -861,6 +1311,12 @@ def main():
     commands.add_parser("journal-framed-stdin")
     commands.add_parser("process-stdin")
     args = parser.parse_args()
+    if args.command == "resource-policy":
+        with args.file.open("rb") as stream:
+            raw = stream.read(16385)
+        if len(raw) > 16384:
+            parser.error("The resource policy exceeds 16 KiB.")
+        args.document = json.loads(raw)
     if args.command == "init":
         initialize()
     elif args.command == "worker":
@@ -906,8 +1362,19 @@ def main():
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 4 and sys.argv[1] == "_supervise" and not WINDOWS:
-        sys.exit(supervise_linux(int(sys.argv[2]), int(sys.argv[3])))
+    if len(sys.argv) in {4, 7} and sys.argv[1] == "_supervise" and not WINDOWS:
+        # Internal children are started only with the worker's fixed private cwd.
+        ROOT = Path.cwd()
+        DATABASE = ROOT / "jobs.sqlite3"
+        claim = (None if len(sys.argv) == 4 else dict(zip(
+            ("generation", "job_id", "cleanup_nonce"), sys.argv[4:])))
+        sys.exit(supervise_linux(int(sys.argv[2]), int(sys.argv[3]), claim))
+    elif len(sys.argv) in {5, 8} and sys.argv[1] == "_windows_supervise" and WINDOWS:
+        ROOT = Path.cwd()
+        DATABASE = ROOT / "jobs.sqlite3"
+        claim = (None if len(sys.argv) == 5 else dict(zip(
+            ("generation", "job_id", "cleanup_nonce"), sys.argv[5:])))
+        sys.exit(windows_supervise(int(sys.argv[2]), int(sys.argv[3]), sys.argv[4], claim))
     elif sys.argv[1:] == ["_launch"] and WINDOWS:
         import ctypes
         code = windows_launch(json.load(sys.stdin))

@@ -143,15 +143,20 @@ def validate_capability(manifest):
 def package(manifest):
     if not isinstance(manifest, dict) or manifest.keys() != {"version", "kind", "id", "origin", "request", "plan"}:
         raise ValueError("Invalid plan manifest fields.")
-    if type(manifest["version"]) is not int or manifest["version"] != 1 or manifest["kind"] not in ("batch", "capability"):
+    if type(manifest["version"]) is not int or manifest["version"] != 1 or manifest["kind"] not in ("batch", "capability", "execution"):
         raise ValueError("Unsupported plan manifest version or kind.")
     canonical_uuid(manifest["id"])
     if not selector(manifest["origin"]):
         raise ValueError("Invalid plan manifest origin.")
     if manifest["kind"] == "batch":
         validate_batch(manifest)
-    else:
+    elif manifest["kind"] == "capability":
         validate_capability(manifest)
+    else:
+        # Loaded from the pinned adapter directory by jobs.py under -I. Keeping
+        # this import lazy preserves independent use of the legacy journal.
+        import execution_plans
+        execution_plans.validate_manifest(manifest)
     raw = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
     if len(raw.encode("utf-8")) > MAX_BYTES:
         raise ValueError("Plan manifest exceeds 256 KiB.")
@@ -171,7 +176,7 @@ def unpack(record):
 
 
 def get(db, kind, plan_id):
-    if kind not in ("batch", "capability"):
+    if kind not in ("batch", "capability", "execution"):
         raise ValueError("Unsupported plan journal kind.")
     canonical_uuid(plan_id)
     row = db.execute("SELECT manifest,sha256 FROM plan_journal WHERE kind=? AND id=?", (kind, plan_id)).fetchone()

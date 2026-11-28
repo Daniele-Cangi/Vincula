@@ -1,0 +1,265 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-28",
+  "pull_request": 27,
+  "runtime_code_commit": "211b69f6aaa3346fbd34a195ac7aa9c3d4eb46dc",
+  "runtime_helpers_sha256": {
+    "jobs.py": "e92bdb1011e267386b0ad01000338594738b83969da88888d899317d7fcae846",
+    "direct_execution.py": "f01d2f226db281632f210791247ea6d5110e4adb7af2e55ec9fc9601db96a4e4",
+    "resource_policy.py": "663e870ad36121be973fc74fdf0dec18592f4288efc08cab32ef64ddc872564d",
+    "worker_resources.py": "73f5062da82645584cab900bdcc38ccc9e02607e1fd3a9aa251182783fca9f53",
+    "execution_plans.py": "48ba11895b8725b06b49b4cf51e0fa4b9afba3515fe1132362035c16f820d303",
+    "plan_journal.py": "84f08e959c2524f723a6fe6699de1307adf5615db8722379cb24351e913827bf",
+    "vincula_files.py": "f08bf48a6821083ae3c07d86713db42efd3af804bde92bb1ee87bd53e1faf50e",
+    "vincula_capabilities.py": "6558cb92bed0314579f3ee3fcadb94c981519e44ecbd77f0884f7cfe8ca861c6",
+    "wire_framing.py": "88050f812f3e37ba6a0a8e8761788464c7fb8b8bd48a782ad98b8a70e107e330"
+  },
+  "full_local_suite": {
+    "tests": 508,
+    "skipped": 18,
+    "success": true,
+    "warnings": "-B -W error",
+    "production_worker_tested": false
+  },
+  "native_private_profiles": {
+    "ubuntu": {
+      "tests": 104,
+      "skipped": 5,
+      "failures": 0,
+      "errors": 0,
+      "success": true,
+      "log_sha256": "e6a6bf2cfc9e177e5ede2a0defc5a312a81133d05533e12eb32557d922e84dd0",
+      "private_receipt_sha256": "90397acd2e32786cbf2994c1ec96ec49a8560de5889453f134f5b2e96ff83bf1",
+      "production_helpers_unchanged": true,
+      "pool_fixture_sha256": "a0974a62bcedf99711de5341450a9ed58ffc6f73c1a804dd3a07c10f7d8fccae",
+      "runtime_fixture_sha256": "b8f48c678f8ad3ed47633ee2868b870df2cb081c62bf982a0738dafcbfdc2670"
+    },
+    "kali": {
+      "tests": 104,
+      "skipped": 5,
+      "failures": 0,
+      "errors": 0,
+      "success": true,
+      "log_sha256": "2ae1f3a1de4b76889815dc6f565b1fbeca9147f57d66be4dc2186371a4629732",
+      "private_receipt_sha256": "d1d13f970aaa6144f1fbfe61465200cade3e87b67b876b1f549afa45de98c6bc",
+      "production_helpers_unchanged": true,
+      "pool_fixture_sha256": "a0974a62bcedf99711de5341450a9ed58ffc6f73c1a804dd3a07c10f7d8fccae",
+      "runtime_fixture_sha256": "b8f48c678f8ad3ed47633ee2868b870df2cb081c62bf982a0738dafcbfdc2670"
+    },
+    "windows": {
+      "tests": 104,
+      "skipped": 3,
+      "failures": 0,
+      "errors": 0,
+      "success": true,
+      "log_sha256": "7b4777a605c753820f9916655dd75b41501c991033dc800d2d2acbe485c7a17b",
+      "private_receipt_sha256": "920f181b140860d745700f4685ceacbfa8dcf3e146c28a5aa618dab0a4e2e80c",
+      "production_helpers_unchanged": true,
+      "pool_fixture_sha256": "a0974a62bcedf99711de5341450a9ed58ffc6f73c1a804dd3a07c10f7d8fccae",
+      "runtime_fixture_sha256": "b8f48c678f8ad3ed47633ee2868b870df2cb081c62bf982a0738dafcbfdc2670"
+    }
+  },
+  "all3_installed_helpers_unchanged": true,
+  "production_rollout_performed": false,
+  "limitations": [
+    "Declared resource admission only; no CPU/RAM/GPU OS hard limits.",
+    "GPU scheduling uses synthetic fixtures; no distributed GPU computation benchmark.",
+    "The real stdio MCP plan test uses one private destination per origin; three-profile recovery uses a simulated transport.",
+    "A Windows overlap test timed out once after fixture cleanup fixes; no cause confirmed. Six instrumented repeats and a subsequent complete native suite passed. This does not prove the intermittent condition resolved.",
+    "No OS reboot, login independence test, production worker crash or physical network outage in this qualification.",
+    "The Core file protocol still has its 64 MiB cap."
+  ],
+  "windows_instrumented_overlap_repeats": {
+    "tests": 6,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "success": true,
+    "node": "windows",
+    "production_helpers_unchanged": true,
+    "runner_exit_code": 0,
+    "log_sha256": "ae6b1a209c70b8afbec789a2ad2850ff2a4d5e1e3353be4a0dea002ba649ed5a",
+    "private_log_sha256": "80576b67571397ab678021595e980d6a41700ed23f11c401c467bfe174449d6a"
+  },
+  "prior_failures_preserved": {
+    "ci_run_id": 46132026111,
+    "linux310": "fixture cleanup raced guardian receipt publication",
+    "windows_ci": "two legacy fault injections bypassed new guardian boundary plus fixture cleanup races",
+    "first_native_windows_85": {
+      "tests": 85,
+      "failures": 0,
+      "errors": 1,
+      "skipped": 1,
+      "success": false,
+      "node": "windows",
+      "production_helpers_unchanged": true,
+      "runner_exit_code": 1,
+      "log_sha256": "0e976d668867261e56eaa4ac3e2663bcbd5e3f7d723570fcdf33189d71a962ac",
+      "private_log_sha256": "5e2def9f54c92cca27b083449e851f9a345fec0ad6be0111cbf0fcf4d6f75c55"
+    },
+    "native_windows_102_first": {
+      "tests": 102,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 3,
+      "success": false,
+      "node": "windows",
+      "production_helpers_unchanged": true,
+      "runner_exit_code": 1,
+      "log_sha256": "9b02e49ab319b8529df0968bc60a2d05ca49cd18fff04cc7e2c09d38daf29f4b",
+      "private_log_sha256": "512ca207367b1838003e1782dd7bd9d09c077c584cbcdf078ff75a72189ab074"
+    },
+    "github_review_legacy_cwd": {
+      "comment_id": 4726499393,
+      "resolved_by_code_commit": "211b69f6aaa3346fbd34a195ac7aa9c3d4eb46dc",
+      "test": "test_registered_and_shell_relative_files_use_worker_root_after_ack_cleanup"
+    },
+    "ci_08d4ea5": {
+      "run_id": 46133824273,
+      "linux": "success",
+      "windows": "failure",
+      "cause": "Pool fixture default ROOT mismatched custom runpy ROOT; WinError267 before program launch. Product runtime unchanged by the fixture-only correction."
+    }
+  },
+  "ci_previous_green": {
+    "run_id": 46132835491,
+    "matrix": [
+      "ubuntu/3.10",
+      "ubuntu/3.14",
+      "windows/3.10",
+      "windows/3.14"
+    ],
+    "conclusion": "success",
+    "runtime_suite_tests_per_job": 506,
+    "includes": [
+      "runtime",
+      "benchmark_fixture",
+      "isolated_mcp",
+      "desktop_compile_or_build"
+    ],
+    "commit": "f831383c20307167e15ea7b9d0c9bff285a90747",
+    "scope": "Before final Windows legacy-cwd fix; final-head CI is separately available in PR checks."
+  },
+  "current_ci_reference": "https://github.com/Daniele-Cangi/Vincula/pull/27/checks",
+  "real_three_receiver_plan": {
+    "scope": "local new-server API over real SSH RPC to 3 TEMP receivers; not MCP stdio",
+    "bundle_sha256": "714e5228014d998e125e76b7374b65720afe954c4dd68283ea35b528335bfc89",
+    "success": true,
+    "cleanup": {
+      "ubuntu": {
+        "worker_exit_code": 0,
+        "held_claims": 0,
+        "worker_stopped": true,
+        "temp_removed": true
+      },
+      "windows": {
+        "worker_exit_code": 0,
+        "held_claims": 0,
+        "worker_stopped": true,
+        "temp_removed": true
+      },
+      "kali": {
+        "worker_exit_code": 0,
+        "held_claims": 0,
+        "worker_stopped": true,
+        "temp_removed": true
+      }
+    },
+    "node_ids": {
+      "ubuntu": "0d97d16f-1624-4467-b834-f0592a4d29ab",
+      "windows": "a197f389-14b2-4716-86a2-70314e2ee4e2",
+      "kali": "12365c6d-f1c3-41ad-a4cb-458363b2fae5"
+    },
+    "plan_id": "6a501d3f-569b-4a4a-a272-8fdc75349a7a",
+    "job_ids": [
+      "9e9e24d3-ea14-58cf-8b06-18bfbefb798c",
+      "284efe97-d648-54bd-86d6-672c67dfaf6a",
+      "85946914-52e2-5995-98d0-a1cef6f962d5"
+    ],
+    "outcomes": [
+      {
+        "node_id": "0d97d16f-1624-4467-b834-f0592a4d29ab",
+        "state": "completed",
+        "exit_code": 0,
+        "outcome": {
+          "runtime_protocol_version": 2,
+          "state": "completed",
+          "program_exit_code": 0,
+          "reason": "exit",
+          "started": true
+        }
+      },
+      {
+        "node_id": "a197f389-14b2-4716-86a2-70314e2ee4e2",
+        "state": "completed",
+        "exit_code": 0,
+        "outcome": {
+          "runtime_protocol_version": 2,
+          "state": "completed",
+          "program_exit_code": 0,
+          "reason": "exit",
+          "started": true
+        }
+      },
+      {
+        "node_id": "12365c6d-f1c3-41ad-a4cb-458363b2fae5",
+        "state": "completed",
+        "exit_code": 0,
+        "outcome": {
+          "runtime_protocol_version": 2,
+          "state": "completed",
+          "program_exit_code": 0,
+          "reason": "exit",
+          "started": true
+        }
+      }
+    ],
+    "checks": [
+      "prepared_native_argv_3_receivers",
+      "exit0_and_marker",
+      "same_uuid_replay",
+      "max2_cpu_budget_and_stop",
+      "second_local_journal_recovery",
+      "authority_metadata_outage_emulated"
+    ],
+    "private_receipt_sha256": "f48b84b8a740de441a1d84d8075b3b318d08e0f500d9aa2ef08f603b2f4cdb59",
+    "harness_sha256": "d28c5b8a050c3d32733fa03a568c3807b5ff27dca167970e3c1cd94ffbc74a60",
+    "source_bundle_files": 71,
+    "coordinator_change": "Emulated on Ubuntu with a second local journal; not a native agent on another PC.",
+    "authority_outage": "Only metadata requests are blocked in the driver; not a physical network disconnection."
+  },
+  "windows_legacy_compatibility": {
+    "registered_relative_script_input_output": true,
+    "shell_relative_script_input_output": true,
+    "exit_codes": [
+      7,
+      17
+    ],
+    "relative_outputs_persist_after_ack_cleanup": true,
+    "native_approved_cwd_unchanged": true
+  },
+  "post_ci_windows_pool_isolation": {
+    "runtime_changed": false,
+    "pool_fixture_sha256": "abc64c7485deb17c83ce54c0455f36fcdc69792e523a5c4810c352b02ddb0151",
+    "native_windows_suite": {
+      "tests": 14,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "success": true,
+      "node": "windows",
+      "production_helpers_unchanged": true,
+      "runner_exit_code": 0,
+      "log_sha256": "485078259acebaa35f1fad42a0114528b01a7d13de1b8e86100e05bacd956da1",
+      "private_log_sha256": "6f592d0ad678b7807c5fa303de9e979294cf7d41ef4c6f26231410a30088a929"
+    },
+    "child_only_localappdata": true,
+    "parent_environment_unchanged": true,
+    "real_program_cwd_verified_for_all_three_jobs": true,
+    "linux_pool_tests": {
+      "tests": 14,
+      "success": true
+    },
+    "reason": "The prior runpy fixture changed ROOT only in worker and guardian; fresh Windows launcher used account LOCALAPPDATA. Clean CI had no such account folder; the physical PC did. The fixture now aligns all three roles to TEMP/Vincula-Jobs before overriding globals."
+  }
+}

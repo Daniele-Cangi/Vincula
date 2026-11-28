@@ -145,7 +145,7 @@ Il risultato contiene `ok`, `revision` e `registry`, più l’oggetto `node_chec
 | --- | --- |
 | `ssh` | `authenticated` dopo risposta valida con nonce sulla rotta OpenSSH configurata, con pin rigoroso, autenticazione pubblica e forwarding disattivato. Errori di connessione o risposta producono `failed` con motivo sanitizzato. |
 | `identity` | `match`, `mismatch`, `ambiguous`, `unavailable` oppure `unchecked`. Sul destinatario confronta gli UUID locali dei due cataloghi previsti Core/Desktop; cataloghi discordanti o parzialmente illeggibili non ricevono una priorità silenziosa. |
-| `helper` | `compatible_on_disk` con `protocol_version` solo quando i sei file helper coincidono byte per byte con le sorgenti del runtime locale fidato. File differenti producono `unverified`; tutti assenti o illeggibili producono `missing`. Prima della sonda può restare `unchecked`. |
+| `helper` | `compatible_on_disk` con `protocol_version` solo quando tutti i file helper richiesti coincidono byte per byte con le sorgenti del runtime locale fidato. File differenti producono `unverified`; tutti assenti o illeggibili producono `missing`. Prima della sonda può restare `unchecked`. |
 | `policy` | `observed` con `mode: ask|full` e `native_enabled` booleano solo con helper verificati e database esistente valido. Negli altri casi resta `unchecked` con motivo. |
 | `worker` | Sempre `unverified`: il confronto dei file non certifica il codice di un processo già avviato né un servizio operativo. |
 | `desktop` | Sempre `unchecked`: non esegue verifiche di sessione grafica o input condiviso. |
@@ -160,7 +160,7 @@ La raccolta applica limiti effettivi di 16 KiB alla sorgente inviata, 16 KiB all
 
 Gli snapshot iniziale e finale usano soltanto brevi sezioni di sincronizzazione; nessun mutex viene mantenuto durante la rete. La verifica non crea un registro o un lock file se mancano. Una revisione differente, un nodo rimosso, una rotta modificata o il contenuto del pin cambiato durante la sonda producono `conflict`, anche se il solo file known_hosts cambia senza aggiornare il JSON. In tal caso rileggere il registro e ripetere la richiesta.
 
-L’origine deve eseguire il runtime Vincula completo, inclusi `node_probe.py` e i moduli adiacenti richiesti: copiare solo `nodes.py` non basta. La sonda necessita di OpenSSH e dell’interprete Python con stdlib SQLite sul destinatario. Il confronto degli helper usa `jobs.py`, `vincula_files.py`, `vincula_capabilities.py`, `plan_journal.py`, `wire_framing.py` e `direct_execution.py`; per leggere la policy serve anche il database già inizializzato dall’operatore. File mancanti o differenti non vengono installati, sostituiti o aggiornati dalla verifica.
+L’origine deve eseguire il runtime Vincula completo, inclusi `node_probe.py` e i moduli adiacenti richiesti: copiare solo `nodes.py` non basta. La sonda necessita di OpenSSH e dell’interprete Python con stdlib SQLite sul destinatario. Il confronto degli helper usa `jobs.py`, `vincula_files.py`, `vincula_capabilities.py`, `plan_journal.py`, `wire_framing.py`, `direct_execution.py`, `resource_policy.py`, `worker_resources.py` ed `execution_plans.py`; per leggere la policy serve anche il database già inizializzato dall’operatore. File mancanti o differenti non vengono installati, sostituiti o aggiornati dalla verifica.
 
 ## Conferma nelle due app
 
