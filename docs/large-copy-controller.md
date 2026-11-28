@@ -1,7 +1,7 @@
 # Controller Core per le copie autonome
 
-Questo documento descrive il prossimo incremento del [piano dei dataset
-grandi](large-file-transfers.md). È un progetto: nel protocollo 2 attuale la
+Questo documento descrive gli incrementi del [piano dei dataset
+grandi](large-file-transfers.md). Il controller resta da realizzare: nel protocollo 2 attuale la
 consegna e il coordinamento dei blocchi dipendono dalle chiamate del client a
 `advance_large_transfer`. Preparazione dell'export e pubblicazione finale sono
 già job Core autonomi. Non esiste ancora un controller dell'intera copia
@@ -80,6 +80,93 @@ helper installati e discovery MCP stdio locale. Non qualificano un controller
 autonomo, le credenziali dei servizi, una migrazione fra client fisici o un
 rollout produttivo. Le ricevute separano queste prove dai trasferimenti SSH
 del protocollo 2 già documentati.
+
+## Incremento implementato: binding sul destinatario
+
+Il destinatario ora conserva intenti e revisioni del binding, separati dal
+ledger dell'autorità. La policy `copy-binding-policy` parte disabilitata, anche
+quando le precedenti policy di file e metadati sono abilitate. In `ask` serve
+una decisione owner-local sul digest esatto della preview; `full` preautorizza
+l'intento entro gli opt-in e i grant locali. Un successivo passaggio a `ask`
+richiede una decisione esplicita anche per gli intenti prima automatici.
+
+La facade interna `copy-binding` offre `info`, `prepare`, `status` e `bind`.
+Non espone approvazioni, modifiche di policy, attestazioni o prove di cleanup.
+`prepare` valida manifest, UUID del catalogo esplicito e storia del destinatario.
+`bind` usa CAS, il lock OS dell'endpoint e il ledger dei tentativi: ogni vecchio
+job deve avere cleanup confermato. Un intento pendente nuovo non sostituisce
+il consenso del binding attivo. Le conferme ripetute restituiscono lo stesso ACK
+finché il binding è ancora quello corrente.
+
+Le modifiche e gli I/O di un endpoint gestito richiedono `binding_token`
+(digest pubblico della proposta) e `binding_revision`, oltre a UUID, storia ed
+epoch del protocollo 2. I job in coda conservano la coppia originale; non
+acquisiscono quella corrente al momento dell'avvio. Il controllo viene ripetuto
+prima di lancio, I/O, checkpoint e permit di pubblicazione. I trasferimenti non
+gestiti restano compatibili. Stato e pagine di blocchi restano leggibili.
+
+Stop autentica il binding corrente senza richiedere la policy di esecuzione o
+un worker fresco. Registra il fence senza attendere il lock I/O. Lo Stop locale
+di emergenza non dipende da token, autorità raggiungibile o storia valida e non
+libera spazio. Resume richiede consenso, policy, worker attivo e cleanup del
+vecchio tentativo; dopo resume i dati restano bloccati fino al nuovo CAS, con
+epoch del controller crescente. Cleanup verifica il token e i tentativi prima
+di cancellare solo lo staging posseduto, poi ricontrolla il fence prima di
+liberare la prenotazione. Una pubblicazione già autorizzata conserva la sua
+ricevuta valida anche se lo Stop arriva dopo il permit.
+
+Se l'operatore passa da `full` ad `ask` dopo uno Stop, può rinnovare il consenso
+owner-local mentre l'endpoint resta `stopped`: `large-files-pending` mostra il
+digest da approvare con `large-files-approve`. L'export richiede il consenso
+esatto sull'intento; l'import richiede anche quello sul contenuto già osservato.
+L'approvazione non cambia fase, epoch o spazio prenotato e non riattiva I/O.
+Anche il binding prima automatico deve essere approvato esplicitamente. Dopo
+resume serve comunque una nuova proposta di binding approvata e associata con
+CAS; il vecchio token resta inutilizzabile per I/O. Policy disabilitata, scadenza o
+storia SQLite diversa impediscono una nuova approvazione.
+
+Il worker aggiornato attesta separatamente questo adapter. L'installazione
+distribuisce 19 helper; i file nuovi sul disco non attestano il vecchio worker.
+`get_large_file_info.copy_binding` distingue enforcement implementato e copia
+autonoma ancora assente. I tool MCP restano 34. La nuova facade non avvia il
+controller, non autentica il trasporto e non isola agenti con lo stesso account.
+
+Le nuove CLI locali sono `copy-binding-policy FILE [--expected-revision DIGEST]`,
+`copy-binding-pending`, `copy-binding-approve UUID --sha256 DIGEST
+--binding-revision N`, `copy-binding-deny` con gli stessi argomenti, e
+`copy-binding-emergency-stop UUID`. Lo Stop owner-local richiede l'arresto dei
+soli job associati all'endpoint. Nessun aggiornamento produttivo è implicito.
+
+La suite locale di questo incremento esegue 731 test, con 20 esclusioni di
+piattaforma e nessun errore. Il [collaudo dopo le correzioni di review](collaudi/2026-11-28-copy-endpoint-review-fixes.json),
+successivo alla [prima qualificazione](collaudi/2026-11-28-copy-endpoint-bindings.json),
+esegue 77 metodi su ciascun PC, senza errori o fallimenti: Ubuntu e Kali senza
+esclusioni, Windows con il solo caso agent Linux escluso. I nuovi casi includono
+I/O limitato in TEMP con worker reali, snapshot del token del job, checkpoint
+dopo Stop, resume senza riattivazione implicita, export già preparato,
+pubblicazione e cleanup. I worker originali sono drenati e le nuove fixture
+rimosse. Il fixture MCP verifica i 19 helper installati.
+
+Il successivo [collaudo della riapprovazione dopo Stop](collaudi/2026-11-28-stopped-transfer-reapproval.json)
+del sorgente `8e67088` porta la suite locale a 750 test con 21 esclusioni e
+quella nativa a 92 metodi su ciascun PC, con un'esclusione prevista per host.
+Include il passaggio reale `full` → Stop → `ask`, i comandi owner-local,
+le approvazioni separate e il nuovo CAS prima di I/O limitato. Tutti i worker
+originali sono drenati e i TEMP dei collaudi riusciti sono rimossi. Le prove
+precedenti restano disponibili come qualificazioni dei rispettivi sorgenti.
+
+La review ha corretto il limite delle proposte pendenti: gli intenti scaduti
+restano nella cronologia e non consumano capacità per nuovi intenti. Scadenza e
+conteggio non modificano binding, eventi o prenotazioni dei file. Due regressioni
+verificano limite 1, sostituzione di una proposta scaduta e digest della scadenza.
+Sono corretti anche i sei rilievi di leggibilità Sonar. Un fallimento CI Windows
+è stato riprodotto come invecchiamento del worker simulato durante il setup:
+il fixture ora controlla il proprio orologio e il RTT. La prova esplicita di
+RTT 6 secondi resta; la finestra di freshness del prodotto non cambia.
+
+Ogni client e worker MCP di questa prova vive sullo stesso host fisico:
+non è una migrazione tra client Windows e Ubuntu, né un trasferimento SSH di
+payload tra nodi. Il controller autonomo e il rollout restano da qualificare.
 
 ## Autorità e processo
 

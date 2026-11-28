@@ -5,6 +5,7 @@
 
 from contextlib import ExitStack
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -59,11 +60,13 @@ def run(route, program, flags, args, stdout, *, timeout, cwd=None, stdin=None):
                        timeout=timeout, check=True)
 
 
-def json_command(route, command, *, input_data=None, output_limit=256 * 1024):
+def json_command(route, command, *, input_data=None, output_limit=256 * 1024, timeout=PROBE_TIMEOUT):
     if input_data is not None and (not isinstance(input_data, bytes) or len(input_data) > 512 * 1024):
         raise ValueError("SSH input exceeds the bounded journal transport.")
     if type(output_limit) is not int or not 1 <= output_limit <= 1024 * 1024:
         raise ValueError("Invalid SSH JSON output limit.")
+    if type(timeout) not in (int, float) or not 0 < timeout <= PROBE_TIMEOUT or not math.isfinite(timeout):
+        raise ValueError("SSH JSON timeout must be positive and no longer than the probe budget.")
     with ExitStack() as cleanup:
         output = cleanup.enter_context(TemporaryFile())
         source = None
@@ -72,7 +75,7 @@ def json_command(route, command, *, input_data=None, output_limit=256 * 1024):
             source.write(input_data)
             source.seek(0)
         flags = ("-T",) if source is not None else ("-nT",)
-        run(route, "ssh", flags, (command,), output, timeout=PROBE_TIMEOUT, stdin=source)
+        run(route, "ssh", flags, (command,), output, timeout=timeout, stdin=source)
         output.seek(0)
         raw = output.read(output_limit + 1)
         if len(raw) > output_limit:

@@ -1,0 +1,567 @@
+{
+  "version": 1,
+  "date": "2026-11-28",
+  "scope": "Receiver binding SQL and bounded local file I/O with real workers, metadata CLI and local MCP stdio on each of three real PCs, in isolated TEMP copies.",
+  "controller_operational_qualified": false,
+  "production_updated": false,
+  "harness_sha256": "f2f8ff5f78fe0815407d5c9d3942748b615285090eaad115b88b0149791c9901",
+  "harness_fake_tests": 16,
+  "helpers": [
+    "jobs.py",
+    "direct_execution.py",
+    "plan_journal.py",
+    "vincula_capabilities.py",
+    "vincula_files.py",
+    "wire_framing.py",
+    "resource_policy.py",
+    "worker_resources.py",
+    "execution_plans.py",
+    "transfer_state.py",
+    "transfer_storage.py",
+    "transfer_wire.py",
+    "large_transfer_plans.py",
+    "large_files.py",
+    "node_registry.py",
+    "large_copy_state.py",
+    "large_copy_runtime.py",
+    "copy_endpoint_bindings.py",
+    "copy_endpoint_runtime.py"
+  ],
+  "selectors": [
+    "test_large_copy_state",
+    "test_large_copy_runtime",
+    "test_node_registry.ServiceRegistryTests",
+    "test_large_transfer_mcp",
+    "test_copy_endpoint_bindings",
+    "test_copy_endpoint_runtime"
+  ],
+  "limits": [
+    "No autonomous copy controller, relay admission, service transport provider or production rollout qualification.",
+    "Each MCP client and worker run on the same physical host with synthetic identities; no cross-origin client migration or inter-node payload copy in this run.",
+    "New endpoint cases cover local bound I/O, stale queued-job token, stop/checkpoint fencing, resume gap, sealed export and published cleanup. Pure SQL cases separately cover ask/full/CAS/history and missing feature attestation.",
+    "The MCP fixture checks 19 installed helper bytes and original worker stop/zero claims. Each file-I/O fixture separately drains its original workers and checks attempts/claims before deleting its TEMP.",
+    "Diagnostics forwarding is bounded at 8 MiB; the private logfile has no hard OS disk quota."
+  ],
+  "source_commit": "40af6ddf70f9a41dffba26d0c36d5673f91de01c",
+  "previous_qualification": "2026-11-28-copy-endpoint-bindings.json",
+  "bundle_sha256": "e3b96453ea1c63c0051703dfea1fd622691026e7455f7242b933fdf9fa4120a5",
+  "private_receipt_sha256": "a07b56f022e3a8a5955c33deaef7e30dc7136ec72472ad3cfabff554efd6b29a",
+  "source_files": [
+    {
+      "path": "agent/batches.py",
+      "sha256": "0a4f91838c0f0cca1079925d74ed5f50297067280c7751d007739b83abf54816"
+    },
+    {
+      "path": "agent/capability_workflow.py",
+      "sha256": "4b2eb0aa34c576a4f3fd8f62f3b2690d5413bacda7b0f31f1363e5196c5c771d"
+    },
+    {
+      "path": "agent/check.py",
+      "sha256": "e056e9205235824228164c3e1f952cdd0ec14c50347b95fb18e5af3731cf3246"
+    },
+    {
+      "path": "agent/check_batch.py",
+      "sha256": "5bda41872a5c35f7411eb85f503c0828fea47d4d2050ab773c4206cda3b060e2"
+    },
+    {
+      "path": "agent/check_files.py",
+      "sha256": "cfae16ecaf0a71f8ca6dffeb5003dc0797fbc0ec404c050231fd24aa3bec6f4d"
+    },
+    {
+      "path": "agent/check_jobs.py",
+      "sha256": "06ea6c6dc44f628dd87d16066a9312c564a622a06c364a9ded9cb31dc8ee3f9a"
+    },
+    {
+      "path": "agent/check_shell.py",
+      "sha256": "78c6bf155b1af3515d138aea3566714b8e7916a9de61f70229b4336ed6bbafe0"
+    },
+    {
+      "path": "agent/controller_identity.py",
+      "sha256": "dbfb00777386cb5cdabfc7005a1705d60a75e2bcf5c969eb77e301fcde542045"
+    },
+    {
+      "path": "agent/copy_endpoint_bindings.py",
+      "sha256": "a35732a27dbc1440b889193fa38618eb868f30f51c95801499d34f4c32759c7f"
+    },
+    {
+      "path": "agent/copy_endpoint_runtime.py",
+      "sha256": "4a38b0a4c0c8d78649aea1b2343b514417084b105298f36077cce7c6e10c619c"
+    },
+    {
+      "path": "agent/core_service.py",
+      "sha256": "1ee7af86fcf895ba5a440636a35ea60959e28619ce7aee7a00936ea15c81f34c"
+    },
+    {
+      "path": "agent/credential_bootstrap.py",
+      "sha256": "213f2f09e90f156d38e784e26032d8d0d1568f7d8fe517cff52f4639726d2e24"
+    },
+    {
+      "path": "agent/desktop_backend.py",
+      "sha256": "a73ed7a37f91bd4c9f7d8730164008052f368f1b6670d7517e033dd39a2c335d"
+    },
+    {
+      "path": "agent/desktop_coordinator.py",
+      "sha256": "ed8bb3de9012cfcbbd3de4787956700774af2f1ee1a1d408328b0300e7a91a09"
+    },
+    {
+      "path": "agent/desktop_deskflow.py",
+      "sha256": "7cdf6651d2f03f80590acb21d9535891f17b8db0d48068365ea8cb957c869ca6"
+    },
+    {
+      "path": "agent/desktop_layout.py",
+      "sha256": "a65f99635ba9db7c774353d051eb1c24cca7011899096f111fb96ba4d9de23f3"
+    },
+    {
+      "path": "agent/desktop_process.py",
+      "sha256": "61895a1dbdf4e34887eed4778c0cdda232e356f4c92c9435b26b6a04f095641c"
+    },
+    {
+      "path": "agent/desktop_security.py",
+      "sha256": "e5da395d6b2df9da50bb4d9f128be15858cf1a3898a3b50adcd4ac59773664ba"
+    },
+    {
+      "path": "agent/desktop_supervisor.py",
+      "sha256": "cc0aa10b14dcb909f4838c198419846ec755dc77a7822bf4dc7d558ba430b7e1"
+    },
+    {
+      "path": "agent/direct_execution.py",
+      "sha256": "f01d2f226db281632f210791247ea6d5110e4adb7af2e55ec9fc9601db96a4e4"
+    },
+    {
+      "path": "agent/execution_plans.py",
+      "sha256": "48ba11895b8725b06b49b4cf51e0fa4b9afba3515fe1132362035c16f820d303"
+    },
+    {
+      "path": "agent/job_permissions.py",
+      "sha256": "eb53f17358d1bb6167d524b3c4d2dfa970a4ffb52f04ed9e8357283db83ffa3f"
+    },
+    {
+      "path": "agent/jobs.py",
+      "sha256": "958b0aa3bee3f824c20726a7c76d9457f033cfd0a71418e77296a3a35dc5dc81"
+    },
+    {
+      "path": "agent/large_copy_runtime.py",
+      "sha256": "d285cf39fb614c489613e13fa927dd068aa64b2d990633879785e218723363b7"
+    },
+    {
+      "path": "agent/large_copy_state.py",
+      "sha256": "92b9843f33e7fd3ac9843e552103b67c00c8bb01c90edfaffb0a841fdc50c940"
+    },
+    {
+      "path": "agent/large_files.py",
+      "sha256": "bfbc948a8135b9627ef3cfa574eaab9a688e9d4640ef20e8e82f2ada22728430"
+    },
+    {
+      "path": "agent/large_transfer_plans.py",
+      "sha256": "69c057ef45f0a39166d320fe18c73291447c612aea54fd2867f23172d71b2910"
+    },
+    {
+      "path": "agent/linux_status.py",
+      "sha256": "01063c8bea019b1eed66ab6dfe676818debf79e3c38e5a25d471640a30c4426d"
+    },
+    {
+      "path": "agent/node_enrollment.py",
+      "sha256": "524b73040ee4e9f1ff32aed1ee96eb105c536660e330c7b1851690008b3c23f3"
+    },
+    {
+      "path": "agent/node_probe.py",
+      "sha256": "9ca9003d19cbd7f8bb7eb087fbd55211899dfa75deb0008ad5e14b2d9511390b"
+    },
+    {
+      "path": "agent/node_registry.py",
+      "sha256": "1de09309d644a9024dbbbab986246bafb0a1bb2abfea0c46ebcc3d7bc7221d15"
+    },
+    {
+      "path": "agent/node_ssh.py",
+      "sha256": "0f5732bf3106188b7ee47a93b019ea3a8db0a02525878d6e88af04d071c2bacf"
+    },
+    {
+      "path": "agent/nodes.py",
+      "sha256": "4c213333988896663101fb3bc5e7db4453030dea1752227eea68468d7e02dc20"
+    },
+    {
+      "path": "agent/plan_journal.py",
+      "sha256": "5f1aa0e9739eebaa49e6ff3454a8b98bbaee2a5375cc07184fada626c42f8160"
+    },
+    {
+      "path": "agent/resource_policy.py",
+      "sha256": "663e870ad36121be973fc74fdf0dec18592f4288efc08cab32ef64ddc872564d"
+    },
+    {
+      "path": "agent/server.py",
+      "sha256": "d8e7d3269ad98877fc2bec86cc013fa6746371e88e855529ea692b1e5b4e24e2"
+    },
+    {
+      "path": "agent/test_batches.py",
+      "sha256": "28d2990ca60ec736beca22d95437903ee085b3c922fa761ce68c4bbae915e059"
+    },
+    {
+      "path": "agent/test_capabilities.py",
+      "sha256": "0ab8e9276c039564ee2d69bd629676f0b902e9d78651a26545f67b8a78875890"
+    },
+    {
+      "path": "agent/test_capability_recovery.py",
+      "sha256": "d654f6573e16a674f2eee037a5fd8eed0ac0ee34061a9a5809385a10f6fd8731"
+    },
+    {
+      "path": "agent/test_controller_identity.py",
+      "sha256": "c389bc31d70db4d33d37d1da48d05ea5b7403bab5ad75c45a43768d5fe540d8c"
+    },
+    {
+      "path": "agent/test_copy_endpoint_bindings.py",
+      "sha256": "41cad62497997ca692e77a9d6d69bea9c402ce27642ed938f5676120b5a71fbb"
+    },
+    {
+      "path": "agent/test_copy_endpoint_runtime.py",
+      "sha256": "dadd5a47b8ba975c4b391f01aeaf9bfb589b9483a3e3da7d85bceed50953ff3e"
+    },
+    {
+      "path": "agent/test_core_service.py",
+      "sha256": "5353e7fc46c73425477ae228d75721faa8084b875ba4774197bf3c1290356402"
+    },
+    {
+      "path": "agent/test_credential_bootstrap.py",
+      "sha256": "9b10ef5b016480e4fc1ca11b3f489fe1a910305bb024e7eeae51d90a3c9c98c6"
+    },
+    {
+      "path": "agent/test_credential_cancellation.py",
+      "sha256": "d36d3cbc557d51cc5d13eb1ce1911d165200f05a360131660d7ba9c103fa97b2"
+    },
+    {
+      "path": "agent/test_desktop_backend.py",
+      "sha256": "5cc814b343736f90e3be801d115cb6b2f4753414eea2427e37aa226f163ad15a"
+    },
+    {
+      "path": "agent/test_desktop_coordinator.py",
+      "sha256": "fda8f9ecef3daf46577c113691b57d73eb500b7b44a7a1198d12c621c2de0d42"
+    },
+    {
+      "path": "agent/test_desktop_deskflow.py",
+      "sha256": "d89fac8805596ed2a935dc7d70f5e4b5dcaca72222fb38a842d09b4dbc1b91b9"
+    },
+    {
+      "path": "agent/test_desktop_layout.py",
+      "sha256": "cbbfe797ba0852c2cc9512050224fcadc40648925320d424b49aeb56d06214e8"
+    },
+    {
+      "path": "agent/test_desktop_supervisor.py",
+      "sha256": "97100c9d1f3fb17acdd24ba573cf754778117b11c1dde30bf0ce744b1660e891"
+    },
+    {
+      "path": "agent/test_direct_execution.py",
+      "sha256": "23743a4d6145fdc2de68ec5937daedbe6daeb369e2128cdff30ad52db6f2b3d1"
+    },
+    {
+      "path": "agent/test_direct_resources.py",
+      "sha256": "334bc6d5e02907975cb66c12b63cfc29060303d9865d489b5503782889e8c4d1"
+    },
+    {
+      "path": "agent/test_enrollment_cli.py",
+      "sha256": "0a09adcb2dba987cbf8f1b78eea17c9f5a5669d59f160b7ba7df008f08103820"
+    },
+    {
+      "path": "agent/test_execution_plans.py",
+      "sha256": "eac2df2a7fe26e93217eefc7ec2f607911bda384324c8cf206a7a71731555fe4"
+    },
+    {
+      "path": "agent/test_execution_recovery.py",
+      "sha256": "483e756226aa18460c695d2dbaa1f2272bd54759269ff1f7755fcb819f90f2e2"
+    },
+    {
+      "path": "agent/test_file_access.py",
+      "sha256": "4d855dd32df5692e985049327e6f5e3b0ecc225a1cd875173aa10c7e51399f97"
+    },
+    {
+      "path": "agent/test_job_permissions.py",
+      "sha256": "6169a46a3e8635bf21b2f8737a4c6d6b089446c54463aff92cec9ee46a9ec097"
+    },
+    {
+      "path": "agent/test_journal_transport.py",
+      "sha256": "eb969b327d9b9b652b2ae0bd8c31bb0e38804155ceb1c2a1488db4e476c497a5"
+    },
+    {
+      "path": "agent/test_large_copy_runtime.py",
+      "sha256": "7e887d5228d83ad7789dc0e298b96df8368683992eadaeca3ead86a1b0a4cf2d"
+    },
+    {
+      "path": "agent/test_large_copy_state.py",
+      "sha256": "2e30706313c67fac387cba79df0eb2490c20020a0e82798cf895dfafbd816f60"
+    },
+    {
+      "path": "agent/test_large_file_checkpoint.py",
+      "sha256": "2ccd96a425eeaf8a8251efd70ac596312dfc3f73fdbd7ef0e236639595413bc8"
+    },
+    {
+      "path": "agent/test_large_files_runtime.py",
+      "sha256": "766a74db4e93eb2060a6a54425a5c929cd5d74d153dd2b8614f68c96e2d1e5ec"
+    },
+    {
+      "path": "agent/test_large_transfer_completion.py",
+      "sha256": "1de214b65a73f3944ff739dfbc4642c047c7cc35b4b5ac4848435947a62b0404"
+    },
+    {
+      "path": "agent/test_large_transfer_mcp.py",
+      "sha256": "b25a849495045b83a97c1f1bf4158b7fd454732bd9bdfe065ee76bba4a63c859"
+    },
+    {
+      "path": "agent/test_large_transfer_plans.py",
+      "sha256": "51eab7d19f250b391e1474d6b8f1f0279f4837b2299783cce69228358b095ee2"
+    },
+    {
+      "path": "agent/test_large_transfer_server.py",
+      "sha256": "f2ed31de5f9b08bd1f22d015e8523150d550bb3f8ee4f89a311efd972fb2af70"
+    },
+    {
+      "path": "agent/test_launch_ack_io.py",
+      "sha256": "4492996dd5a7bb0eedf451df2770b637dbd97adf7a40e0663af15f7af8b008ed"
+    },
+    {
+      "path": "agent/test_node_check_cli.py",
+      "sha256": "2e85e7bc58897c1689ae4bca48ee632d80f94a4122473cc290a44a7120e30690"
+    },
+    {
+      "path": "agent/test_node_enrollment.py",
+      "sha256": "dae943f605e1d6153ada6e81466438a28db4dca04f1323892c9c80fbdab63af4"
+    },
+    {
+      "path": "agent/test_node_probe.py",
+      "sha256": "a41f3e154b9f184c16ce856bdb4c7b4af8a62a159b2611c0b1a3a312a7793f91"
+    },
+    {
+      "path": "agent/test_node_registry.py",
+      "sha256": "38ca6095d36c342dd00047bc5e430b728810e0029db1b10c9a0e6daab5a90198"
+    },
+    {
+      "path": "agent/test_nodes.py",
+      "sha256": "b4438c3daa5556acbbf3f11879f67832c437e878541da66932df9f5f70f4d4b4"
+    },
+    {
+      "path": "agent/test_plan_recovery.py",
+      "sha256": "0c2545acf04f528efc2f68dcb8b7734c7ad4a92ba3b90e816b9dc0409b8ca09d"
+    },
+    {
+      "path": "agent/test_process_mcp.py",
+      "sha256": "a213f17df04a25a1a382fae0b71b90ca85de323ccf88d8b22137aaeccbc43423"
+    },
+    {
+      "path": "agent/test_process_runtime.py",
+      "sha256": "b8f48c678f8ad3ed47633ee2868b870df2cb081c62bf982a0738dafcbfdc2670"
+    },
+    {
+      "path": "agent/test_process_transport.py",
+      "sha256": "ed29a712f0ec2d8fee08dd96047172639779ff132a6c232e312bad6605ffa8e8"
+    },
+    {
+      "path": "agent/test_resource_policy.py",
+      "sha256": "2d847985c8ad22cccfad99f1c3ed6a37911ca92848618e38c1b3f0058ff6e19c"
+    },
+    {
+      "path": "agent/test_shell_sessions.py",
+      "sha256": "41772aa85cb07173562571f441cc8de2f4969c86374f63703750fe87dee785d7"
+    },
+    {
+      "path": "agent/test_transfer_state.py",
+      "sha256": "785dae3204110a00c0340a6442ee0d6cac4f0c9bb79f432b29af79cfc56bce10"
+    },
+    {
+      "path": "agent/test_transfer_storage.py",
+      "sha256": "3fa0ec9c88e5e31f7e697c582c38da03466f0a77af5099dc98f4515288fd0d6a"
+    },
+    {
+      "path": "agent/test_transfer_wire.py",
+      "sha256": "0f3d19fcd7c159ec65828ad96c7de9202b9c9fd56206e7ec2ba245cccddcec90"
+    },
+    {
+      "path": "agent/test_windows_launch_ack.py",
+      "sha256": "4f437903cfaa7e098cd9a7387d845d0b41b20e118614ed93b73e436d5a091066"
+    },
+    {
+      "path": "agent/test_windows_status.py",
+      "sha256": "30796b8f2fb914172d75cac98114418bfa840ddc1c899e3974c9eb265529b606"
+    },
+    {
+      "path": "agent/test_wire_framing.py",
+      "sha256": "114843623aa970052f176d5b2504b9fcc3ef3dadec6844705db7b6c3cb9a9052"
+    },
+    {
+      "path": "agent/test_worker_concurrency.py",
+      "sha256": "abc64c7485deb17c83ce54c0455f36fcdc69792e523a5c4810c352b02ddb0151"
+    },
+    {
+      "path": "agent/test_worker_crash.py",
+      "sha256": "db3ee5cabbdc21ab38947ae1ba55290df05abe83d4231328c215dab0b51b8a4d"
+    },
+    {
+      "path": "agent/test_worker_resources.py",
+      "sha256": "caad583e2814baaef65a0676fad9f275fce06ef4d3459e89002e0e1ee4c433e4"
+    },
+    {
+      "path": "agent/transfer_state.py",
+      "sha256": "3e99b5818276ef42b16406cf2ff2cf0e6d797440f4cd8e8e254d0da1fb5e20f2"
+    },
+    {
+      "path": "agent/transfer_storage.py",
+      "sha256": "dc2e9b624f87387cc51850a030b5306710151df251ae05572eb86ff8549b42eb"
+    },
+    {
+      "path": "agent/transfer_wire.py",
+      "sha256": "7e0827c36bbf5185d20b8984ac4b163552803957da2df6f32cfffe39f73569ff"
+    },
+    {
+      "path": "agent/vincula_capabilities.py",
+      "sha256": "6558cb92bed0314579f3ee3fcadb94c981519e44ecbd77f0884f7cfe8ca861c6"
+    },
+    {
+      "path": "agent/vincula_files.py",
+      "sha256": "f08bf48a6821083ae3c07d86713db42efd3af804bde92bb1ee87bd53e1faf50e"
+    },
+    {
+      "path": "agent/wire_framing.py",
+      "sha256": "88050f812f3e37ba6a0a8e8761788464c7fb8b8bd48a782ad98b8a70e107e330"
+    },
+    {
+      "path": "agent/worker_resources.py",
+      "sha256": "73f5062da82645584cab900bdcc38ccc9e02607e1fd3a9aa251182783fca9f53"
+    },
+    {
+      "path": "outputs/Windows Dock/node_catalog.py",
+      "sha256": "10b417e44f292e95078ec8c1792e7d85f825341b72e83dfa8053229cae993c8b"
+    },
+    {
+      "path": "outputs/Windows Dock/remote_desktop.py",
+      "sha256": "04690adc6d87068ced56b6e3a0dee061214da17f47a498709905374fc9ab03d8"
+    },
+    {
+      "path": "outputs/Windows Dock/wayland_input.py",
+      "sha256": "43215bf18002812ec311bdf0ea1dce808981f62e408c2e1977b781f0a5b4d288"
+    },
+    {
+      "path": "outputs/Windows Dock/windows-dock.py",
+      "sha256": "932490bac95d7fd68edc1b10fa1dbe677f969badd7e579d879e8dfd6745ea522"
+    },
+    {
+      "path": "outputs/Windows Dock/windows_ssh.py",
+      "sha256": "60e77bcf8127176342f5c9636c6709959b86bde2760aa1b8386c58c9f1e1d52d"
+    }
+  ],
+  "nodes": [
+    {
+      "alias": "ubuntu",
+      "python_version": "3.14.4",
+      "tests_run": 77,
+      "skipped": 0,
+      "errors": 0,
+      "failures": 0,
+      "exit_code": 0,
+      "transport_exit_code": 0,
+      "temp_removed": true,
+      "duration_seconds": 16.386,
+      "selector_counts": {
+        "test_copy_endpoint_bindings": 24,
+        "test_copy_endpoint_runtime": 8,
+        "test_large_copy_runtime": 11,
+        "test_large_copy_state": 21,
+        "test_large_transfer_mcp": 1,
+        "test_node_registry.ServiceRegistryTests": 12
+      },
+      "worker_cleanup": [
+        {
+          "active_jobs": 0,
+          "held_claims": 0,
+          "helpers_verified": 19,
+          "worker_exit_code": 0,
+          "worker_stopped": true
+        }
+      ],
+      "subprocess_attempts": 18
+    },
+    {
+      "alias": "windows",
+      "python_version": "3.14.7",
+      "tests_run": 77,
+      "skipped": 1,
+      "errors": 0,
+      "failures": 0,
+      "exit_code": 0,
+      "transport_exit_code": 0,
+      "temp_removed": true,
+      "duration_seconds": 33.591,
+      "selector_counts": {
+        "test_copy_endpoint_bindings": 24,
+        "test_copy_endpoint_runtime": 8,
+        "test_large_copy_runtime": 11,
+        "test_large_copy_state": 21,
+        "test_large_transfer_mcp": 1,
+        "test_node_registry.ServiceRegistryTests": 12
+      },
+      "worker_cleanup": [
+        {
+          "active_jobs": 0,
+          "held_claims": 0,
+          "helpers_verified": 19,
+          "worker_exit_code": 0,
+          "worker_stopped": true
+        }
+      ],
+      "subprocess_attempts": 18
+    },
+    {
+      "alias": "kali",
+      "python_version": "3.14.10",
+      "tests_run": 77,
+      "skipped": 0,
+      "errors": 0,
+      "failures": 0,
+      "exit_code": 0,
+      "transport_exit_code": 0,
+      "temp_removed": true,
+      "duration_seconds": 22.558,
+      "selector_counts": {
+        "test_copy_endpoint_bindings": 24,
+        "test_copy_endpoint_runtime": 8,
+        "test_large_copy_runtime": 11,
+        "test_large_copy_state": 21,
+        "test_large_transfer_mcp": 1,
+        "test_node_registry.ServiceRegistryTests": 12
+      },
+      "worker_cleanup": [
+        {
+          "active_jobs": 0,
+          "held_claims": 0,
+          "helpers_verified": 19,
+          "worker_exit_code": 0,
+          "worker_stopped": true
+        }
+      ],
+      "subprocess_attempts": 18
+    }
+  ],
+  "local_suite": {
+    "tests_run": 731,
+    "skipped": 20,
+    "errors": 0,
+    "failures": 0,
+    "test_seconds": 116.027,
+    "log_sha256": "b2a1301c49831e738a09976b7b7583783536bf9d47088cd55b403187c0cae82b",
+    "source_unchanged": true
+  },
+  "independent_review": "Readability changes and expired pending-intent capacity fix independently reviewed; no remaining actionable finding in those deltas.",
+  "review_fixes": {
+    "codex": {
+      "priority": "P2",
+      "comment": "https://github.com/Daniele-Cangi/Vincula/pull/30#discussion_r4727646319",
+      "fix": "Count only digest-validated, live, unbound, non-denied metadata intents. Preserve expired history and all file claims. Two new SQL regression cases."
+    },
+    "sonar": "Six readability issues corrected: two nested conditionals, two function complexity boundaries and two exception-test setup expressions. Gate of the new head remains to be checked.",
+    "ci_fixture": {
+      "failed_head": "bf947ad33fb19cfc4eec6a6212f1ccb1392f3b88",
+      "failed_run": 46159121935,
+      "failed_job": 141022254083,
+      "test": "test_lost_replica_ack_defers_its_job_until_same_plan_is_retried",
+      "reproduction": "Before the fixture fix, simulated heartbeat age +6 seconds reproduces no eligible candidate and zero jobs, without sleep or network.",
+      "fix": "Only the simulated worker clock and routing RTT are deterministic; the explicit six-second RTT rejection and timestamp validation remain tested. No product freshness or timeout changed.",
+      "targeted_tests_passed": 48,
+      "failed_log_sha256": "15a121182877c8c101d200be058255db181380c00934ee3f2a2bf502650fb6ea"
+    }
+  }
+}

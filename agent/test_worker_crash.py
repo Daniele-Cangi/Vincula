@@ -5,6 +5,7 @@
 
 from argparse import Namespace
 from contextlib import ExitStack
+import errno
 import json
 import os
 from pathlib import Path
@@ -115,7 +116,7 @@ class WorkerCrashTests(unittest.TestCase):
     def alive(pid):
         try:
             return Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1].split()[0] != "Z"
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             return False
 
     def assert_children_stopped(self):
@@ -291,6 +292,35 @@ class WorkerCrashTests(unittest.TestCase):
                 self.assertIsNone(result["exit_code"])
                 self.assertIn("fixture-start", result["stdout"]["text"])
                 self.assertEqual(jobs.rpc("start", key, "fixture")["state"], "unconfirmed")
+
+
+class AliveProbeTests(unittest.TestCase):
+    """Only synthetic proc-stat reads; never initialize the native crash fixture."""
+    def setUp(self):
+        forbidden = patch.object(subprocess, "Popen", side_effect=AssertionError("No process in proc-stat tests"))
+        self.spawn = forbidden.start()
+        self.addCleanup(forbidden.stop)
+        self.addCleanup(self.spawn.assert_not_called)
+
+    def test_missing_or_disappearing_process_is_not_alive(self):
+        for failure in (FileNotFoundError(errno.ENOENT, "synthetic missing proc"),
+                        ProcessLookupError(errno.ESRCH, "synthetic vanished proc")):
+            with self.subTest(kind=type(failure).__name__), patch.object(Path, "read_text", side_effect=failure):
+                self.assertFalse(WorkerCrashTests.alive(123))
+
+    def test_permissions_and_unrelated_io_errors_still_propagate(self):
+        for failure in (PermissionError(errno.EACCES, "synthetic permission"),
+                        OSError(errno.EIO, "synthetic I/O failure")):
+            with self.subTest(kind=type(failure).__name__), patch.object(Path, "read_text", side_effect=failure):
+                with self.assertRaises(type(failure)) as caught:
+                    WorkerCrashTests.alive(123)
+                self.assertIs(caught.exception, failure)
+
+    def test_running_sleeping_and_zombie_stat_parsing_is_preserved(self):
+        for state, expected in (("R", True), ("S", True), ("Z", False)):
+            text = f"123 (name with ) parentheses) {state} 1 2 3"
+            with self.subTest(state=state), patch.object(Path, "read_text", return_value=text):
+                self.assertEqual(WorkerCrashTests.alive(123), expected)
 
 
 if __name__ == "__main__":

@@ -30,6 +30,9 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS large_file_jobs(
  job_id TEXT PRIMARY KEY,endpoint_id TEXT NOT NULL,epoch INTEGER NOT NULL,kind TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS large_file_job_bindings(
+ job_id TEXT PRIMARY KEY, token TEXT, revision INTEGER
+);
 """
 
 
@@ -84,11 +87,31 @@ def _volumes(runtime, record):
     return observations
 
 
-def _authorize(runtime, key, epoch, *, claimed=True, expected_state=None):
+def _binding_guard(runtime, db, key, epoch, binding, *, control=None):
+    token, revision = binding
+    adapter = runtime.copy_endpoint_bindings
+    if control == "fence":
+        guard = adapter.guard_fence
+    elif control == "resume":
+        guard = adapter.guard_control
+    else:
+        guard = adapter.guard_data
+    return guard(db, key, epoch, token, expected_binding_revision=revision)
+
+
+def _job_binding(db, job_id):
+    row = db.execute("SELECT token,revision FROM large_file_job_bindings WHERE job_id=?", (job_id,)).fetchone()
+    # A job queued by an older release stays unmanaged. It cannot acquire a
+    # later controller's ownership by reading the endpoint's current binding.
+    return tuple(row) if row is not None else (None, None)
+
+
+def _authorize(runtime, key, epoch, *, claimed=True, expected_state=None, binding=(None, None)):
     with runtime.transaction() as db:
         row = (_pinned(db, key, expected_state) if expected_state is not None else state.details(db, key))
         grant = _grant(db, _endpoint(row)["root"])
         row = state.guard(db, key, epoch, grant=grant, require_reserved=claimed)
+        _binding_guard(runtime, db, key, epoch, binding)
         if claimed and not db.execute("SELECT 1 FROM large_file_claims WHERE endpoint_id=? AND released IS NULL", (key,)).fetchone():
             raise ValueError("Reserve disk before endpoint I/O.")
     # Filesystem checks are deliberately after COMMIT, including slow volumes.
@@ -134,18 +157,19 @@ def request(runtime, spec):
         return state.request(db, spec, grant, identity, [], runtime.mode(db))
 
 
-def reserve(runtime, key, epoch, expected_state):
-    record = _authorize(runtime, key, epoch, claimed=False, expected_state=expected_state)
+def reserve(runtime, key, epoch, expected_state, binding=(None, None)):
+    record = _authorize(runtime, key, epoch, claimed=False, expected_state=expected_state, binding=binding)
     observations = _volumes(runtime, record)
     with runtime.transaction() as db:
         _pinned(db, key, expected_state)
         state.guard(db, key, epoch, grant=_grant(db, _endpoint(record)["root"]), require_reserved=False)
+        _binding_guard(runtime, db, key, epoch, binding)
         result = state.reserve(db, key, epoch, observations)
         return dict(state.status(db, key), reservation=result)
 
 
-def queue(runtime, key, epoch, expected_state):
-    record = _authorize(runtime, key, epoch, expected_state=expected_state)
+def queue(runtime, key, epoch, expected_state, binding=(None, None)):
+    record = _authorize(runtime, key, epoch, expected_state=expected_state, binding=binding)
     kind = "prepare" if record["spec"]["role"] == "export" else "commit"
     if kind == "prepare" and record["header"] is not None or kind == "commit" and record["receipt"] is not None:
         with runtime.transaction() as db:
@@ -153,6 +177,7 @@ def queue(runtime, key, epoch, expected_state):
     with runtime.transaction() as db:
         _pinned(db, key, expected_state)
         state.guard(db, key, epoch, grant=_grant(db, _endpoint(record)["root"]))
+        _binding_guard(runtime, db, key, epoch, binding)
         active = db.execute("SELECT j.id FROM large_file_jobs f JOIN jobs j ON j.id=f.job_id "
                             "WHERE f.endpoint_id=? AND j.state IN ('pending','queued','running','stopping')", (key,)).fetchone()
         if active:
@@ -160,6 +185,7 @@ def queue(runtime, key, epoch, expected_state):
         job_id = str(uuid4())
         state.begin_attempt(db, key, epoch, job_id, kind)
         db.execute("INSERT INTO large_file_jobs VALUES(?,?,?,?)", (job_id, key, epoch, kind))
+        db.execute("INSERT INTO large_file_job_bindings VALUES(?,?,?)", (job_id, *binding))
         db.execute("INSERT INTO jobs(id,program,argv,state,created) VALUES(?,?,?,'queued',?)",
                    (job_id, PROGRAM, "null", runtime.time.time()))
         resource_policy.set_request(db, job_id, {"cpu_millis": 250, "memory_bytes": 16 * 1024 * 1024, "gpus": []})
@@ -172,6 +198,7 @@ def arguments(runtime, db, job_id):
         raise ValueError("The owned worker must claim this endpoint job.")
     record = state.details(db, row[0])
     state.guard(db, row[0], row[1], grant=_grant(db, _endpoint(record)["root"]))
+    _binding_guard(runtime, db, row[0], row[1], _job_binding(db, job_id))
     claim = db.execute("SELECT 1 FROM resource_claims WHERE id=? AND released IS NULL", (job_id,)).fetchone()
     if claim is None:
         raise ValueError("The file job has no owned resource admission.")
@@ -203,7 +230,10 @@ def stop_job(db, job_id):
     link = db.execute("SELECT f.endpoint_id FROM large_file_jobs f JOIN jobs j ON j.id=f.job_id "
                       "WHERE f.job_id=? AND j.state IN ('pending','queued','running','stopping')", (job_id,)).fetchone()
     if link is not None:
-        state.stop(db, link[0])
+        # Stop initiated by the local owner/worker must not depend on a remote
+        # token, current grant, feature freshness or the original ask decision.
+        import copy_endpoint_bindings
+        copy_endpoint_bindings.emergency_stop(db, link[0])
 
 
 def worker(runtime, job_id, expected_state):
@@ -212,17 +242,20 @@ def worker(runtime, job_id, expected_state):
         if link is None:
             raise ValueError("Unknown supervised file operation.")
         _pinned(db, link[0], expected_state)
+        binding = _job_binding(db, job_id)
     key, epoch, kind = link
-    authorize = lambda: _authorize(runtime, key, epoch, expected_state=expected_state)
+    authorize = lambda: _authorize(runtime, key, epoch, expected_state=expected_state, binding=binding)
     record = authorize()
     def get_block(index):
         with runtime.transaction() as db:
             _pinned(db, key, expected_state)
             state.guard(db, key, epoch)
+            _binding_guard(runtime, db, key, epoch, binding)
             return state.get_block(db, key, index)
     def checkpoint(block):
         with runtime.transaction() as db:
             _pinned(db, key, expected_state)
+            _binding_guard(runtime, db, key, epoch, binding)
             state.checkpoint(db, key, epoch, job_id if kind == "prepare" else None, **block)
     with _owned(runtime, key):
         if kind == "prepare":
@@ -231,6 +264,7 @@ def worker(runtime, job_id, expected_state):
                 max_bytes=record["spec"]["max_bytes"])
             with runtime.transaction() as db:
                 _pinned(db, key, expected_state)
+                _binding_guard(runtime, db, key, epoch, binding)
                 state.source_ready(db, key, epoch, job_id, header)
         else:
             def commit_point():
@@ -241,11 +275,15 @@ def worker(runtime, job_id, expected_state):
                 with runtime.transaction() as db:
                     _pinned(db, key, expected_state)
                     state.guard(db, key, epoch, grant=_grant(db, _endpoint(record)["root"]))
+                    _binding_guard(runtime, db, key, epoch, binding)
                     state.commit_publication(db, key, epoch, job_id)
             receipt = storage.finalize_import(base(runtime), key, record["header"], _path(runtime, record),
                 get_block=get_block, authorize=authorize, commit_point=commit_point)
             with runtime.transaction() as db:
                 _pinned(db, key, expected_state)
+                # Publication already received a durable permit under the
+                # original token. Preserve its valid receipt if Stop won after
+                # that permit; never retroactively report those bytes absent.
                 state.published(db, key, epoch, job_id, receipt)
 
 
@@ -256,12 +294,13 @@ def _pinned(db, key, expected_state):
     return record
 
 
-def _control(runtime, operation, key, epoch, expected_state):
+def _control(runtime, operation, key, epoch, expected_state, binding=(None, None)):
     if operation == "stop":
         with runtime.transaction() as db:
             if _pinned(db, key, expected_state)["epoch"] != epoch:
                 raise ValueError("Stale endpoint control epoch.")
-            state.stop(db, key)
+            _binding_guard(runtime, db, key, epoch, binding, control="fence")
+            runtime.copy_endpoint_bindings.emergency_stop(db, key)
             for row in db.execute("SELECT job_id FROM large_file_jobs WHERE endpoint_id=?", (key,)).fetchall():
                 runtime.request_stop(db, row[0])
             return state.status(db, key)
@@ -270,6 +309,7 @@ def _control(runtime, operation, key, epoch, expected_state):
             record = _pinned(db, key, expected_state)
             if record["epoch"] != epoch:
                 raise ValueError("Stale endpoint control epoch.")
+            _binding_guard(runtime, db, key, epoch, binding, control="resume" if operation == "resume" else "fence")
             busy = db.execute("SELECT 1 FROM large_file_attempts WHERE endpoint_id=? AND cleanup_confirmed=0", (key,)).fetchone()
             if busy:
                 raise ValueError("The original file job has not confirmed cleanup.")
@@ -284,6 +324,7 @@ def _control(runtime, operation, key, epoch, expected_state):
         storage.cleanup_private(base(runtime), "exports" if record["spec"]["role"] == "export" else "imports", key)
         with runtime.transaction() as db:
             _pinned(db, key, expected_state)
+            _binding_guard(runtime, db, key, epoch, binding, control="fence")
             return state.cleanup(db, key, epoch, cleanup_confirmed=True, physical_deleted=True)
 
 
@@ -294,6 +335,7 @@ def dispatch(runtime, operation, protocol_version=2, request_id=None, payload=b"
         with runtime.transaction() as db:
             result = dict(state.info(db), mode=runtime.mode(db))
         result["copy_metadata"] = runtime.large_copy_runtime.info(runtime)
+        result["copy_binding"] = runtime.copy_endpoint_runtime.dispatch(runtime, "info")
         return result, b""
     if operation == "request" and request_id is None and set(fields) == {"spec"} and not payload:
         return request(runtime, fields["spec"]), b""
@@ -320,25 +362,27 @@ def dispatch(runtime, operation, protocol_version=2, request_id=None, payload=b"
     epoch = fields.pop("epoch", None)
     if type(epoch) is not int or epoch < 1:
         raise ValueError("Use the exact positive endpoint epoch.")
+    binding = (fields.pop("binding_token", None), fields.pop("binding_revision", None))
     if operation in {"stop", "resume", "cleanup"} and not fields and not payload:
-        return _control(runtime, operation, key, epoch, expected_state), b""
+        return _control(runtime, operation, key, epoch, expected_state, binding), b""
     if operation == "bind" and set(fields) == {"header"} and not payload:
         with runtime.transaction() as db:
             row = _pinned(db, key, expected_state)
             if row["epoch"] != epoch:
                 raise ValueError("Stale endpoint epoch.")
+            _binding_guard(runtime, db, key, epoch, binding)
             return state.bind_manifest(db, key, fields["header"], runtime.mode(db)), b""
     if operation == "reserve" and not fields and not payload:
-        return reserve(runtime, key, epoch, expected_state), b""
+        return reserve(runtime, key, epoch, expected_state, binding), b""
     if operation == "queue" and not fields and not payload:
-        return queue(runtime, key, epoch, expected_state), b""
+        return queue(runtime, key, epoch, expected_state, binding), b""
     if operation not in {"block-read", "block-write", "verify-block"}:
         raise ValueError("Unknown large-file operation.")
     expected_fields = {"index"} if operation == "block-read" else {"index", "expected"}
     if set(fields) != expected_fields or operation != "block-write" and payload:
         raise ValueError("Invalid bounded block operation.")
     with _owned(runtime, key):
-        record = _authorize(runtime, key, epoch, expected_state=expected_state)
+        record = _authorize(runtime, key, epoch, expected_state=expected_state, binding=binding)
         header = record["header"]
         if header is None:
             raise ValueError("No approved immutable content manifest.")
@@ -348,13 +392,14 @@ def dispatch(runtime, operation, protocol_version=2, request_id=None, payload=b"
                 raise ValueError("Only an export can send content.")
             with runtime.transaction() as db:
                 _pinned(db, key, expected_state)
+                _binding_guard(runtime, db, key, epoch, binding)
                 block = state.get_block(db, key, index)
             data = storage.read_export_block(base(runtime), header, index, lambda _: block,
-                                            authorize=lambda: _authorize(runtime, key, epoch, expected_state=expected_state))
+                                            authorize=lambda: _authorize(runtime, key, epoch, expected_state=expected_state, binding=binding))
             return {"block": block}, data
         if record["spec"]["role"] != "import":
             raise ValueError("Only an import can receive content.")
-        authorize = lambda: _authorize(runtime, key, epoch, expected_state=expected_state)
+        authorize = lambda: _authorize(runtime, key, epoch, expected_state=expected_state, binding=binding)
         if operation == "verify-block":
             valid = storage.verify_stored_block(base(runtime), key, header, index, fields["expected"], authorize=authorize)
             if valid:
@@ -364,11 +409,13 @@ def dispatch(runtime, operation, protocol_version=2, request_id=None, payload=b"
                 with runtime.transaction() as db:
                     _pinned(db, key, expected_state)
                     state.guard(db, key, epoch, grant=_grant(db, _endpoint(record)["root"]))
+                    _binding_guard(runtime, db, key, epoch, binding)
                     state.checkpoint(db, key, epoch, None, **fields["expected"])
             return {"valid": valid}, b""
         def checkpoint(block):
             with runtime.transaction() as db:
                 _pinned(db, key, expected_state)
+                _binding_guard(runtime, db, key, epoch, binding)
                 state.checkpoint(db, key, epoch, None, **block)
         block = storage.store_block(base(runtime), key, header, index, payload, fields["expected"],
                                     checkpoint=checkpoint, authorize=authorize)

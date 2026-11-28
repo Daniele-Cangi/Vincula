@@ -7,7 +7,7 @@ the real receiver. No SSH connections or program launches occur in this file.
 """
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing
+from contextlib import closing, contextmanager
 from copy import deepcopy
 from pathlib import Path
 import sqlite3
@@ -29,6 +29,8 @@ class DestinationProfiles:
     def __init__(self, root, nodes):
         self.lock = RLock()
         self.dispatch = jobs.dispatch
+        self.now = 1_800_000_000.0
+        self.validate_clock = jobs.resource_policy._clock
         self.roots = {node: root / node for node in nodes}
         self.coordinator = root / "coordinator"
         self.offline, self.lost, self.calls = set(), set(), []
@@ -42,14 +44,22 @@ class DestinationProfiles:
                     db.execute("INSERT INTO worker_environment VALUES(1,?,?)",
                                (str(Path(sys.executable).parent), ".EXE"))
                     generation = str(uuid4())
-                    jobs.resource_policy.worker_start(db, generation, "windows" if jobs.WINDOWS else "linux")
+                    jobs.resource_policy.worker_start(db, generation, "windows" if jobs.WINDOWS else "linux", now=self.now)
                     jobs.resource_policy.heartbeat(db, generation, {
-                        "observed_at": time.time(), "cpu_millis": 4000, "cpu_percent": 0,
-                        "memory_total_bytes": 2**30, "memory_available_bytes": 2**30, "gpus": []})
+                        "observed_at": self.now, "cpu_millis": 4000, "cpu_percent": 0,
+                        "memory_total_bytes": 2**30, "memory_available_bytes": 2**30, "gpus": []}, now=self.now)
 
+    @contextmanager
     def profile(self, root):
         # Callers hold this fixture's RLock when dispatching from multiple threads.
-        return patch.multiple(jobs, ROOT=root, DATABASE=root / "jobs.sqlite3")
+        # No worker runs here: freeze only its synthetic observation clock, while
+        # explicit timestamps still pass the real validator (including stale tests).
+        def clock(now):
+            return self.validate_clock(self.now if now is None else now)
+
+        with patch.multiple(jobs, ROOT=root, DATABASE=root / "jobs.sqlite3"), \
+                patch.object(jobs.resource_policy, "_clock", side_effect=clock):
+            yield
 
     def local(self, action, **payload):
         with self.lock, self.profile(self.coordinator):
@@ -94,7 +104,8 @@ class ExecutionRecoveryTests(unittest.TestCase):
         for mocker in (patch.object(server, "destination_request", side_effect=self.network),
                        patch.object(server.jobs, "dispatch", side_effect=self.network.local),
                        patch.object(server, "local_node", return_value=self.authority),
-                       patch.object(server, "registry", return_value=topology)):
+                       patch.object(server, "registry", return_value=topology),
+                       patch.object(server, "monotonic", return_value=100.0)):
             mocker.start()
             self.addCleanup(mocker.stop)
         self.key = uuid4()
@@ -267,6 +278,29 @@ class ExecutionRecoveryTests(unittest.TestCase):
         self.assertFalse(value.worker.fresh)
         self.assertFalse(value.worker.observation_fresh)
         self.assertEqual(value.worker.fresh_remaining_seconds, 0)
+
+    def test_synthetic_worker_clock_ignores_fixture_delays_but_preserves_explicit_time(self):
+        clock = jobs.resource_policy._clock
+        with patch.object(time, "time", return_value=self.network.now + 3600):
+            for node in self.nodes:
+                value = asyncio.run(server.node_resources(node))
+                self.assertTrue(value.worker.fresh)
+                self.assertTrue(value.worker.observation_fresh)
+                self.assertEqual(value.worker.heartbeat_at, self.network.now)
+                self.assertEqual(value.worker.observation.observed_at, self.network.now)
+                self.assertEqual(value.worker.fresh_remaining_seconds, 5)
+                self.assertEqual(value.worker.observation_remaining_seconds, 5)
+                self.assertEqual(value.request_round_trip_seconds, 0)
+            self.assert_success(self.submit())
+        self.assertIs(jobs.resource_policy._clock, clock)
+        with self.network.profile(self.network.roots[self.left]), jobs.transaction() as db:
+            expired = jobs.resource_policy.status(db, now=self.network.now + 6)
+            self.assertFalse(expired["worker"]["fresh"])
+            self.assertFalse(expired["worker"]["observation_fresh"])
+            for invalid in (True, -1, float("nan")):
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    jobs.resource_policy._clock(invalid)
+        self.assertIs(jobs.resource_policy._clock, clock)
 
     def test_api_cost_estimates_accept_numbers_and_reject_boolean_or_string_coercion(self):
         from pydantic import ValidationError

@@ -479,5 +479,83 @@ class TransferStateTests(unittest.TestCase):
                 first.close();second.close()
 
 
+    def test_stopped_full_to_ask_requires_each_exact_approval_without_resuming(self):
+        for role in ("export", "import"):
+            with self.subTest(role=role):
+                self.db.execute("SAVEPOINT role")
+                try:
+                    endpoint = self.create() if role == "export" else self.receiving()[0]
+                    if role == "export":self.reserve(endpoint)
+                    stopped = state.stop(self.db, endpoint["id"], self.now)
+                    claims = [tuple(row) for row in self.db.execute("SELECT * FROM large_file_claims")]
+                    self.db.execute("UPDATE policy SET mode='ask'")
+                    stages = ("intent",) if role == "export" else ("intent", "content")
+                    for stage in stages:
+                        current = state.status(self.db, endpoint["id"], self.now)
+                        self.assertEqual(current["approval_stage"], stage)
+                        with self.assertRaisesRegex(ValueError, "exact current"):
+                            state.decide(self.db, endpoint["id"], True, "0" * 64, self.now)
+                        approved = state.decide(self.db, endpoint["id"], True, current["approval_sha256"], self.now)
+                        self.assertEqual((approved["state"], approved["epoch"]), ("stopped", stopped["epoch"]))
+                        with self.assertRaises(ValueError):
+                            state.guard(self.db, endpoint["id"], stopped["epoch"], now=self.now)
+                    self.assertIsNone(approved["approval_stage"])
+                    self.assertEqual([tuple(row) for row in self.db.execute("SELECT * FROM large_file_claims")], claims)
+                    with self.assertRaises(ValueError):
+                        state.decide(self.db, endpoint["id"], True, current["approval_sha256"], self.now)
+                finally:
+                    self.db.execute("ROLLBACK TO role");self.db.execute("RELEASE role")
+
+    def test_stopped_reapproval_rejects_policy_expiry_history_and_stale_content_digest(self):
+        for role in ("export", "import"):
+            with self.subTest(role=role):
+                self.db.execute("SAVEPOINT role")
+                try:
+                    endpoint = self.create() if role == "export" else self.receiving()[0]
+                    stopped = state.stop(self.db, endpoint["id"], self.now)
+                    self.db.execute("UPDATE policy SET mode='ask'")
+                    current = state.status(self.db, endpoint["id"], self.now)
+                    for condition in ("policy", "expiry", "history"):
+                        self.db.execute("SAVEPOINT rejected")
+                        try:
+                            if condition == "policy":state.set_policy(self.db, dict(self.settings, enabled=False))
+                            if condition == "history":self.db.execute("UPDATE resource_identity SET state_id=?", (str(uuid4()),))
+                            now = current["spec"]["expires_at"] if condition == "expiry" else self.now
+                            with self.subTest(condition=condition), self.assertRaises(ValueError):
+                                state.decide(self.db, endpoint["id"], True, current["approval_sha256"], now)
+                            self.assertEqual(state.details(self.db, endpoint["id"])["epoch"], stopped["epoch"])
+                        finally:
+                            self.db.execute("ROLLBACK TO rejected");self.db.execute("RELEASE rejected")
+                    state.decide(self.db, endpoint["id"], True, current["approval_sha256"], self.now)
+                    if role == "import":
+                        with self.assertRaisesRegex(ValueError, "exact current"):
+                            state.decide(self.db, endpoint["id"], True, current["approval_sha256"], self.now)
+                finally:
+                    self.db.execute("ROLLBACK TO role");self.db.execute("RELEASE role")
+
+    def test_inflight_stopping_and_terminal_endpoints_cannot_be_reapproved(self):
+        for role in ("export", "import"):
+            with self.subTest(role=role):
+                self.db.execute("SAVEPOINT role")
+                try:
+                    endpoint = self.create() if role == "export" else self.receiving()[0]
+                    if role == "export":self.reserve(endpoint)
+                    attempt = str(uuid4())
+                    state.begin_attempt(self.db, endpoint["id"], 1, attempt, "prepare" if role == "export" else "commit", self.now)
+                    stopped = state.stop(self.db, endpoint["id"], self.now)
+                    self.assertEqual(stopped["state"], "stopping")
+                    self.db.execute("UPDATE policy SET mode='ask'")
+                    current = state.status(self.db, endpoint["id"], self.now)
+                    with self.assertRaises(ValueError):
+                        state.decide(self.db, endpoint["id"], True, current["approval_sha256"], self.now)
+                    state.finish_attempt(self.db, attempt, True, "stopped")
+                    denied = state.decide(self.db, endpoint["id"], False, now=self.now)
+                    self.assertEqual(denied["state"], "denied")
+                    with self.assertRaises(ValueError):
+                        state.decide(self.db, endpoint["id"], True, current["approval_sha256"], self.now)
+                finally:
+                    self.db.execute("ROLLBACK TO role");self.db.execute("RELEASE role")
+
+
 if __name__ == "__main__":
     unittest.main()
