@@ -4,6 +4,31 @@ L’evoluzione di Vincula usa su ciascun host lo stesso catalogo locale per agen
 
 Il piano parte da `main` dopo la PR #8, commit `b470517`. I collaudi su ASUS Ubuntu, Lenovo Windows e Kali X260 hanno verificato inventario, lavori, trasferimenti e perdita della rete di Kali. La verifica del crash del worker richiede una prova distinta. Le valutazioni del testo allegato vengono confrontate con riproduzioni e misure prima di scegliere la soluzione.
 
+## Stato corrente: 28 novembre 2026
+
+Le sezioni cronologiche successive conservano gli esiti delle singole revisioni;
+questa tabella distingue ciò che è disponibile dai requisiti ancora aperti.
+La base di questo incremento Core è `main` `be3989356c23`.
+
+| Componente | Stato verificato | Lavoro ancora necessario |
+| --- | --- | --- |
+| MCP multinodo ed esecuzione generale | Sessioni dalle tre origini; opt-in nativo e `ask`/`full`; nove lavori reali del rollout con log ed exit code | Conservare i collaudi a ogni rollout che modifica il runtime |
+| Core senza desktop | Ricevente Kali qualificato dopo boot e sblocco disco, senza login grafico; controller Linux con identità di servizio | Controller Windows indipendente dal login; qualificazione post-boot distinta per ciascun ruolo controller |
+| Aggiungi nodo | Catalogo comune, inviti con UUID e confronto impronta, GUI/CLI e verifica autenticata degli helper | Autorizzazione iniziale, installazione e verifica del worker effettivamente attivo; il solo invito resta `registered`; rotta legacy Windows→Ubuntu da integrare nella verifica |
+| Desktop su tre PC | [PR #26](https://github.com/Daniele-Cangi/Vincula/pull/26), ancora in bozza: una sola app Windows coordina Ubuntu—Windows—Kali; input e sei direzioni appunti confermati dall’operatore | Revisione e merge separati; i quattro alert Sonar sono triagiati e conservati come limite, non eliminati |
+| Stop del desktop | Nella PR #26 stop durante SFTP, perdita del collegamento desktop Kali e revoca reale del consenso GNOME; il Core continua a eseguire lavori | Mantenere distinzione fra test manuali, osservazioni automatiche e revisioni installate |
+| Crash worker e recupero piani | Prove isolate Linux con discendenti; recupero batch/capability da altre origini; CI Windows/Linux | Contenimento forte se viene ucciso anche il guardian; i test isolati non equivalgono a SIGKILL del servizio produttivo |
+| Benchmark | Dodici casi, diciotto lavori exit 0, digest uguali; totale mediano distribuito 24,637 s contro locale 20,491 s | Ripetere le misure quando cambiano scheduling e protocollo dei trasferimenti |
+| Scheduler e concorrenza | Nuovo [incremento di piani nativi e ammissione risorse](resource-scheduling.md), in sviluppo e collaudo isolato | CI Windows, test sui tre PC e rollout; le quote sono cooperative, senza limiti OS CPU/RAM/GPU |
+| Dataset grandi | [Disegno del protocollo](large-file-transfers.md) | Implementare budget, blocchi verificati, avanzamento, cancellazione e ripresa; il Core ha ancora limite 64 MiB |
+
+Il test GUI con file da 1 GiB non modifica il protocollo MCP dei file. Il recupero
+di un piano da un’altra origine non implica l’esecuzione automatica degli effetti
+ancora mancanti: i piani batch/capability esistenti restano di lettura. Il nuovo
+tipo nativo introduce separatamente un replay esplicito con autorità fissa,
+stessi UUID e controlli della cronologia sul destinatario. Nuovi riavvii di Kali
+richiedono accordo con l’operatore; nessun riavvio è necessario ai test isolati.
+
 ## Core e Desktop separati
 
 Vincula Core comprende MCP locale, worker sui destinatari, connessioni autenticate e policy locali. Un destinatario che riceve lavori non richiede chiavi SSH in uscita, Codex aperto o una sessione grafica. Le credenziali del controller sono gestite dal runtime e protette dal sistema operativo; l’agente indica operazioni e nodi. In `full`, con esecuzione generale abilitata dal proprietario, può utilizzare argv, interpreti e programmi compatibili entro i permessi dell’account, senza preregistrare ogni comando.

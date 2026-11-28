@@ -120,6 +120,74 @@ class ProcessMCPTests(unittest.IsolatedAsyncioTestCase):
             catalog = await self.call(client, "list_jobs")
             self.assertEqual(catalog["programs"], [])
 
+    async def test_resource_plan_real_stdio_parallel_admission_ask_and_scoped_stop(self):
+        """Real private worker/MCP, cooperative budgets; no network or OS hard caps."""
+        self.cli("process-access", "enable")
+        policy = self.home / "resource-policy.json"
+        policy.write_text(json.dumps({"max_jobs": 2, "cpu_millis": 200, "memory_bytes": 128 * 2**20,
+                                      "gpus": [], "legacy_defaults": None}), encoding="utf-8")
+        self.cli("resource-policy", str(policy))
+        params = StdioServerParameters(command=sys.executable, args=[str(self.source.with_name("server.py"))], env=self.env)
+        async with Client(params, read_timeout_seconds=25) as client:
+            async def invoke(name, **fields):
+                reply = await client.call_tool(name, fields)
+                self.assertFalse(reply.is_error, reply.content)
+                return reply.structured_content
+
+            deadline = time.monotonic() + 12
+            while True:
+                state = await self.call(client, "get_node_resources")
+                if state["worker"] and state["worker"]["fresh"] and state["worker"]["observation_fresh"]:
+                    break
+                self.assertLess(time.monotonic(), deadline, state)
+                await asyncio.sleep(0.05)
+            demand = {"cpu_millis": 100, "memory_bytes": 32 * 2**20, "gpus": []}
+            pending = await self.call(client, "execute_process", job_id=str(uuid4()),
+                argv=[sys.executable, "-c", "print('resource-approved')"], resources=demand,
+                expected_state_id=state["state_id"])
+            self.assertEqual(pending["state"], "pending")
+            self.assertEqual(pending["manifest"]["protocol_version"], 2)
+            self.cli("approve", pending["id"], "--sha256", pending["manifest"]["sha256"])
+            approved = await self.terminal(client, pending["id"], "completed")
+            self.assertEqual(approved["exit_code"], 0)
+            self.assertIn("resource-approved", approved["stdout"]["text"])
+            self.cli("mode", "full")
+
+            markers = [self.home / f"started-{index}.txt" for index in range(2)]
+            tasks = [{"candidates": [{"node_id": self.node, "process": {
+                "argv": [sys.executable, "-c", "from pathlib import Path; import sys,time; "
+                         "p=Path(sys.argv[1]); p.write_text(p.read_text()+'X' if p.exists() else 'X'); time.sleep(40)",
+                         str(marker)], "cwd": str(self.home), "resources": demand, "timeout_seconds": 50}}]}
+                for marker in markers]
+            handle = {"plan_id": str(uuid4()), "authority_node_id": self.node}
+            plan = await invoke("submit_execution_plan", tasks=tasks, **handle)
+            self.assertTrue(all(part["error"] is None for part in plan["parts"]), plan)
+            deadline = time.monotonic() + 15
+            while not all(marker.exists() for marker in markers):
+                self.assertLess(time.monotonic(), deadline, plan)
+                await asyncio.sleep(0.05)
+            held = await self.call(client, "get_node_resources")
+            self.assertEqual(len(held["claims"]), 2)
+            self.assertEqual(held["declared_consumption"]["cpu_millis"], 200)
+            self.assertEqual(held["hard_limits_enforced"], {"cpu": False, "memory": False, "gpu": False})
+            third = await self.call(client, "execute_process", job_id=str(uuid4()), resources=demand,
+                                    argv=[sys.executable, "-c", "print('capacity-released')"])
+            await asyncio.sleep(0.3)
+            self.assertEqual((await self.call(client, "read_process", job_id=third["id"]))["state"], "queued")
+            stopped = await invoke("stop_execution_plan", **handle)
+            self.assertTrue(all(part["error"] is None for part in stopped["parts"]), stopped)
+            for part in plan["parts"]:
+                value = await self.terminal(client, part["job_id"], "cancelled")
+                self.assertEqual(value["outcome"]["reason"], "stop")
+            completed = await self.terminal(client, third["id"], "completed")
+            self.assertEqual(completed["exit_code"], 0)
+            self.assertIn("capacity-released", completed["stdout"]["text"])
+            resumed = await invoke("submit_execution_plan", tasks=tasks, **handle)
+            self.assertEqual(resumed["manifest_sha256"], plan["manifest_sha256"])
+            self.assertEqual([part["job"]["state"] for part in resumed["parts"]], ["cancelled", "cancelled"])
+            self.assertEqual([marker.read_text() for marker in markers], ["X", "X"])
+            self.assertEqual((await self.call(client, "list_jobs"))["programs"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

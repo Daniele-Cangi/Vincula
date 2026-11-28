@@ -49,13 +49,14 @@ Vincula Core uses Python, SQLite, OpenSSH and MCP over standard input/output. Th
 | Discover installed commands and maintain catalog-based sessions | `discover_tools`, `open_shell`, `send_shell_command` — [Sessions](docs/sessioni-mcp.md) |
 | Browse, read and transfer files within configured roots, including between remote nodes | `list_file_roots`, `request_file`, `transfer_file` — [File access](docs/file-mcp.md) |
 | Run independent tasks in parallel on different computers | `submit_batch`, `get_batch` — [Distributed batches](docs/calcolo-distribuito.md) |
+| Assign prepared native commands using fresh resources and shared local admission | `get_node_resources`, `submit_execution_plan`, `get_execution_plan`, `stop_execution_plan` — [Resource-aware plans](docs/resource-scheduling.md) |
 | Discover and invoke versioned, parameterized software adapters | `discover_capabilities`, `submit_capability`, `get_capability_run` — [External capabilities](docs/capacita-mcp.md) |
 | Recover existing distributed plans and results from another reachable node | [Runtime recovery](docs/recupero-runtime.md) |
 | Run a Linux worker independently of desktop login | [Core service](docs/core-service.md) |
 | Use an OS-managed outgoing SSH identity on Linux controllers | [Controller identity](docs/controller-identity.md) |
 | Add nodes through verified public invitations using the GUI or local JSON CLI | [Node enrollment](docs/node-enrollment.md), [registry](docs/registro-nodi.md) |
 
-The current [MCP server](agent/server.py) exposes 23 tools. Enrollment, service installation and local policy configuration are separate operator-facing functions.
+The current [MCP server](agent/server.py) exposes 27 tools. Enrollment, service installation and local policy configuration are separate operator-facing functions. Resource budgets govern declared admission; CPU, RAM and GPU OS hard limits are not enforced by this increment.
 
 ### Example workflow
 

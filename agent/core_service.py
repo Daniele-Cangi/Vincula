@@ -24,7 +24,8 @@ if sys.platform.startswith("linux"):
 else:
     fcntl = pwd = None
 
-HELPERS = ("jobs.py", "direct_execution.py", "plan_journal.py", "vincula_capabilities.py", "vincula_files.py", "wire_framing.py")
+HELPERS = ("jobs.py", "direct_execution.py", "plan_journal.py", "vincula_capabilities.py", "vincula_files.py", "wire_framing.py",
+           "resource_policy.py", "worker_resources.py", "execution_plans.py")
 UNIT = "vincula-core-worker.service"
 OLD_UNIT = "vincula-agent-worker.service"
 ACTIVE = ("pending", "queued", "running", "stopping")

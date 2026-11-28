@@ -113,8 +113,19 @@ class ProcessStdinTests(unittest.TestCase):
 
     def test_wrong_protocol_nonprocess_action_and_oversize_are_rejected_without_jobs(self):
         for raw in (b"{", b" " * (jobs.direct_execution.MAX_TRANSPORT_BYTES + 1), b'{"action":"list"}',
-                    b'{"action":"process","operation":"info","protocol_version":2}'):
+                    b'{"action":"process","operation":"info","protocol_version":3}'):
             self.assertIn("error", json.loads(self.invoke(raw)))
+        with closing(sqlite3.connect(self.root / "jobs.sqlite3")) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM jobs").fetchone()[0], 0)
+
+    def test_version_two_frame_is_supported_but_cannot_queue_without_its_live_worker(self):
+        info = {"action": "process", "operation": "info", "protocol_version": 2}
+        self.assertEqual(json.loads(self.invoke(json.dumps(info).encode()))["result"]["protocol_version"], 2)
+        request = dict(info, operation="execute", job_id=str(uuid4()),
+                       argv=[sys.executable, "-c", "pass"], cwd=str(self.home),
+                       resources={"cpu_millis": 100, "memory_bytes": 4096, "gpus": []})
+        result = json.loads(self.invoke(json.dumps(request).encode()))
+        self.assertIn("worker_unavailable", result["error"])
         with closing(sqlite3.connect(self.root / "jobs.sqlite3")) as db:
             self.assertEqual(db.execute("SELECT count(*) FROM jobs").fetchone()[0], 0)
 

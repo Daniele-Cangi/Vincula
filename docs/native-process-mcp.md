@@ -29,6 +29,13 @@ The owner chooses the mode with `mode ask` or `mode full`, as before. Native exe
 - `read_process(node_id, job_id)` returns the stored original and resolved requests, their SHA-256, lifecycle, stdout/stderr tails and protocol-aware outcome.
 - `stop_job(node_id, job_id)` cancels a queued request or stops the running process tree using the existing destination containment mechanism.
 
+The optional `resources` argument to `execute_process` selects resource-aware
+protocol 2. `expected_state_id`, obtained from `get_node_resources`, pins the
+destination's durable history for that invocation and can also be supplied to
+`read_process`. Calls omitting these fields retain protocol 1 behavior. The
+[resource scheduling guide](resource-scheduling.md) describes cooperative
+admission, native execution plans, local concurrency policy and their limits.
+
 Example MCP arguments:
 
 ```json

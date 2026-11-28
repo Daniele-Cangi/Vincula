@@ -227,6 +227,23 @@ class NodeProbeTests(unittest.TestCase):
         self.assertFalse(sentinel.exists())
         self.assertFalse((self.root / "__pycache__").exists())
 
+    def test_missing_resource_helpers_prevent_compatibility_without_repair(self):
+        self.install_fixture()
+        before_database = (self.root / "jobs.sqlite3").read_bytes()
+        for name in ("resource_policy.py", "worker_resources.py", "execution_plans.py"):
+            with self.subTest(name=name):
+                path = self.root / name
+                original = path.read_bytes()
+                try:
+                    path.unlink()
+                    value = self.run_source()
+                    self.assertIsNone(value["helpers"][name])
+                    self.assertEqual(value["policy"], {"state": "unchecked", "reason": "helpers_unverified"})
+                    self.assertFalse(path.exists())
+                    self.assertEqual((self.root / "jobs.sqlite3").read_bytes(), before_database)
+                finally:
+                    path.write_bytes(original)
+
     def test_missing_database_and_helpers_are_never_initialized_or_updated(self):
         self.install_fixture(database=False)
         before = {path.name: path.read_bytes() for path in self.root.iterdir()}
